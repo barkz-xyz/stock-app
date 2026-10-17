@@ -12,10 +12,12 @@
     "dev:server": "node --watch server/index.js",
     "build": "vite build",
     "start": "node server/index.js",
-    "check": "node --check server/index.js && node --check server/store.js && node --check server/report.js && node --check server/mercadopago.js && node --check server/pilot-receipt.js && node --check server/auth.js && node --check scripts/dev.js && node --check scripts/backup-postgres.js && node --check scripts/verify-postgres-sale-batch.js && node --check scripts/seed-week-demo.js && node --check scripts/seed-week-postgres.js && node --check src/dates.js",
+    "check": "node --check server/index.js && node --check server/store.js && node --check server/report.js && node --check server/mercadopago.js && node --check server/pilot-receipt.js && node --check server/refund-receipt.js && node --check server/auth.js && node --check scripts/dev.js && node --check scripts/backup-postgres.js && node --check scripts/audit-postgres.js && node --check scripts/smoke-production.js && node --check scripts/test-mercadopago-official.js && node --check scripts/verify-postgres-sale-batch.js && node --check scripts/seed-week-demo.js && node --check scripts/seed-week-postgres.js && node --check src/dates.js",
     "seed:week": "node scripts/seed-week-demo.js",
     "seed:week:postgres": "node scripts/seed-week-postgres.js",
     "backup:postgres": "node scripts/backup-postgres.js",
+    "audit:postgres": "node scripts/audit-postgres.js",
+    "smoke:production": "node scripts/smoke-production.js",
     "verify:postgres": "node scripts/verify-postgres-sale-batch.js",
     "test": "node --test --test-concurrency=1 server/*.test.js"
   },

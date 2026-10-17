@@ -1186,12 +1186,10 @@ export async function prepareRefund(saleId, input) {
     await client.query('BEGIN')
     const saleResult = await client.query('SELECT * FROM sales WHERE id=$1 FOR UPDATE', [saleId])
     if (!saleResult.rows[0]) { await client.query('ROLLBACK'); return null }
-    const [itemResult, refundResult, refundItemResult, creditNoteResult] = await Promise.all([
-      client.query('SELECT * FROM sale_items WHERE sale_id=$1 ORDER BY item_name', [saleId]),
-      client.query('SELECT * FROM refunds WHERE sale_id=$1 ORDER BY created_at DESC FOR UPDATE', [saleId]),
-      client.query(`SELECT ri.* FROM refund_items ri JOIN refunds r ON r.id=ri.refund_id WHERE r.sale_id=$1`, [saleId]),
-      client.query('SELECT * FROM tax_documents WHERE sale_id=$1', [saleId]),
-    ])
+    const itemResult = await client.query('SELECT * FROM sale_items WHERE sale_id=$1 ORDER BY item_name', [saleId])
+    const refundResult = await client.query('SELECT * FROM refunds WHERE sale_id=$1 ORDER BY created_at DESC FOR UPDATE', [saleId])
+    const refundItemResult = await client.query(`SELECT ri.* FROM refund_items ri JOIN refunds r ON r.id=ri.refund_id WHERE r.sale_id=$1`, [saleId])
+    const creditNoteResult = await client.query('SELECT * FROM tax_documents WHERE sale_id=$1', [saleId])
     const itemsByRefund = new Map()
     for (const item of refundItemResult.rows) {
       const entries = itemsByRefund.get(item.refund_id) || []

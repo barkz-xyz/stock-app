@@ -1,0 +1,16 @@
+# Operational data, backups and generated development artifacts must stay local.
+.git/
+node_modules/
+dist/
+.backups/
+tmp/
+output/
+.env
+data/*.json
+data/*.tmp
+*.log
+**/__pycache__/
+*.py[cod]
+
+# Print-design source assets are versioned but are not used by the POS runtime.
+Imagenes/

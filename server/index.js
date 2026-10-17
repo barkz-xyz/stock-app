@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import compression from 'compression'
 import express from 'express'
+import { parseCalendarDate } from '../src/dates.js'
 import { authStatus, login, logout, pointAccessIsProtected, requireAuth } from './auth.js'
 import {
   buildPointManagement, cancelPointOrder, createPointOrder, createPointPos, createPointStore, deletePointPos, deletePointStore,
@@ -24,7 +25,7 @@ const port = Number(process.env.PORT || 3000)
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
 app.disable('x-powered-by')
-app.set('trust proxy', 1)
+app.set('trust proxy', process.env.RAILWAY_ENVIRONMENT_ID ? 1 : false)
 app.use(compression())
 app.use(express.json({ limit: '200kb' }))
 
@@ -45,6 +46,9 @@ function cleanItem(body, isUpdate = false) {
   }
   if (!isUpdate) item.quantity = Number(body.quantity ?? 0)
   if (!item.name || !item.category || !item.unit) throw badRequest('Name, category, and unit are required.')
+  if (item.expiryDate !== null && (typeof item.expiryDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(item.expiryDate) || !parseCalendarDate(item.expiryDate))) {
+    throw badRequest('Expiry date must be a valid calendar date (YYYY-MM-DD).')
+  }
   if ((!isUpdate && (!Number.isFinite(item.quantity) || item.quantity < 0)) || !Number.isFinite(item.lowStockThreshold) || item.lowStockThreshold < 0) {
     throw badRequest('Quantities must be positive numbers.')
   }
@@ -670,7 +674,7 @@ console.info(JSON.stringify({
   webhookSignatureValidation: pointSecurity.webhookSignatureValidation,
   webhookAuthoritativeOrderLookup: pointSecurity.webhookAuthoritativeOrderLookup,
 }))
-const server = app.listen(port, '0.0.0.0', () => console.log(`Bakery POS listening on port ${port}`))
+const server = app.listen(port, '0.0.0.0', () => console.log(`Bakery POS listening on port ${server.address().port}`))
 
 async function shutdown() {
   server.close(async () => {

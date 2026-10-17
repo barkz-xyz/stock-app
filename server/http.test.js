@@ -12,8 +12,15 @@ test('HTTP authentication rejects malformed sessions and validates product calen
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'bakery-http-'))
   const secret = crypto.randomBytes(32).toString('hex')
   const env = { ...process.env, PORT: '0', DATA_PATH: path.join(directory, 'inventory.json'),
-    STAFF_PIN: '7351', SESSION_SECRET: secret, SEED_DEMO_DATA: 'false', MERCADOPAGO_MOCK: 'true' }
+    STAFF_PIN: '7351', SESSION_SECRET: secret, SEED_DEMO_DATA: 'false', MERCADOPAGO_MOCK: 'false' }
   delete env.DATABASE_URL
+  delete env.MERCADOPAGO_ACCESS_TOKEN
+  delete env.MERCADOPAGO_POINT_TERMINAL_ID
+  const pendingId = crypto.randomUUID()
+  await fs.writeFile(env.DATA_PATH, JSON.stringify({ items: [], movements: [], cashClosures: [], sales: [{
+    id: pendingId, status: 'pending', paymentMethod: 'card', total: 1000, mpOrderId: `DEMO-${pendingId}`,
+    inventoryApplied: true, items: [], refunds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }] }))
   for (const key of Object.keys(env)) if (key.startsWith('RAILWAY_')) delete env[key]
   const child = spawn(process.execPath, ['server/index.js'], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
   let logs = ''
@@ -46,6 +53,9 @@ test('HTTP authentication rejects malformed sessions and validates product calen
   const login = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '7351' }) })
   assert.equal(login.status, 200)
   const cookie = login.headers.get('set-cookie').split(';')[0]
+  const pending = await request(`/api/sales/${pendingId}?refresh=true`, { headers: { Cookie: cookie } })
+  assert.equal(pending.status, 200)
+  assert.equal((await pending.json()).status, 'pending')
   assert.equal((await request('/api/items', { headers: { Cookie: `a=%ZZ; ${cookie}` } })).status, 200)
   const product = { name: 'Calendar test', category: 'Bread', unit: 'pieces', quantity: 3, price: 1000, sellable: true }
   for (const expiryDate of ['not-a-date', '2026-02-30', '2026-13-01', '2026-10-17garbage', true]) {

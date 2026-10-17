@@ -425,7 +425,7 @@ app.get('/api/sales/:id', async (req, res, next) => {
   try {
     let sale = await getSale(req.params.id)
     if (!sale) return res.status(404).json({ error: 'Sale not found.' })
-    if (req.query.refresh === 'true' && sale.paymentMethod === 'card' && sale.status === 'pending' && sale.mpOrderId) {
+    if (req.query.refresh === 'true' && sale.paymentMethod === 'card' && sale.status === 'pending' && sale.mpOrderId && pointConfiguration().configured) {
       const previousPointStatus = sale.mpStatus
       const refreshStartedAt = performance.now()
       const mercadoPagoStartedAt = performance.now()

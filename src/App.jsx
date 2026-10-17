@@ -667,7 +667,7 @@ function SalesCounter({ items, sales, posConfig, onRefresh, setToast }) {
   }
 
   useEffect(() => {
-    if (checkout?.stage !== 'processing' || !checkout.sale?.id) return undefined
+    if (checkout?.stage !== 'processing' || !checkout.sale?.id || !posConfig.configured) return undefined
     let active = true
     let timeoutId
     let errorNotified = false
@@ -698,7 +698,7 @@ function SalesCounter({ items, sales, posConfig, onRefresh, setToast }) {
     }
     poll()
     return () => { active = false; clearTimeout(timeoutId) }
-  }, [checkout?.stage, checkout?.sale?.id])
+  }, [checkout?.stage, checkout?.sale?.id, posConfig.configured])
   useEffect(() => {
     setSelectedSale((current) => current ? sales.find((sale) => sale.id === current.id) || current : null)
   }, [sales])

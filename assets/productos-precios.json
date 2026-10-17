@@ -1,0 +1,404 @@
+{
+  "source": {
+    "spreadsheetId": "1ewgnlgt-kJAy3AqOx1DHIUyTkq-N7jxsPHDBQhyz_a8",
+    "sheet": "ProductosPrecios",
+    "sheetId": 390054214,
+    "range": "A1:C1002",
+    "url": "https://docs.google.com/spreadsheets/d/1ewgnlgt-kJAy3AqOx1DHIUyTkq-N7jxsPHDBQhyz_a8/edit?gid=390054214",
+    "importDate": "2026-10-17"
+  },
+  "products": [
+    {
+      "name": "ALIADO AMASADO JAMON/QUESO",
+      "price": 1200,
+      "category": "Bread",
+      "unit": "pieces",
+      "sku": "PP-002",
+      "sourceRow": 2
+    },
+    {
+      "name": "ALIADO DOBLADITA SALAME/QUESO",
+      "price": 1300,
+      "category": "Bread",
+      "unit": "pieces",
+      "sku": "PP-003",
+      "sourceRow": 3
+    },
+    {
+      "name": "EMPANADA JAMON/QUESO MASA DE HOJA",
+      "price": 2200,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-004",
+      "sourceRow": 4
+    },
+    {
+      "name": "EMPANADA CHAMPIÑON/QUESO",
+      "price": 2500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-005",
+      "sourceRow": 5
+    },
+    {
+      "name": "EMPANADA PINO (CARNE PICADA)",
+      "price": 2500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-006",
+      "sourceRow": 6
+    },
+    {
+      "name": "EMPANADA QUESO MASA DE HOJA",
+      "price": 2000,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-007",
+      "sourceRow": 7
+    },
+    {
+      "name": "EMPANADA POLLO/QUESO",
+      "price": 2500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-008",
+      "sourceRow": 8
+    },
+    {
+      "name": "PAN AMASADO",
+      "price": 2250,
+      "category": "Bread",
+      "unit": "pieces",
+      "sku": "PP-009",
+      "sourceRow": 9
+    },
+    {
+      "name": "PAN DOBLADITA",
+      "price": 2450,
+      "category": "Bread",
+      "unit": "pieces",
+      "sku": "PP-010",
+      "sourceRow": 10
+    },
+    {
+      "name": "PAN HALLULLA",
+      "price": 2250,
+      "category": "Bread",
+      "unit": "pieces",
+      "sku": "PP-011",
+      "sourceRow": 11
+    },
+    {
+      "name": "PAN MILAGRITO",
+      "price": 2450,
+      "category": "Bread",
+      "unit": "pieces",
+      "sku": "PP-012",
+      "sourceRow": 12
+    },
+    {
+      "name": "PIZZA MEDIANA",
+      "price": 10000,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-013",
+      "sourceRow": 13
+    },
+    {
+      "name": "PIZZAS TROZO",
+      "price": 1500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-014",
+      "sourceRow": 14
+    },
+    {
+      "name": "BERLINES",
+      "price": 1100,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-016",
+      "sourceRow": 16
+    },
+    {
+      "name": "BISCOCHO DURAZNO",
+      "price": 1850,
+      "category": "Cakes",
+      "unit": "pieces",
+      "sku": "PP-017",
+      "sourceRow": 17
+    },
+    {
+      "name": "BISCOCHO SELVA NEGRA",
+      "price": 1850,
+      "category": "Cakes",
+      "unit": "pieces",
+      "sku": "PP-018",
+      "sourceRow": 18
+    },
+    {
+      "name": "BISCOCHO TRES LECHES",
+      "price": 2200,
+      "category": "Cakes",
+      "unit": "pieces",
+      "sku": "PP-019",
+      "sourceRow": 19
+    },
+    {
+      "name": "CACHITO CHANTILLY",
+      "price": 1500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-020",
+      "sourceRow": 20
+    },
+    {
+      "name": "CACHITO MANJAR",
+      "price": 1200,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-021",
+      "sourceRow": 21
+    },
+    {
+      "name": "CAFE/TE",
+      "price": 800,
+      "category": "Drinks",
+      "unit": "pieces",
+      "sku": "PP-022",
+      "sourceRow": 22
+    },
+    {
+      "name": "DELICIAS",
+      "price": 1000,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-023",
+      "sourceRow": 23
+    },
+    {
+      "name": "DONAS",
+      "price": 1300,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-024",
+      "sourceRow": 24
+    },
+    {
+      "name": "HOJALDRE CREMA MANJAR",
+      "price": 2000,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-025",
+      "sourceRow": 25
+    },
+    {
+      "name": "JUMBOS",
+      "price": 1500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-026",
+      "sourceRow": 26
+    },
+    {
+      "name": "MAICENA",
+      "price": 1000,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-027",
+      "sourceRow": 27
+    },
+    {
+      "name": "MILHOJAS",
+      "price": 1100,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-028",
+      "sourceRow": 28
+    },
+    {
+      "name": "MUFFINS",
+      "price": 1200,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-029",
+      "sourceRow": 29
+    },
+    {
+      "name": "NAPOLEON",
+      "price": 1900,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-030",
+      "sourceRow": 30
+    },
+    {
+      "name": "PALMERITAS",
+      "price": 1100,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-031",
+      "sourceRow": 31
+    },
+    {
+      "name": "PASTEL DE PLATANOS",
+      "price": 2500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-032",
+      "sourceRow": 32
+    },
+    {
+      "name": "PIE DE LIMON",
+      "price": 1800,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-033",
+      "sourceRow": 33
+    },
+    {
+      "name": "PIE LIMON ENTERO",
+      "price": 13000,
+      "category": "Cakes",
+      "unit": "pieces",
+      "sku": "PP-034",
+      "sourceRow": 34
+    },
+    {
+      "name": "QUEQUE NUEZ o ARANDANO",
+      "price": 3000,
+      "category": "Cakes",
+      "unit": "pieces",
+      "sku": "PP-035",
+      "sourceRow": 35
+    },
+    {
+      "name": "QUEQUE VAINILLA",
+      "price": 2500,
+      "category": "Cakes",
+      "unit": "pieces",
+      "sku": "PP-036",
+      "sourceRow": 36
+    },
+    {
+      "name": "ROLLS CANELA",
+      "price": 1250,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-037",
+      "sourceRow": 37
+    },
+    {
+      "name": "ROLLS CANELA C/FROSTING",
+      "price": 2500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-038",
+      "sourceRow": 38
+    },
+    {
+      "name": "TARTALETA COCO MANJAR",
+      "price": 1800,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-039",
+      "sourceRow": 39
+    },
+    {
+      "name": "TARTALETA DE FRUTAS",
+      "price": 1500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-040",
+      "sourceRow": 40
+    },
+    {
+      "name": "TRENZAS",
+      "price": 3500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-041",
+      "sourceRow": 41
+    },
+    {
+      "name": "TRUFAS",
+      "price": 500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-042",
+      "sourceRow": 42
+    },
+    {
+      "name": "TRUFAS 3 PACK",
+      "price": 1200,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-043",
+      "sourceRow": 43
+    },
+    {
+      "name": "DANESES",
+      "price": 2300,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-044",
+      "sourceRow": 44
+    },
+    {
+      "name": "EMPOLVADOS",
+      "price": 1400,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-045",
+      "sourceRow": 45
+    },
+    {
+      "name": "CESTA DE FRUTAS",
+      "price": 2500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-046",
+      "sourceRow": 46
+    },
+    {
+      "name": "PASTEL CREMA MANJAR",
+      "price": 2000,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-047",
+      "sourceRow": 47
+    },
+    {
+      "name": "CROISSANT",
+      "price": 2000,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-048",
+      "sourceRow": 48
+    },
+    {
+      "name": "CROISSANT DULCE",
+      "price": 2500,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-049",
+      "sourceRow": 49
+    },
+    {
+      "name": "MENDOCINOS",
+      "price": 1200,
+      "category": "Pastries",
+      "unit": "pieces",
+      "sku": "PP-050",
+      "sourceRow": 50
+    },
+    {
+      "name": "KUCHEN MANZANA",
+      "price": 2000,
+      "category": "Cakes",
+      "unit": "pieces",
+      "sku": "PP-051",
+      "sourceRow": 51
+    }
+  ]
+}

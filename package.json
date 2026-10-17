@@ -18,6 +18,7 @@
     "backup:postgres": "node scripts/backup-postgres.js",
     "audit:postgres": "node scripts/audit-postgres.js",
     "smoke:production": "node scripts/smoke-production.js",
+    "import:catalog": "node scripts/import-sheet-catalog.js",
     "verify:postgres": "node scripts/verify-postgres-sale-batch.js",
     "test": "node --test --test-concurrency=1 server/*.test.js"
   },

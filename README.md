@@ -152,6 +152,8 @@ npm start
 
 `audit:postgres` uses a read-only transaction to report database counts and integrity checks. It prefers `DATABASE_PUBLIC_URL` for local access. `smoke:production` uses `STAFF_PIN` to check the deployed API and Point terminal without creating sales or refunds. Set `EXPECT_AUTH_HARDENING=true` to require malformed cookies to return 401. Keep the local JSON demonstration dataset separate from the live PostgreSQL records.
 
+The verified `ProductosPrecios` snapshot is in `assets/productos-precios.json`. `npm run import:catalog -- --target=local` previews its replacement of the local product catalog; add `--apply` to execute it. Use `--target=postgres` with the PoS production Postgres service variables for Railway. The import backs up the database, removes the previous products and stock movements, and loads the sheet's names and actual CLP prices with zero opening quantities. Sales, refund snapshots, tax documents and cash closures are retained; old product links are detached. The PostgreSQL replacement verifies history before committing and rolls back on failure.
+
 Catalog source assets live in `Imagenes/`; the Python catalog/sign scripts use Pillow and ReportLab and write generated files under ignored `output/` and `tmp/` directories. `data/catalog_products.json` contains catalog source data and is separate from operational inventory.
 
 ## Production note

@@ -527,6 +527,7 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
 
 function SalesCounter({ items, sales, posConfig, onRefresh, setToast }) {
   const { t, categoryLabel, unitLabel, formatCurrency } = useI18n()
+  const [registerView, setRegisterView] = useState('cart')
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('All')
   const [inStockOnly, setInStockOnly] = useState(true)
@@ -541,6 +542,17 @@ function SalesCounter({ items, sales, posConfig, onRefresh, setToast }) {
   const cartLines = cart.map((line) => ({ ...line, item: items.find((item) => item.id === line.itemId) })).filter((line) => line.item)
   const total = cartLines.reduce((sum, line) => sum + Math.round(line.item.price * line.quantity), 0)
   const count = cartLines.reduce((sum, line) => sum + line.quantity, 0)
+  const resumeSale = (sale) => {
+    setRegisterView('cart')
+    setCheckout({ stage: sale.mpOrderId ? 'processing' : 'connection-error', sale, total: sale.total, error: sale.mpOrderId ? '' : t('reservedSaleRecovery') })
+  }
+  const handleRegisterTabKey = (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    const next = event.key === 'Home' ? 'cart' : event.key === 'End' ? 'history' : registerView === 'cart' ? 'history' : 'cart'
+    setRegisterView(next)
+    event.currentTarget.querySelector(`#caja-${next}-tab`)?.focus()
+  }
 
   const changeQuantity = (item, delta) => setCart((current) => {
     const existing = current.find((line) => line.itemId === item.id)
@@ -707,8 +719,14 @@ function SalesCounter({ items, sales, posConfig, onRefresh, setToast }) {
   }, [filter, presentCategories])
 
   return <div className="page pos-page enter">
-    <section className="page-heading pos-heading"><div><span className="eyebrow">{t('counterMode')}</span><h1>{t('salesCounter')}</h1><p>{t('salesDescription')}</p></div></section>
-    <section className="pos-layout">
+    <section className="page-heading pos-heading">
+      <h1 className="eyebrow caja-title">{t('registerTitle')}</h1>
+      <div className="register-tabs" role="tablist" aria-label={t('registerSections')} onKeyDown={handleRegisterTabKey}>
+        <button type="button" id="caja-cart-tab" role="tab" aria-selected={registerView === 'cart'} aria-controls="caja-cart-panel" tabIndex={registerView === 'cart' ? 0 : -1} onClick={() => setRegisterView('cart')}><ShoppingBasket size={16} />{t('cart')}</button>
+        <button type="button" id="caja-history-tab" role="tab" aria-selected={registerView === 'history'} aria-controls="caja-history-panel" tabIndex={registerView === 'history' ? 0 : -1} onClick={() => setRegisterView('history')}><History size={16} />{t('registerHistory')}</button>
+      </div>
+    </section>
+    {registerView === 'cart' ? <section className="pos-layout" id="caja-cart-panel" role="tabpanel" aria-labelledby="caja-cart-tab">
       <div className="catalog-panel">
         <div className="toolbar pos-toolbar"><label className="search-box"><Search size={19} /><input aria-label={t('searchProducts')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('searchProducts')} />{search && <button onClick={() => setSearch('')} aria-label={t('close')}><X size={16} /></button>}</label><label className="stock-only-toggle"><input type="checkbox" checked={inStockOnly} onChange={(event) => setInStockOnly(event.target.checked)} /><i aria-hidden="true" /><span>{t('inStockOnly')}</span></label><div className="filter-scroll"><button className={filter === 'All' ? 'active' : ''} onClick={() => setFilter('All')}>{t('all')}</button>{presentCategories.map((category) => <button key={category} className={filter === category ? 'active' : ''} onClick={() => setFilter(category)}>{categoryLabel(category)}</button>)}</div></div>
         {sellable.length === 0 ? <div className="card pos-empty"><div className="empty-art"><ReceiptText size={31} /></div><h3>{t('configureProductsForSale')}</h3><p>{t('configureProductsDescription')}</p></div> : products.length ? <div className="product-grid">{products.map((item) => {
@@ -721,14 +739,16 @@ function SalesCounter({ items, sales, posConfig, onRefresh, setToast }) {
             {item.quantity <= 0 ? <i>{t('outOfStock')}</i> : <Plus className="sale-product-add" size={16} />}
           </button>
         })}</div> : <div className="pos-empty compact"><Search size={27} /><h3>{t('noProductsFound')}</h3></div>}
-        <section className="card recent-sales"><header className="card-header"><div><span className="eyebrow">{t('todayAndRecent')}</span><h2>{t('recentSales')}</h2></div></header><SaleList sales={sales.slice(0, 12)} onResume={(sale) => setCheckout({ stage: sale.mpOrderId ? 'processing' : 'connection-error', sale, total: sale.total, error: sale.mpOrderId ? '' : t('reservedSaleRecovery') })} onSelect={setSelectedSale} compact /></section>
       </div>
       <aside className={`cart-panel ${cartLines.length ? 'has-items' : ''}`}>
-        <header><div><ShoppingBasket size={20} /><div><span className="eyebrow">{t('currentOrder')}</span><h2>{t('cart')}</h2></div></div>{cartLines.length > 0 && <button onClick={() => setCart([])}>{t('clear')}</button>}</header>
+        <header><div><ShoppingBasket size={20} /><h2>{t('cart')}</h2><span className="cart-count" aria-label={t('productsCount', { count: formatQuantity(count) })}>{formatQuantity(count)}</span></div>{cartLines.length > 0 && <button onClick={() => setCart([])}><Trash2 size={14} />{t('clear')}</button>}</header>
         {cartLines.length ? <div className="cart-lines">{cartLines.map(({ item, quantity }) => <article key={item.id}><div className="cart-line-main"><div><strong>{item.name}</strong><span>{formatCurrency(item.price)} · {unitLabel(item.unit)}</span></div><b>{formatCurrency(item.price * quantity)}</b></div><div className="quantity-stepper"><button onClick={() => changeQuantity(item, -1)} aria-label={t('removeOne')}><Minus size={16} /></button><span>{formatQuantity(quantity)}</span><button onClick={() => changeQuantity(item, 1)} disabled={quantity >= item.quantity} aria-label={t('addOne')}><Plus size={16} /></button><button className="remove-line" onClick={() => changeQuantity(item, -quantity)} aria-label={t('removeFromCart')}><Trash2 size={16} /></button></div></article>)}</div> : <div className="cart-empty"><div><ShoppingBasket size={28} /></div><h3>{t('emptyCart')}</h3><p>{t('tapProducts')}</p></div>}
-        <footer><div className="cart-summary"><span>{t('productsCount', { count: formatQuantity(count) })}</span><div><span>{t('total')}</span><strong>{formatCurrency(total)}</strong></div></div><button className="button primary pay-button" disabled={!cartLines.length} onClick={() => setCheckout({ stage: 'method', total })}>{t('charge')}<ArrowRight size={19} /></button></footer>
+        <footer><div className="cart-summary"><div><span>{t('total')}</span><strong>{formatCurrency(total)}</strong></div></div><button className="button primary pay-button" disabled={!cartLines.length} onClick={() => setCheckout({ stage: 'method', total })}>{t('charge')}<ArrowRight size={19} /></button></footer>
       </aside>
-    </section>
+    </section> : <section className="card register-history" id="caja-history-panel" role="tabpanel" aria-labelledby="caja-history-tab">
+      <header className="card-header"><div><h2>{t('registerHistory')}</h2><p>{t('recentSales')}</p></div><span className="history-count">{sales.length}</span></header>
+      <SaleList sales={sales} onResume={resumeSale} onSelect={setSelectedSale} />
+    </section>}
     {checkout && <CheckoutModal checkout={checkout} posConfig={posConfig} onCash={payCash} onCard={payCard} onRetry={retry} onCancelSale={cancelSale} onClose={() => setCheckout(null)} busy={busy} />}
     {selectedSale && <SaleDetailsModal sale={selectedSale} onClose={() => setSelectedSale(null)} onRefund={refundSale} onRetryRefund={retryRefund} onPrintRefundCopy={printRefundCopy} onCreditNote={recordCreditNote} onReconcilePoint={reconcilePointSale} onResolveInventory={resolveRefundInventory} busy={busy} />}
   </div>
@@ -1109,7 +1129,7 @@ export default function App() {
   }
   const nav = [
     { id: 'dashboard', label: t('overview'), icon: LayoutDashboard },
-    { id: 'pos', label: t('sales'), icon: ShoppingBasket },
+    { id: 'pos', label: t('registerTitle'), icon: ShoppingBasket },
     { id: 'inventory', label: t('inventory'), icon: Boxes },
     { id: 'metrics', label: t('metricsNav'), icon: LineChart },
     { id: 'activity', label: t('activity'), icon: History },
@@ -1120,7 +1140,7 @@ export default function App() {
   if (loading && !auth) return <div className="loading full"><div className="loader-mark"><Croissant size={28} /></div><span>{t('preparing')}</span></div>
   if (auth?.required && !auth.authenticated) return <LoginScreen onLogin={handleLogin} theme={theme} onThemeToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} />
 
-  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${page === 'pos' ? 'is-caja' : ''}`}>
     <aside className={`sidebar ${mobileMenu ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
       <div className="brand"><button ref={brandLogoRef} className="brand-logo" onClick={toggleSidebar} aria-expanded={!sidebarCollapsed} aria-label={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')} title={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')}><span className="brand-mark"><Croissant size={24} /></span></button><span className="brand-copy"><strong>Bakery POS</strong><span>{t('brandSubtitle')}</span></span><button className="sidebar-toggle" onClick={toggleSidebar} aria-label={t('collapseSidebar')} title={t('collapseSidebar')}><PanelLeftClose size={17} /></button></div>
       <nav>{nav.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? 'active' : ''} title={sidebarCollapsed ? label : undefined} onClick={() => { setPage(id); setMobileMenu(false) }}><Icon size={20} /><span className="nav-label">{label}</span>{page === id && <i />}</button>)}</nav>

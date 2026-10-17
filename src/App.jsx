@@ -728,7 +728,19 @@ function SalesCounter({ items, sales, posConfig, onRefresh, setToast }) {
     </section>
     {registerView === 'cart' ? <section className="pos-layout" id="caja-cart-panel" role="tabpanel" aria-labelledby="caja-cart-tab">
       <div className="catalog-panel">
-        <div className="toolbar pos-toolbar"><label className="search-box"><Search size={19} /><input aria-label={t('searchProducts')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('searchProducts')} />{search && <button onClick={() => setSearch('')} aria-label={t('close')}><X size={16} /></button>}</label><label className="stock-only-toggle"><input type="checkbox" checked={inStockOnly} onChange={(event) => setInStockOnly(event.target.checked)} /><i aria-hidden="true" /><span>{t('inStockOnly')}</span></label><div className="filter-scroll"><button className={filter === 'All' ? 'active' : ''} onClick={() => setFilter('All')}>{t('all')}</button>{presentCategories.map((category) => <button key={category} className={filter === category ? 'active' : ''} onClick={() => setFilter(category)}>{categoryLabel(category)}</button>)}</div></div>
+        <div className="toolbar pos-toolbar">
+          <div className="catalog-search-row">
+            <label className="search-box"><Search size={18} /><input aria-label={t('searchProducts')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('searchPlaceholder')} />{search && <button type="button" onClick={() => setSearch('')} aria-label={t('clearSearch')}><X size={16} /></button>}</label>
+            <label className="stock-only-toggle"><span>{t('inStockOnly')}</span><input type="checkbox" checked={inStockOnly} onChange={(event) => setInStockOnly(event.target.checked)} /><i aria-hidden="true" /></label>
+          </div>
+          <div className="catalog-category-row">
+            <div className="filter-scroll" role="group" aria-label={t('byCategory')}>
+              <button type="button" className={filter === 'All' ? 'active' : ''} aria-pressed={filter === 'All'} onClick={() => setFilter('All')}><LayoutDashboard size={15} aria-hidden="true" />{t('all')}<span>{catalogItems.length}</span></button>
+              {presentCategories.map((category) => <button type="button" key={category} className={filter === category ? 'active' : ''} aria-pressed={filter === category} onClick={() => setFilter(category)}><CategoryIcon category={category} size={16} />{categoryLabel(category)}<span>{catalogItems.filter((item) => item.category === category).length}</span></button>)}
+            </div>
+            <span className="catalog-result-count" role="status">{t('productsCount', { count: products.length })}</span>
+          </div>
+        </div>
         {sellable.length === 0 ? <div className="card pos-empty"><div className="empty-art"><ReceiptText size={31} /></div><h3>{t('configureProductsForSale')}</h3><p>{t('configureProductsDescription')}</p></div> : products.length ? <div className="product-grid">{products.map((item) => {
           const inCart = cart.find((line) => line.itemId === item.id)?.quantity || 0
           return <button key={item.id} className={`sale-product category-${categoryClass(item.category)} ${item.quantity <= 0 ? 'is-unavailable' : ''}`} disabled={item.quantity <= 0 || inCart >= item.quantity} onClick={() => changeQuantity(item, 1)}>

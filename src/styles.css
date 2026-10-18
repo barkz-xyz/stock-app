@@ -1021,15 +1021,25 @@ html[data-theme='light'] .cash-close-card { background: linear-gradient(120deg,#
 .closure-page { max-width: 1500px; padding: 24px 24px 40px; }
 .closure-page .card { border-radius: 12px; box-shadow: none; }
 .closure-page .caja-heading { margin-bottom: 14px; }
-.closure-intro { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
-.closure-tools { display: flex; align-items: center; gap: 6px; }
-.closure-tools input, .closure-filters select { min-width: 0; min-height: 36px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; }
-.closure-tools input { width: 150px; }
-.closure-tools .icon-button { width: 36px; height: 36px; min-height: 36px; border-radius: 8px; }
-.closure-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.closure-context { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.closure-scope-field { position: relative; display: flex; flex: 1; min-width: 0; align-items: center; }
+.closure-scope-field > svg { position: absolute; left: 10px; color: var(--cocoa); pointer-events: none; }
+.closure-scope-field > svg:last-child { right: 10px; left: auto; color: var(--muted); }
+.closure-scope-field select { width: 100%; min-width: 0; min-height: 44px; padding: 0 34px; border: 0; border-radius: 8px; appearance: none; background: transparent; color: var(--ink); font: inherit; font-size: 12px; font-weight: 650; text-overflow: ellipsis; cursor: pointer; }
+.closure-scope-field select option { background: var(--surface); color: var(--ink); }
+.closure-context-meta { display: flex; min-width: 0; align-items: center; gap: 10px; padding-left: 12px; border-left: 1px solid var(--line); }
+.closure-period { min-width: 0; }
+.closure-period input { width: 142px; min-width: 0; min-height: 44px; padding: 0 6px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font: inherit; font-size: 12px; font-weight: 600; }
+.closure-context .session-period { display: grid; gap: 2px; color: var(--ink); font-size: 11px; white-space: nowrap; }
+.closure-context .session-period small { color: var(--muted); font-size: 9px; }
+.closure-refresh { width: 44px; height: 44px; flex: 0 0 auto; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }
+.closure-refresh:hover:not(:disabled) { background: var(--surface-strong); color: var(--cocoa); }
+.closure-filters select { min-width: 0; min-height: 36px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; }
+.closure-status { display: inline-flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 5px; padding: 5px 8px; border-radius: 7px; background: var(--surface-strong); color: var(--muted); }
 .closure-status svg { flex: 0 0 auto; }
-.closure-status strong { font-size: 11px; font-weight: 650; white-space: nowrap; }
-.closure-status.attention { color: var(--amber); }
+.closure-status strong { font-size: 10px; font-weight: 650; line-height: 1.3; }
+.closure-status.attention { background: var(--amber-soft); color: var(--amber); }
+.closure-status.saved { background: var(--sage-soft); color: var(--sage); }
 .closure-kpis { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); margin-bottom: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .closure-kpis article { display: grid; min-width: 0; gap: 6px; padding: 13px 16px; }
 .closure-kpis article + article { border-left: 1px solid var(--line); }
@@ -1115,6 +1125,10 @@ html[data-theme='light'] .cash-close-card { background: linear-gradient(120deg,#
 @media (max-width: 580px) {
   .caja-sections a { padding: 0 11px; font-size: 11px; }.caja-heading { gap: 8px; }.caja-sections { gap: 0; }
   .closure-page { padding: 14px 14px 24px; }.closure-page .caja-heading { margin-bottom: 12px; }
+  .closure-context { display: block; padding: 0 8px; }
+  .closure-context-meta { gap: 6px; padding: 2px 0; border-top: 1px solid var(--line); border-left: 0; }
+  .closure-period { flex: 1; }.closure-period input { width: 100%; max-width: 154px; }
+  .closure-status { max-width: 40%; }
   .closure-kpis article { padding: 11px 10px; }.closure-kpis span { font-size: 10px; }.closure-kpis strong { font-size: 20px; }.closure-kpis small { font-size: 8px; }
   .closure-method-body, .closure-confirm { padding: 12px; }.closure-method .card-header { min-height: 54px; padding: 10px 12px; }
   .closure-field input, .closure-field textarea, .closure-denominations input { font-size: 16px; }
@@ -1124,7 +1138,6 @@ html[data-theme='light'] .cash-close-card { background: linear-gradient(120deg,#
 }
 @media (max-width: 360px) {
   .closure-page .caja-sections a { padding: 0 8px; gap: 6px; }
-  .closure-status strong { font-size: 10px; }.closure-tools input { width: 136px; }
   .closure-kpis span { font-size: 9px; }.closure-kpis strong { font-size: 18px; }
 }
 html[data-theme='light'] .chart-detail { border-color: #d8c5b7; background: linear-gradient(120deg,#f5e1d5,#f8eacf 58%,#e4efe6); }
@@ -1371,6 +1384,5 @@ html[data-theme='dark'] .product-glyph.category-other { color: #b7a5ca; backgrou
 .register-session-strip { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px; padding:8px 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); font-size:10px; color:var(--muted); }.register-session-strip strong { color:var(--ink); }.register-session-strip .text-button { min-height:32px; font-size:11px; }
 .pos-page:has(.open-register) { overflow-y:auto; overscroll-behavior:contain; }
 .open-register { display:flex; flex:0 0 auto; flex-direction:column; gap:15px; width:min(420px,100%); margin:30px auto; padding:24px; }.open-register > svg { color:var(--cocoa); }.open-register h2 { margin:0; font-size:19px; }.open-register .field { display:flex; flex-direction:column; gap:8px; font-size:12px; }
-.session-selector { display:flex; align-items:center; gap:10px; }.session-selector select { width:100%; min-height:44px; padding:0 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); font-size:12px; }.session-period { color:var(--muted); font-size:11px; }
 .user-list { overflow:hidden; }.user-list article { display:flex; min-height:76px; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--line); }.user-list article:last-child { border-bottom:0; }.user-list article > div:nth-child(2) { display:flex; flex:1; min-width:0; flex-direction:column; gap:5px; }.user-list strong { font-size:13px; }.user-list small { color:var(--muted); font-size:11px; }.user-role-mark { display:grid; width:38px; height:38px; place-items:center; border-radius:11px; background:var(--sage-soft); color:var(--sage); }.user-role-mark.admin { background:var(--cocoa-soft); color:var(--cocoa); }
-@media(max-width:780px){.signed-user { display:none; }.topbar-logout { margin:0; }.bottom-nav.cashier-nav { grid-template-columns:repeat(2,1fr); }.register-session-strip { padding:6px 10px; font-size:9px; }.register-session-strip .text-button { min-height:44px; }.open-register { margin:12px auto; padding:20px; }.user-list article { flex-wrap:wrap; gap:10px; padding:12px; }.user-list article .status { font-size:9px; }.session-selector select { font-size:11px; }}
+@media(max-width:780px){.signed-user { display:none; }.topbar-logout { margin:0; }.bottom-nav.cashier-nav { grid-template-columns:repeat(2,1fr); }.register-session-strip { padding:6px 10px; font-size:9px; }.register-session-strip .text-button { min-height:44px; }.open-register { margin:12px auto; padding:20px; }.user-list article { flex-wrap:wrap; gap:10px; padding:12px; }.user-list article .status { font-size:9px; }}

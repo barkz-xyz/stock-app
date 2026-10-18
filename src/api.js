@@ -1,15 +1,54 @@
-async function request(url, options) {
-  const response = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    ...options,
-  })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    const error = new Error(data.error || 'Something went wrong.')
-    Object.assign(error, { status: response.status, ...data })
-    throw error
+const pendingReads = new Map()
+const validatedSales = new Map()
+let readGeneration = 0
+
+function invalidateReads() {
+  readGeneration += 1
+  pendingReads.clear()
+  validatedSales.clear()
+}
+
+function request(url, options = {}) {
+  const read = !options.method || options.method === 'GET'
+  const deduplicate = read && !options.signal
+  if (deduplicate && pendingReads.has(url)) return pendingReads.get(url)
+  if (!read) invalidateReads()
+  const generation = readGeneration
+  const conditional = read && url.startsWith('/api/sales?')
+  const cached = conditional ? validatedSales.get(url) : null
+  const execute = async () => {
+    try {
+      const headers = new Headers(options.headers)
+      if (options.body != null && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+      if (cached) headers.set('If-None-Match', cached.etag)
+      const response = await fetch(url, {
+        ...options, headers,
+        ...(read ? { cache: conditional ? 'no-cache' : 'no-store', signal: options.signal || AbortSignal.timeout(20000) } : {}),
+      })
+      if (response.status === 304 && cached) return cached.data
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        if (response.status === 401) invalidateReads()
+        const error = new Error(data.error || 'Something went wrong.')
+        Object.assign(error, { status: response.status, ...data })
+        throw error
+      }
+      const etag = response.headers.get('etag')
+      // A browser may satisfy a successfully revalidated response from its HTTP cache.
+      const result = cached && cached.etag === etag ? cached.data : data
+      if (conditional && etag && generation === readGeneration) validatedSales.set(url, { etag, data: result })
+      return result
+    } finally {
+      // Reads started during a mutation must also be revalidated after it completes.
+      if (!read) invalidateReads()
+    }
   }
-  return data
+  if (!deduplicate) return execute()
+  const pending = execute().finally(() => {
+    if (pendingReads.get(url) === pending) pendingReads.delete(url)
+  })
+  pendingReads.set(url, pending)
+  return pending
 }
 
 function localDateKey(date) {
@@ -41,13 +80,14 @@ export function metricsPeriod(range = 'today') {
 }
 
 export const api = {
+  bootstrap: () => request('/api/bootstrap'),
   authStatus: () => request('/api/auth/status'),
   login: (pin) => request('/api/auth/login', { method: 'POST', body: JSON.stringify({ pin }) }),
   logout: () => request('/api/auth/logout', { method: 'POST' }),
   items: () => request('/api/items'),
   movements: () => request('/api/movements?limit=100'),
   sales: () => request('/api/sales?limit=50'),
-  metrics: (range = 'today') => request(`/api/metrics?${new URLSearchParams(metricsPeriod(range))}`),
+  metrics: (range = 'today', options) => request(`/api/metrics?${new URLSearchParams(metricsPeriod(range))}`, options),
   saveCashClosure: (closure) => request('/api/cash-closures', { method: 'POST', body: JSON.stringify({ ...metricsPeriod('today'), ...closure }) }),
   dailyReportUrl: (language = 'es') => `/api/reports/daily?${new URLSearchParams({ ...metricsPeriod('today'), language })}`,
   posConfig: () => request('/api/pos/config'),

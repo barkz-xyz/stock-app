@@ -263,6 +263,10 @@ export function LanguageProvider({ children }) {
   }, [language])
   const value = useMemo(() => {
     const dictionary = dictionaries[language]
+    const locale = language === 'es' ? 'es-CL' : 'en-US'
+    const dateFormatter = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' })
+    const timeFormatter = new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit' })
+    const currencyFormatter = new Intl.NumberFormat(locale, { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })
     const t = (key, variables) => interpolate(dictionary[key] ?? dictionaries.en[key] ?? key, variables)
     return {
       language, setLanguage, t,
@@ -270,10 +274,10 @@ export function LanguageProvider({ children }) {
       unitLabel: (unit) => dictionary.units[unit] ?? unit,
       formatDate: (value) => {
         const date = parseCalendarDate(value)
-        return date ? new Intl.DateTimeFormat(language === 'es' ? 'es-CL' : 'en-US', { month: 'short', day: 'numeric' }).format(date) : '—'
+        return date ? dateFormatter.format(date) : '—'
       },
-      formatTime: (value) => new Intl.DateTimeFormat(language === 'es' ? 'es-CL' : 'en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(value)),
-      formatCurrency: (value) => new Intl.NumberFormat(language === 'es' ? 'es-CL' : 'en-US', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(Number(value) || 0),
+      formatTime: (value) => timeFormatter.format(new Date(value)),
+      formatCurrency: (value) => currencyFormatter.format(Number(value) || 0),
     }
   }, [language])
   return createElement(LanguageContext.Provider, { value }, children)

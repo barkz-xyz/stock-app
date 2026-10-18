@@ -14,7 +14,7 @@ import {
 import {
   adjustItem, attachPointOrder, closeStore, completeRefund,
   createItem, createSale, deleteItem, failRefund, getSale,
-  getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales,
+  getBootstrapData, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales,
   markCardSaleFailed, prepareRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
   updateItem, updateSaleFromPoint, updateSalePaymentDetails,
 } from './store.js'
@@ -294,6 +294,17 @@ app.post('/api/mercadopago/webhook', async (req, res, next) => {
 app.get('/api/auth/status', (req, res) => res.json(authStatus(req)))
 app.post('/api/auth/login', login)
 app.post('/api/auth/logout', logout)
+app.get('/api/bootstrap', async (req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-store')
+  const auth = authStatus(req)
+  if (!auth.authenticated) return res.json({ auth })
+  try {
+    const startedAt = performance.now()
+    const data = await getBootstrapData()
+    res.setHeader('Server-Timing', `data;dur=${elapsedMilliseconds(startedAt)}`)
+    res.json({ auth, ...data, posConfig: pointConfiguration() })
+  } catch (error) { next(error) }
+})
 app.use('/api', requireAuth)
 
 app.get('/api/items', async (_req, res, next) => {
@@ -355,7 +366,10 @@ app.get('/api/reports/daily', async (req, res, next) => {
 })
 
 app.get('/api/sales', async (req, res, next) => {
-  try { res.json(await listSales(Math.min(Number(req.query.limit) || 50, 200))) } catch (error) { next(error) }
+  try {
+    res.setHeader('Cache-Control', 'private, no-cache')
+    res.json(await listSales(Math.min(Number(req.query.limit) || 50, 200)))
+  } catch (error) { next(error) }
 })
 app.post('/api/sales/cash', async (req, res, next) => {
   try { res.status(201).json(await createSale(cleanCart(req.body), 'cash')) } catch (error) { next(error) }

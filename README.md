@@ -49,6 +49,18 @@ MERCADOPAGO_MOCK=true
 
 The mock terminal approves a card sale after a short delay. Never set `MERCADOPAGO_MOCK=true` in production.
 
+### Loading and request performance
+
+The app starts with `/api/bootstrap`, which checks the staff session and returns inventory, recent movements, recent sales, and Point configuration together. Locked sessions receive only authentication status. This removes the previous authentication-then-four-requests waterfall. PostgreSQL reads run in parallel; local JSON mode reads and parses one snapshot instead of three. The endpoint exposes its data-loading duration in `Server-Timing`.
+
+CAJA, metrics, and Point settings load as separate page modules. React and icons have stable, fingerprinted vendor bundles so ordinary application updates can reuse cached framework code. Product photos remain lazy-loaded and fingerprinted.
+
+Concurrent GETs share one in-flight request. Sales polling revalidates its ETag every time; unchanged history returns `304` and reuses the existing array to avoid an unnecessary React render. Mutations and sign-out invalidate read state. Reads time out after 20 seconds, polling waits for the previous read to finish, and hidden tabs stop polling. Payment/refund writes are never automatically retried or coalesced. Metrics requests are cancelled when changing ranges or leaving the page, and date/currency formatters are reused per language.
+
+Run `npm run measure:load` against a running local compiled app. Set `PRODUCTION_BASE_URL` and `STAFF_PIN` for authenticated production measurements; the script only reads application data and opens a staff session. Add `-- --legacy` to measure the former five-request startup flow. Results go to `output/performance.json` or `PERFORMANCE_OUTPUT`. The report counts all initial JavaScript, including preloaded vendors; gzip byte counts are estimates and timings use warm HTTP connections, not total browser page-load time.
+
+`npm run audit:performance:db` accepts `DATABASE_PUBLIC_URL` or `DATABASE_URL` and runs SELECT/EXPLAIN queries inside a read-only transaction. It reports query plans and timings without changing stock or history.
+
 ## Deploy to Railway
 
 1. Deploy this GitHub repository as a Railway service.

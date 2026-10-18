@@ -456,6 +456,20 @@ export async function listItems() {
   return data.items.sort((a, b) => a.name.localeCompare(b.name)).map(normalizeItem)
 }
 
+export async function getBootstrapData() {
+  if (pool) {
+    const [items, movements, sales] = await Promise.all([listItems(), listMovements(100), listSales(50)])
+    return { items, movements, sales }
+  }
+  // Local mode needs one JSON read/parse for the whole snapshot, not three.
+  const data = await readFileData()
+  return {
+    items: data.items.sort((a, b) => a.name.localeCompare(b.name)).map(normalizeItem),
+    movements: data.movements.slice(0, 100).map(normalizeMovement),
+    sales: data.sales.slice(0, 50).map(sale => normalizeSale(sale)),
+  }
+}
+
 export async function createItem(input) {
   if (!pool) return mutateFileData((data) => addItemToData(data, input))
 
@@ -1726,9 +1740,9 @@ export async function getCashClosure(businessDate) {
 export async function getSalesMetrics(period) {
   const earliest = new Date(Math.min(period.from.getTime(), period.previousFrom.getTime(), period.todayFrom.getTime()))
   const latest = new Date(Math.max(period.to.getTime(), period.previousTo.getTime(), period.todayTo.getTime()))
-  const sales = await listSalesBetween(earliest, latest)
+  const [sales, cashClosure] = await Promise.all([listSalesBetween(earliest, latest), getCashClosure(period.businessDate)])
   const metrics = buildSalesMetrics(sales, period)
-  return { ...metrics, cashClosure: await getCashClosure(period.businessDate) }
+  return { ...metrics, cashClosure }
 }
 
 function closureSnapshot(sales, input, from, to) {

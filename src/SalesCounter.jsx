@@ -6,6 +6,7 @@ import { useI18n } from './i18n.js'
 import { categories, CategoryIcon, categoryClass, formatQuantity, Modal } from './ui.jsx'
 
 import { getProductPhoto } from './productPhotos.js'
+import CajaHeader from './CajaHeader.jsx'
 
 function ProductArtwork({ item }) {
   const photo = getProductPhoto(item.name)
@@ -221,7 +222,7 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
   </Modal>
 }
 
-export default function SalesCounter({ items, sales, posConfig, onRefresh, setToast, registerView = 'cart', onRegisterViewChange }) {
+export default function SalesCounter({ items, sales, posConfig, onRefresh, setToast, onNavigate, registerView = 'cart', onRegisterViewChange }) {
   const { t, categoryLabel, unitLabel, formatCurrency } = useI18n()
   const setRegisterView = onRegisterViewChange
   const [search, setSearch] = useState('')
@@ -445,8 +446,8 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
   }, [filter, presentCategories])
 
   return <div className="page pos-page enter">
-    <section className="page-heading pos-heading">
-      <h1 className="eyebrow caja-title">{t('registerTitle')}</h1>
+    <CajaHeader onNavigate={onNavigate} />
+    <section className="register-subnav">
       <div className="register-tabs" role="tablist" aria-label={t('registerSections')} onKeyDown={handleRegisterTabKey}>
         <button type="button" id="caja-cart-tab" role="tab" aria-selected={registerView === 'cart'} aria-controls="caja-cart-panel" tabIndex={registerView === 'cart' ? 0 : -1} onClick={() => setRegisterView('cart')}><ShoppingBasket size={16} />{t('cart')}</button>
         <button type="button" id="caja-history-tab" role="tab" aria-selected={registerView === 'history'} aria-controls="caja-history-panel" tabIndex={registerView === 'history' ? 0 : -1} onClick={() => setRegisterView('history')}><History size={16} />{t('registerHistory')}</button>

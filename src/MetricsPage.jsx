@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowRight, BadgeCheck, Banknote, BarChart3, Boxes, Calculator, Check, CreditCard, Download, ReceiptText, RotateCw, TrendingDown, TrendingUp, WalletCards } from 'lucide-react'
+import { Banknote, BarChart3, Boxes, Calculator, CreditCard, Download, ReceiptText, RotateCw, TrendingDown, TrendingUp, WalletCards } from 'lucide-react'
 
 import { useI18n } from './i18n.js'
 import { formatQuantity } from './ui.jsx'
@@ -43,42 +43,8 @@ function dailySeries(source, range, language) {
   })
 }
 
-export function CashCloseForm({ metrics, onSubmit, onClose, busy }) {
-  const { t, formatCurrency } = useI18n()
-  const existing = metrics.cashClosure
-  const [form, setForm] = useState({
-    openingCash: existing?.openingCash ?? '', cashAdjustments: existing?.cashAdjustments ?? '',
-    countedCash: existing?.countedCash ?? '', note: existing?.note || '',
-  })
-  const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }))
-  const openingCash = Number(form.openingCash || 0)
-  const adjustments = Number(form.cashAdjustments || 0)
-  const countedCash = Number(form.countedCash || 0)
-  const expected = openingCash + metrics.today.cashRevenue + adjustments
-  const difference = countedCash - expected
-  return <form className="form-stack close-form" onSubmit={(event) => { event.preventDefault(); onSubmit(form) }}>
-    <div className="close-live-summary">
-      <div><span>{t('cashToday')}</span><strong>{formatCurrency(metrics.today.cashRevenue)}</strong></div>
-      <div><span>{t('pointToday')}</span><strong>{formatCurrency(metrics.today.cardRevenue)}</strong></div>
-      <div><span>{t('transactions')}</span><strong>{metrics.today.transactions}</strong></div>
-    </div>
-    <div className="form-grid">
-      <div className="field"><label htmlFor="opening-cash">{t('openingCash')}</label><input id="opening-cash" type="number" min="0" step="1" required value={form.openingCash} onChange={update('openingCash')} placeholder="0" /></div>
-      <div className="field"><label htmlFor="cash-adjustments">{t('cashAdjustments')}</label><input id="cash-adjustments" type="number" step="1" value={form.cashAdjustments} onChange={update('cashAdjustments')} placeholder="0" /></div>
-      <p className="field-hint">{t('cashAdjustmentsHint')}</p>
-      <div className="field full"><label htmlFor="counted-cash">{t('countedCashLabel')}</label><input id="counted-cash" type="number" min="0" step="1" required value={form.countedCash} onChange={update('countedCash')} placeholder="0" /></div>
-    </div>
-    <div className="cash-calculation">
-      <div><span>{t('expectedCash')}</span><strong>{formatCurrency(expected)}</strong></div>
-      <div className={difference === 0 ? 'balanced' : difference > 0 ? 'positive' : 'negative'}><span>{t('cashDifference')}</span><strong>{difference > 0 ? '+' : ''}{formatCurrency(difference)}</strong></div>
-    </div>
-    <div className="field full"><label htmlFor="closing-note">{t('closingNote')} <span>{t('optional')}</span></label><textarea id="closing-note" rows="3" value={form.note} onChange={update('note')} placeholder={t('closingNotePlaceholder')} /></div>
-    <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>{t('cancel')}</button><button className="button primary" disabled={busy}>{busy ? t('savingClose') : t('saveClose')}<Check size={18} /></button></div>
-  </form>
-}
-
-export default function MetricsPage({ metrics, range, onRangeChange, onRefresh, onOpenClose, onExport, loading, exporting }) {
-  const { t, language, formatCurrency, formatTime } = useI18n()
+export default function MetricsPage({ metrics, range, onRangeChange, onRefresh, onExport, loading, exporting }) {
+  const { t, language, formatCurrency } = useI18n()
   if (loading && !metrics) return <div className="page analytics-page"><div className="analytics-loading"><div className="loader-mark"><BarChart3 size={27} /></div><span>{t('preparing')}</span></div></div>
   const data = metrics || {
     summary: {}, paymentMethods: { cash: {}, card: {} }, daily: [], hourly: [], topProducts: [], today: {}, cashClosure: null,
@@ -88,8 +54,6 @@ export default function MetricsPage({ metrics, range, onRangeChange, onRefresh, 
   const daily = dailySeries(data.daily, range, language)
   const hourly = data.hourly.map((entry) => ({ ...entry, detailLabel: `${String(entry.hour).padStart(2, '0')}:00`, label: entry.hour % 3 === 0 ? `${String(entry.hour).padStart(2, '0')}:00` : '' }))
   const paymentShare = (amount) => summary.revenue ? Math.round((amount / summary.revenue) * 100) : 0
-  const close = data.cashClosure
-  const differenceTone = !close || close.difference === 0 ? 'balanced' : close.difference > 0 ? 'positive' : 'negative'
   return <div className="page enter analytics-page">
     <section className="page-heading analytics-heading"><div><span className="eyebrow">{t('businessIntelligence')}</span><h1>{t('metricsTitle')}</h1><p>{t('metricsDescription')}</p></div><div className="analytics-actions"><button className="button secondary report-export-button" onClick={onExport} disabled={exporting}><Download size={17} /><span>{exporting ? t('exportingReport') : t('exportDailyReport')}</span></button><div className="range-switch" role="group" aria-label={t('metricsTitle')}>{[['today', 'periodToday'], ['7d', 'period7Days'], ['30d', 'period30Days']].map(([id, key]) => <button key={id} className={range === id ? 'active' : ''} onClick={() => onRangeChange(id)}>{t(key)}</button>)}</div><button className="icon-button" onClick={onRefresh} aria-label={t('refreshMetrics')} title={t('refreshMetrics')}><RotateCw size={18} className={loading ? 'spin' : ''} /></button></div></section>
 
@@ -120,6 +84,6 @@ export default function MetricsPage({ metrics, range, onRangeChange, onRefresh, 
       <div><span>{t('itemsPerTicket')}</span><strong>{formatQuantity(summary.itemsPerTransaction || 0)}</strong></div>
     </section>
 
-    <section className="card cash-close-card"><div className="cash-close-copy"><div className="cash-close-icon"><Calculator size={24} /></div><div><span className="eyebrow">{t('closeSummary')}</span><h2>{t('dayClose')}</h2><p>{t('dayCloseDescription')}</p></div></div><div className="cash-close-numbers"><div><span>{t('todayCollected')}</span><strong>{formatCurrency(data.today.revenue)}</strong></div><div><span>{t('cashToday')}</span><strong>{formatCurrency(data.today.cashRevenue)}</strong></div><div><span>{t('pointToday')}</span><strong>{formatCurrency(data.today.cardRevenue)}</strong></div>{close && <><div><span>{t('expectedCash')}</span><strong>{formatCurrency(close.expectedCash)}</strong></div><div className={differenceTone}><span>{close.difference === 0 ? t('closeBalanced') : t('cashDifference')}</span><strong>{close.difference > 0 ? '+' : ''}{formatCurrency(close.difference)}</strong></div></>}</div><div className="cash-close-action">{close && <span><BadgeCheck size={16} />{t('closedAt', { time: formatTime(close.closedAt) })}</span>}<button className="button primary" onClick={onOpenClose}>{close ? t('updateClose') : t('registerClose')}<ArrowRight size={18} /></button></div></section>
+
   </div>
 }

@@ -49,6 +49,32 @@ test('PostgreSQL serializes checkout retries and aggregates the full business da
     assert.equal(boot.sales.length, 50)
     assert.equal(boot.dailySummary.transactions, 65)
     assert.equal((await store.getDailySummary(new Date('2026-10-18T03:00:00Z'))).transactions, 0)
+    // Closing runs in the same isolated schema; negative card days are valid (older-sale refunds).
+    await admin.query(`INSERT INTO refunds (id,sale_id,status,amount,reason,processed_at,created_at)
+      VALUES ($1,$2,'processed',3000,'older card refund','2026-10-17T20:00:00Z','2026-10-17T20:00:00Z')`, [crypto.randomUUID(), cards[0].id])
+    let closing = await store.getCashClosureWorkspace('2026-10-17')
+    assert.equal(closing.live.cash.net, 64500)
+    assert.equal(closing.live.card.net, -3000)
+    const declaration = { businessDate: '2026-10-17', openingCash: 1000, cashIn: 0, cashOut: 0,
+      countedCash: 65500, countedCard: -3000, operator: 'Isolated tester', note: 'Refund from an earlier day.',
+      expectedRevision: 0, fingerprint: closing.live.fingerprint }
+    const closeAttempts = await Promise.allSettled(Array.from({ length: 4 }, () => store.saveCashClosure(declaration)))
+    assert.equal(closeAttempts.filter(r => r.status === 'fulfilled').length, 1)
+    for (const rejected of closeAttempts.filter(r => r.status === 'rejected')) assert.equal(rejected.reason.code, 'CLOSURE_CHANGED')
+    const firstClose = await store.getCashClosureRevision('2026-10-17', 1)
+    assert.equal(firstClose.cardSales, -3000)
+    assert.equal(firstClose.difference, 0)
+    assert.equal(firstClose.cardDifference, 0)
+    await admin.query(`INSERT INTO sales (id,status,payment_method,total,paid_at,created_at)
+      VALUES ($1,'paid','cash',2500,'2026-10-17T22:00:00Z','2026-10-17T22:00:00Z')`, [crypto.randomUUID()])
+    closing = await store.getCashClosureWorkspace('2026-10-17')
+    assert.equal(closing.stale, true)
+    await assert.rejects(store.saveCashClosure({ ...declaration, expectedRevision: 1 }), { code: 'CLOSURE_CHANGED' })
+    const correction = await store.saveCashClosure({ ...declaration, countedCash: 68000, expectedRevision: 1,
+      fingerprint: closing.live.fingerprint, note: 'Include later collection.' })
+    assert.equal(correction.revision, 2)
+    assert.deepEqual(await store.getCashClosureRevision('2026-10-17', 1), firstClose)
+    assert.equal((await store.getCashClosureWorkspace('2026-10-17')).stale, false)
     await listenForDatabaseChanges(isolated.href)
     let notifications = 0
     const unsubscribe = subscribeToChanges(() => notifications++)

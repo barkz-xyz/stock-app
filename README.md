@@ -188,6 +188,16 @@ Planning and tax research:
 - [SII architecture summary](SII_DTE_RESEARCH.md)
 - [Detailed SII integration analysis](integraci%C3%B3n%20SII.md)
 
+## Daily cash close
+
+`/caja` opens the counter with Carrito and Historial. `/caja/cierre` contains the daily close, previously shown in Métricas. A selected day is preserved as `/caja/cierre?fecha=YYYY-MM-DD`; the server uses `America/Santiago` (or `BAKERY_TIME_ZONE`) and handles daylight saving time.
+
+Count cash against opening cash + collected cash sales - processed cash refunds + additional cash in - withdrawals. An optional banknote/coin count must match the counted total. Compare the terminal's declared sales minus refunds with card collections before fees; provider fees and settlement figures are shown separately and may be incomplete. Refunds belong to their processing date, including refunds of older sales. Pending or unsuccessful operations are excluded and listed for review.
+
+Saving requires a declared operator and a fresh operations fingerprint/revision. Differences, extra cash movements, pending operations and corrections require a note. PostgreSQL takes a consistent transaction snapshot; competing or stale closes return 409 instead of overwriting silently. Each correction retains the previous version. New sales/refunds remain allowed and mark a saved close as stale until a correction includes them. Older legacy closes remain readable and require a correction before detailed PDF export.
+
+The authenticated, private/no-store API exposes `GET /api/cash-closures?date=YYYY-MM-DD`, `POST /api/cash-closures`, and `GET /api/cash-closures/YYYY-MM-DD/pdf?revision=N`. PDFs use saved version data, paginated transaction/product/refund details, standard vector fonts, Flate-compressed content and compressed object streams. No business data or PDF files are sent to an external renderer. The Bakery POS styling stays simple and searchable.
+
 ## Commands
 
 ```bash

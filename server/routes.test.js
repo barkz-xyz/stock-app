@@ -10,6 +10,8 @@ test('every section and register tab can be restored from its URL', () => {
   assert.equal(parseRoute('/inventario/').page, 'inventory')
   assert.equal(parseRoute('/caja/historial').registerView, 'history')
   assert.equal(parseRoute('/caja').registerView, 'cart')
+  assert.equal(parseRoute('/caja/cierre').registerView, 'close')
+  assert.equal(parseRoute(sectionHref('pos', { view: 'close', date: '2026-10-17' })).closureDate, '2026-10-17')
   for (const range of ['today', '7d', '30d']) assert.equal(parseRoute(sectionHref('metrics', { range })).metricsRange, range)
   assert.equal(parseRoute('/metricas?periodo=invalid').metricsRange, 'today')
   assert.equal(parseRoute('/something-unknown').page, 'not-found')

@@ -4,6 +4,7 @@ import path from 'node:path'
 import pg from 'pg'
 import { dateOnly } from '../src/dates.js'
 import { publishChange } from './changes.js'
+import { closurePeriod, buildClosureSummary, cleanClosureInput, createClosure, closureError, businessDateAt } from './cash-closure.js'
 
 const { Pool } = pg
 const databaseUrl = process.env.DATABASE_URL
@@ -181,6 +182,9 @@ function normalizeCashClosure(row) {
     transactionCount: Number(row.transaction_count ?? row.transactionCount ?? 0),
     note: row.note || '',
     closedAt: row.closed_at ?? row.closedAt,
+    revision: 1,
+    ...(row.details?.current || row.snapshot && row || {}),
+    history: row.details?.history || row.history || [],
   }
 }
 
@@ -346,6 +350,10 @@ export async function initializeStore() {
         note TEXT NOT NULL DEFAULT '',
         closed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE cash_closures ADD COLUMN IF NOT EXISTS details JSONB;
+      ALTER TABLE cash_closures DROP CONSTRAINT IF EXISTS cash_closures_cash_sales_check;
+      ALTER TABLE cash_closures DROP CONSTRAINT IF EXISTS cash_closures_card_sales_check;
+      ALTER TABLE cash_closures DROP CONSTRAINT IF EXISTS cash_closures_total_sales_check;
       ALTER TABLE movements ADD COLUMN IF NOT EXISTS sale_id UUID REFERENCES sales(id) ON DELETE SET NULL;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_external_reference TEXT;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_operation_id TEXT;
@@ -1853,58 +1861,97 @@ export async function getSalesMetrics(period) {
   const latest = new Date(Math.max(period.to.getTime(), period.previousTo.getTime(), period.todayTo.getTime()))
   const [sales, cashClosure] = await Promise.all([listSalesBetween(earliest, latest), getCashClosure(period.businessDate)])
   const metrics = buildSalesMetrics(sales, period)
-  return { ...metrics, cashClosure }
+  const { snapshot, history, ...closureSummary } = cashClosure || {}
+  return { ...metrics, cashClosure: cashClosure ? closureSummary : null }
 }
 
-function closureSnapshot(sales, input, from, to) {
-  const paid = sales.filter((sale) => completedSale(sale) && isWithin(sale, from, to))
-  const refunds = refundsWithin(sales, from, to)
-  const cashRefunds = refunds.filter((refund) => refund.paymentMethod === 'cash').reduce((sum, refund) => sum + refund.amount, 0)
-  const cardRefunds = refunds.filter((refund) => refund.paymentMethod === 'card').reduce((sum, refund) => sum + refund.amount, 0)
-  const cashSales = paid.filter((sale) => sale.paymentMethod === 'cash').reduce((sum, sale) => sum + sale.total, 0) - cashRefunds
-  const cardSales = paid.filter((sale) => sale.paymentMethod === 'card').reduce((sum, sale) => sum + sale.total, 0) - cardRefunds
-  const totalSales = cashSales + cardSales
-  const expectedCash = input.openingCash + cashSales + input.cashAdjustments
-  return {
-    id: input.id || crypto.randomUUID(), businessDate: input.businessDate,
-    openingCash: input.openingCash, cashAdjustments: input.cashAdjustments, countedCash: input.countedCash,
-    cashSales, cardSales, totalSales, expectedCash, difference: input.countedCash - expectedCash,
-    transactionCount: paid.length, note: input.note, closedAt: new Date().toISOString(),
-  }
+async function closureSales(period, client) {
+  const { rows } = await client.query(`SELECT s.* FROM sales s
+    WHERE (COALESCE(s.paid_at,s.created_at) >= $1 AND COALESCE(s.paid_at,s.created_at) < $2)
+      OR EXISTS (SELECT 1 FROM refunds r WHERE r.sale_id=s.id AND
+        ((r.processed_at >= $1 AND r.processed_at < $2) OR (r.created_at >= $1 AND r.created_at < $2)))
+    ORDER BY s.id`, [period.from.toISOString(), period.to.toISOString()])
+  return hydratePostgresSales(rows, client)
 }
-
-export async function saveCashClosure(input, todayFrom, todayTo) {
+function closureWorkspace(sales, period, existing) {
+  const live = buildClosureSummary(sales, period)
+  const { history = [], snapshot, ...fields } = existing || {}
+  const closure = { ...fields, snapshot: snapshot ? { fingerprint: snapshot.fingerprint } : null }
+  return { live, closure: existing ? closure : null, today: businessDateAt(),
+    stale: Boolean(existing && (!existing.snapshot || existing.snapshot.fingerprint !== live.fingerprint)),
+    revisions: [...history, ...(existing ? [closure] : [])].map(c => ({ revision: c.revision || 1, closedAt: c.closedAt, operator: c.operator || '', note: c.note, exportable: Boolean(c.snapshot) })) }
+}
+export async function getCashClosureWorkspace(date) {
+  const period = closurePeriod(date)
   if (!pool) {
-    return mutateFileData((data) => {
-      const todaySales = data.sales.map((sale) => normalizeSale(sale)).filter((sale) => isWithin(sale, todayFrom, todayTo))
-      const existingIndex = data.cashClosures.findIndex((closure) => closure.businessDate === input.businessDate)
-      const closure = closureSnapshot(todaySales, { ...input, id: existingIndex >= 0 ? data.cashClosures[existingIndex].id : null }, todayFrom, todayTo)
-      if (existingIndex >= 0) data.cashClosures[existingIndex] = closure
-      else data.cashClosures.unshift(closure)
-      return normalizeCashClosure(closure)
+    const data = await readFileData()
+    return closureWorkspace(data.sales.map(s => normalizeSale(s)), period,
+      normalizeCashClosure(data.cashClosures.find(c => c.businessDate === period.businessDate)))
+  }
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    const sales = await closureSales(period, client)
+    const existing = await client.query('SELECT * FROM cash_closures WHERE business_date=$1', [period.businessDate])
+    const workspace = closureWorkspace(sales, period, normalizeCashClosure(existing.rows[0]))
+    await client.query('COMMIT')
+    return workspace
+  } catch (error) { await client.query('ROLLBACK'); throw error }
+  finally { client.release() }
+}
+export async function getCashClosureRevision(date, revision) {
+  closurePeriod(date)
+  if (revision != null && (!/^\d+$/.test(String(revision)) || !Number.isSafeInteger(Number(revision)) || Number(revision) < 1)) throw closureError('Selecciona una versión de cierre válida.')
+  const latest = await getCashClosure(date)
+  if (!latest) throw closureError('Guarda el cierre antes de exportar su PDF.', 404, 'CLOSURE_NOT_FOUND')
+  const selected = revision == null ? latest : [...latest.history, latest].find(c => c.revision === Number(revision))
+  if (!selected?.snapshot) throw closureError('Este cierre antiguo no contiene el detalle de operaciones. Registra una corrección para generar un PDF detallado.', 409, 'LEGACY_CLOSURE')
+  const { history, ...closure } = selected
+  return closure
+}
+export async function saveCashClosure(body) {
+  const input = cleanClosureInput(body)
+  const period = closurePeriod(input.businessDate)
+  const save = (sales, existing) => {
+    const closure = createClosure(buildClosureSummary(sales, period), input, existing)
+    const history = existing ? [...existing.history, Object.fromEntries(Object.entries(existing).filter(([key]) => key !== 'history'))] : []
+    return { closure, history }
+  }
+  if (!pool) {
+    return mutateFileData(data => {
+      const index = data.cashClosures.findIndex(c => c.businessDate === input.businessDate)
+      const { closure, history } = save(data.sales.map(s => normalizeSale(s)), normalizeCashClosure(data.cashClosures[index]))
+      const stored = { ...closure, history }
+      if (index >= 0) data.cashClosures[index] = stored
+      else data.cashClosures.unshift(stored)
+      return closure
     })
   }
-
-  const todaySales = await listSalesBetween(todayFrom, todayTo)
-  const closure = closureSnapshot(todaySales, input, todayFrom, todayTo)
-  const { rows } = await pool.query(`
-    INSERT INTO cash_closures (
-      id, business_date, opening_cash, cash_adjustments, counted_cash, cash_sales, card_sales,
-      total_sales, expected_cash, difference, transaction_count, note, closed_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-    ON CONFLICT (business_date) DO UPDATE SET
-      opening_cash=EXCLUDED.opening_cash, cash_adjustments=EXCLUDED.cash_adjustments,
-      counted_cash=EXCLUDED.counted_cash, cash_sales=EXCLUDED.cash_sales,
-      card_sales=EXCLUDED.card_sales, total_sales=EXCLUDED.total_sales,
-      expected_cash=EXCLUDED.expected_cash, difference=EXCLUDED.difference,
-      transaction_count=EXCLUDED.transaction_count, note=EXCLUDED.note, closed_at=EXCLUDED.closed_at
-    RETURNING *
-  `, [
-    closure.id, closure.businessDate, closure.openingCash, closure.cashAdjustments, closure.countedCash,
-    closure.cashSales, closure.cardSales, closure.totalSales, closure.expectedCash, closure.difference,
-    closure.transactionCount, closure.note, closure.closedAt,
-  ])
-  return normalizeCashClosure(rows[0])
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ')
+    const existing = await client.query('SELECT * FROM cash_closures WHERE business_date=$1 FOR UPDATE', [input.businessDate])
+    const { closure: c, history } = save(await closureSales(period, client), normalizeCashClosure(existing.rows[0]))
+    const result = await client.query(`INSERT INTO cash_closures (
+      id,business_date,opening_cash,cash_adjustments,counted_cash,cash_sales,card_sales,total_sales,
+      expected_cash,difference,transaction_count,note,closed_at,details
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+    ON CONFLICT (business_date) DO UPDATE SET opening_cash=EXCLUDED.opening_cash,
+      cash_adjustments=EXCLUDED.cash_adjustments,counted_cash=EXCLUDED.counted_cash,cash_sales=EXCLUDED.cash_sales,
+      card_sales=EXCLUDED.card_sales,total_sales=EXCLUDED.total_sales,expected_cash=EXCLUDED.expected_cash,
+      difference=EXCLUDED.difference,transaction_count=EXCLUDED.transaction_count,note=EXCLUDED.note,
+      closed_at=EXCLUDED.closed_at,details=EXCLUDED.details
+    WHERE cash_closures.id=EXCLUDED.id RETURNING id`,
+    [c.id,c.businessDate,c.openingCash,c.cashAdjustments,c.countedCash,c.cashSales,c.cardSales,c.totalSales,
+      c.expectedCash,c.difference,c.transactionCount,c.note,c.closedAt,JSON.stringify({ current: c, history })])
+    if (!result.rows.length) throw closureError('Otro usuario guardó el cierre. Actualiza el día antes de continuar.', 409, 'CLOSURE_CHANGED')
+    await client.query('COMMIT')
+    return c
+  } catch (error) {
+    await client.query('ROLLBACK')
+    if (['40001','40P01','23505'].includes(error.code)) throw closureError('El día cambió mientras se cerraba. Actualiza y revisa el cierre.', 409, 'CLOSURE_CHANGED')
+    throw error
+  } finally { client.release() }
 }
 
 export async function listMovements(limit = 50) {

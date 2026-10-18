@@ -14,11 +14,12 @@ import {
 import {
   adjustItem, attachPointOrder, closeStore, completeRefund,
   claimPointOrder, createItem, createSale, deleteItem, failRefund, getSale,
-  getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales,
+  getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales,
   markCardSaleFailed, prepareRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
   updateItem, updateSaleFromPoint, updateSalePaymentDetails,
 } from './store.js'
 import { createDailyReport } from './report.js'
+import { createCashClosurePdf } from './cash-closure-pdf.js'
 import { closeChangeListener, listenForDatabaseChanges, subscribeToChanges } from './changes.js'
 
 const app = express()
@@ -140,21 +141,6 @@ function cleanMetricsPeriod(source) {
   if (period.to - period.from > 370 * 86400000) throw badRequest('The metrics date range is too large.')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(period.businessDate)) throw badRequest('businessDate must use YYYY-MM-DD.')
   return period
-}
-
-function cleanCashClosure(body) {
-  const period = cleanMetricsPeriod(body)
-  const input = {
-    businessDate: period.businessDate,
-    openingCash: Number(body.openingCash ?? 0),
-    cashAdjustments: Number(body.cashAdjustments ?? 0),
-    countedCash: Number(body.countedCash ?? 0),
-    note: String(body.note || '').trim().slice(0, 500),
-  }
-  if (![input.openingCash, input.cashAdjustments, input.countedCash].every(Number.isInteger)) throw badRequest('Cash amounts must be whole Chilean pesos.')
-  if (input.openingCash < 0 || input.countedCash < 0) throw badRequest('Opening and counted cash cannot be negative.')
-  if (Math.abs(input.cashAdjustments) > 100000000) throw badRequest('The cash adjustment is too large.')
-  return { input, period }
 }
 
 function requireProtectedPoint() {
@@ -387,10 +373,19 @@ app.get('/api/movements', async (req, res, next) => {
 app.get('/api/metrics', async (req, res, next) => {
   try { res.json(await getSalesMetrics(cleanMetricsPeriod(req.query))) } catch (error) { next(error) }
 })
+app.get('/api/cash-closures', async (req, res, next) => {
+  try { res.json(await getCashClosureWorkspace(req.query.date)) } catch (error) { next(error) }
+})
 app.post('/api/cash-closures', async (req, res, next) => {
+  try { res.json(await saveCashClosure(req.body)) } catch (error) { next(error) }
+})
+app.get('/api/cash-closures/:date/pdf', async (req, res, next) => {
   try {
-    const { input, period } = cleanCashClosure(req.body)
-    res.json(await saveCashClosure(input, period.todayFrom, period.todayTo))
+    const closure = await getCashClosureRevision(req.params.date, req.query.revision)
+    const bytes = await createCashClosurePdf(closure)
+    res.set({ 'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="bakery-pos-cierre-${closure.businessDate}-v${closure.revision}.pdf"`,
+      'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }).send(bytes)
   } catch (error) { next(error) }
 })
 app.get('/api/reports/daily', async (req, res, next) => {

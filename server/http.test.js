@@ -80,7 +80,7 @@ test('HTTP authentication rejects malformed sessions and validates product calen
   const cookie = login.headers.get('set-cookie').split(';')[0]
   const builtHtml = await fs.readFile(path.join('dist', 'index.html'), 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null })
   await t.test('built HTML shell is shared safely while versioned assets remain immutable', { skip: !builtHtml }, async () => {
-    for (const route of ['/', '/index.html', '/resumen', '/caja', '/caja/historial', '/inventario', '/metricas?periodo=30d', '/actividad', '/configuracion']) {
+    for (const route of ['/', '/index.html', '/resumen', '/caja', '/caja/historial', '/caja/cierre?fecha=2026-10-17', '/inventario', '/metricas?periodo=30d', '/actividad', '/configuracion']) {
       const anonymous = await request(route)
       const authenticated = await request(route, { headers: { Cookie: cookie } })
       assert.equal(anonymous.status, 200)
@@ -135,6 +135,32 @@ test('HTTP authentication rejects malformed sessions and validates product calen
   const updatedBootstrap = await (await request('/api/bootstrap', { headers: { Cookie: cookie } })).json()
   assert.equal(updatedBootstrap.items[0].quantity, 2)
   assert.equal(updatedBootstrap.sales.length, 2)
+  await t.test('cash close requires authentication, rejects stale writes and serves a private compressed PDF', async () => {
+    assert.equal((await request('/api/cash-closures')).status, 401)
+    assert.equal((await request('/api/cash-closures/2026-10-17/pdf')).status, 401)
+    assert.equal((await request('/api/cash-closures?date=2026-02-30', { headers: { Cookie: cookie } })).status, 400)
+    const workspace = await (await request('/api/cash-closures', { headers: { Cookie: cookie } })).json()
+    const declaration = { businessDate: workspace.live.businessDate, openingCash: 0, cashIn: 0, cashOut: 0,
+      countedCash: workspace.live.cash.net, countedCard: workspace.live.card.net, operator: 'HTTP tester',
+      expectedRevision: 0, fingerprint: workspace.live.fingerprint, note: 'Isolated HTTP close.' }
+    const write = () => request('/api/cash-closures', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(declaration) })
+    const saved = await write()
+    assert.equal(saved.status, 200)
+    assertPrivate(saved)
+    assert.equal((await saved.json()).revision, 1)
+    assert.equal((await write()).status, 409)
+    const pdf = await request(`/api/cash-closures/${declaration.businessDate}/pdf?revision=1`, { headers: { Cookie: cookie } })
+    assert.equal(pdf.status, 200)
+    assertPrivate(pdf)
+    assert.equal(pdf.headers.get('cache-control'), 'private, no-store')
+    assert.equal(pdf.headers.get('content-type'), 'application/pdf')
+    assert.match(pdf.headers.get('content-disposition'), /v1.pdf/)
+    const bytes = Buffer.from(await pdf.arrayBuffer())
+    assert.equal(bytes.subarray(0, 5).toString(), '%PDF-')
+    assert.ok(bytes.length < 50000)
+    assert.match(bytes.toString('latin1'), /FlateDecode/)
+    assert.equal((await request('/api/cash-closures/2020-01-01/pdf', { headers: { Cookie: cookie } })).status, 404)
+  })
   await t.test('two sessions receive stock changes and checkout retries consume inventory once', async (t) => {
     const aborts = [new AbortController(), new AbortController()]
     t.after(() => aborts.forEach(controller => controller.abort()))

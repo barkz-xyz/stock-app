@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { businessDateAt } from './cash-closure.js'
 
 test('sales metrics and the daily cash close reconcile payment methods', async () => {
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'bakery-metrics-test-'))
@@ -38,7 +39,7 @@ test('sales metrics and the daily cash close reconcile payment methods', async (
     const to = new Date(now.getTime() + 86400000)
     const previousTo = new Date(from)
     const previousFrom = new Date(previousTo.getTime() - (to.getTime() - from.getTime()))
-    const businessDate = now.toISOString().slice(0, 10)
+    const businessDate = businessDateAt(now)
     const period = { from, to, previousFrom, previousTo, todayFrom: from, todayTo: to, businessDate }
 
     const metrics = await store.getSalesMetrics(period)
@@ -52,9 +53,11 @@ test('sales metrics and the daily cash close reconcile payment methods', async (
     assert.equal(metrics.topProducts[0].quantity, 4)
     assert.equal(metrics.topProducts[0].revenue, 6000)
 
+    const workspace = await store.getCashClosureWorkspace(businessDate)
     const closure = await store.saveCashClosure({
-      businessDate, openingCash: 10000, cashAdjustments: -1000, countedCash: 10500, note: 'Test close',
-    }, from, to)
+      businessDate, openingCash: 10000, cashIn: 0, cashOut: 1000, countedCash: 10500, countedCard: 4500,
+      operator: 'Test operator', expectedRevision: 0, fingerprint: workspace.live.fingerprint, note: 'Test close',
+    })
     assert.equal(closure.cashSales, 1500)
     assert.equal(closure.cardSales, 4500)
     assert.equal(closure.expectedCash, 10500)

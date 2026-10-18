@@ -3,7 +3,8 @@ export const sectionPaths = {
   metrics: '/metricas', activity: '/actividad', settings: '/configuracion',
 }
 
-export function sectionHref(page, { view = 'cart', range = 'today' } = {}) {
+export function sectionHref(page, { view = 'cart', range = 'today', date } = {}) {
+  if (page === 'pos' && view === 'close') return `/caja/cierre${date ? `?fecha=${encodeURIComponent(date)}` : ''}`
   if (page === 'pos' && view === 'history') return '/caja/historial'
   if (page === 'metrics' && ['7d', '30d'].includes(range)) return `/metricas?periodo=${range}`
   return sectionPaths[page] || sectionPaths.dashboard
@@ -12,10 +13,11 @@ export function sectionHref(page, { view = 'cart', range = 'today' } = {}) {
 export function parseRoute(href) {
   const url = new URL(href, 'http://app.local')
   const path = url.pathname.replace(/\/+$/, '') || '/'
-  const page = path === '/' ? 'dashboard' : path === '/caja/historial' ? 'pos'
+  const page = path === '/' ? 'dashboard' : ['/caja/historial', '/caja/cierre'].includes(path) ? 'pos'
     : Object.keys(sectionPaths).find(page => sectionPaths[page] === path) || 'not-found'
   const range = url.searchParams.get('periodo')
-  return { page, registerView: path === '/caja/historial' ? 'history' : 'cart',
+  return { page, registerView: path === '/caja/cierre' ? 'close' : path === '/caja/historial' ? 'history' : 'cart',
+    closureDate: url.searchParams.get('fecha') || '',
     metricsRange: ['7d', '30d'].includes(range) ? range : 'today',
     canonical: path === '/' ? sectionPaths.dashboard : null }
 }

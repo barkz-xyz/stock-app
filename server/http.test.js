@@ -135,6 +135,54 @@ test('HTTP authentication rejects malformed sessions and validates product calen
   const updatedBootstrap = await (await request('/api/bootstrap', { headers: { Cookie: cookie } })).json()
   assert.equal(updatedBootstrap.items[0].quantity, 2)
   assert.equal(updatedBootstrap.sales.length, 2)
+  await t.test('two sessions receive stock changes and checkout retries consume inventory once', async (t) => {
+    const aborts = [new AbortController(), new AbortController()]
+    t.after(() => aborts.forEach(controller => controller.abort()))
+    const streams = await Promise.all(aborts.map(controller => request('/api/events', { headers: { Cookie: cookie }, signal: controller.signal })))
+    for (const stream of streams) {
+      assert.equal(stream.status, 200)
+      assertPrivate(stream)
+      assert.equal(stream.headers.get('content-encoding'), null)
+      assert.match(stream.headers.get('content-type'), /text\/event-stream/)
+    }
+    const readers = streams.map(stream => stream.body.getReader())
+    const waitEvent = async (reader, event) => {
+      let received = ''
+      while (!received.includes(`event: ${event}\n`)) {
+        const chunk = await reader.read()
+        assert.equal(chunk.done, false)
+        received += new TextDecoder().decode(chunk.value)
+      }
+      assert.doesNotMatch(received, /itemId|quantity|bakery_session/)
+    }
+    await Promise.all(readers.map(reader => waitEvent(reader, 'ready')))
+    const adjusted = await request(`/api/items/${created.id}/adjust`, { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'adjustment', quantity: 6, note: 'Two-device test' }) })
+    assert.equal(adjusted.status, 200)
+    await Promise.all(readers.map(reader => waitEvent(reader, 'change')))
+    const before = await (await request('/api/bootstrap', { headers: { Cookie: cookie } })).json()
+    const key = crypto.randomUUID()
+    const post = (quantity, method = 'cash') => request(`/api/sales/${method}`, { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: JSON.stringify({ items: [{ itemId: created.id, quantity }] }) })
+    const replies = await Promise.all(Array.from({ length: 8 }, () => post(2)))
+    assert.equal(replies.filter(reply => reply.status === 201).length, 1)
+    assert.equal(replies.filter(reply => reply.status === 200).length, 7)
+    const sales = await Promise.all(replies.map(reply => reply.json()))
+    assert.equal(new Set(sales.map(sale => sale.id)).size, 1)
+    assert.ok(sales.every(sale => sale.checkoutKey === key))
+    const conflict = await post(1)
+    assert.equal(conflict.status, 409)
+    assert.equal((await conflict.json()).code, 'CHECKOUT_CONFLICT')
+    const recovered = await request(`/api/checkouts/${key}`, { headers: { Cookie: cookie } })
+    assertPrivate(recovered)
+    assert.equal((await recovered.json()).id, sales[0].id)
+    assert.equal((await request(`/api/checkouts/${key}`)).status, 401)
+    assert.equal((await request('/api/events')).status, 401)
+    const after = await (await request('/api/bootstrap', { headers: { Cookie: cookie } })).json()
+    assert.equal(after.items[0].quantity, 4)
+    assert.equal(after.sales.length, before.sales.length + 1)
+    assert.equal(after.movements.length, before.movements.length + 1)
+    assert.equal(after.dailySummary.transactions, before.dailySummary.transactions + 1)
+    assert.equal(after.dailySummary.revenue, before.dailySummary.revenue + 2000)
+  })
   for (let attempt = 0; attempt < 9; attempt++) {
     const response = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': `192.0.2.${attempt}` }, body: JSON.stringify({ pin: 'wrong' }) })
     assert.equal(response.status, attempt < 8 ? 401 : 429)

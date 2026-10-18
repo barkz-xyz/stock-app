@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, BarChart3, Boxes, CalendarClock, Check, ChevronRight, CirclePlus, Clock3, Croissant, History, LayoutDashboard, LineChart, LockKeyhole, LogOut, Menu, Minus, Moon, PanelLeftClose, PackageOpen, Pencil, Plus, ReceiptText, Search, ShoppingBasket, Settings, SlidersHorizontal, Sparkles, Sun, Trash2, Undo2, Wifi, X } from 'lucide-react'
 import { api } from './api.js'
+import { watchUpdates } from './liveUpdates.js'
 import { dateOnly, parseCalendarDate } from './dates.js'
 import { useI18n } from './i18n.js'
 import { categories, CategoryIcon, categoryClass, formatQuantity, Modal } from './ui.jsx'
@@ -210,21 +211,19 @@ function InventoryList({ items, onAdjust, onEdit }) {
   </div>
 }
 
-function Dashboard({ items, movements, sales, onAdd, onAdjust, onGoInventory, onGoPos }) {
+function Dashboard({ items, movements, dailySummary, onAdd, onAdjust, onGoInventory, onGoPos }) {
   const { t, categoryLabel, unitLabel, formatCurrency } = useI18n()
   const lowItems = items.filter((item) => item.quantity <= item.lowStockThreshold)
   const expiring = items.filter((item) => { const days = daysUntil(item.expiryDate); return days !== null && days >= 0 && days <= 3 })
   const unitsOnHand = items.reduce((sum, item) => sum + Number(item.quantity), 0)
-  const today = new Date().toDateString()
-  const todaySales = sales.filter((sale) => sale.status === 'paid' && new Date(sale.paidAt || sale.createdAt).toDateString() === today)
-  const todayRevenue = todaySales.reduce((sum, sale) => sum + sale.total, 0)
+  const todayRevenue = dailySummary?.revenue || 0
   const categoriesData = Object.entries(items.reduce((acc, item) => ({ ...acc, [item.category]: (acc[item.category] || 0) + 1 }), {})).sort((a, b) => b[1] - a[1])
   const maxCategory = Math.max(...categoriesData.map(([, value]) => value), 1)
   const greetingKey = new Date().getHours() < 12 ? 'greetingMorning' : new Date().getHours() < 18 ? 'greetingAfternoon' : 'greetingEvening'
   return <div className="page enter">
     <section className="welcome-row"><div><span className="eyebrow">{t('liveInventory')}</span><h1>{t(greetingKey)}</h1><p>{t('welcomeMessage')}</p></div><div className="heading-actions"><button className="button secondary desktop-action" onClick={onGoPos}><ShoppingBasket size={19} /> {t('newSale')}</button><button className="button primary desktop-action" onClick={onAdd}><CirclePlus size={19} /> {t('addProduct')}</button></div></section>
     <section className="metrics" aria-label={t('inventorySummary')}>
-      <div className="metric-card"><div className="metric-icon cocoa"><ReceiptText size={20} /></div><div><span>{t('salesToday')}</span><strong>{formatCurrency(todayRevenue)}</strong><small>{t('transactionsToday', { count: todaySales.length })}</small></div></div>
+      <div className="metric-card"><div className="metric-icon cocoa"><ReceiptText size={20} /></div><div><span>{t('salesToday')}</span><strong>{formatCurrency(todayRevenue)}</strong><small>{t('transactionsToday', { count: dailySummary?.transactions || 0 })}</small></div></div>
       <div className="metric-card"><div className="metric-icon sage"><BarChart3 size={20} /></div><div><span>{t('unitsOnHand')}</span><strong>{formatQuantity(unitsOnHand)}</strong><small>{t('currentRecordedTotal')}</small></div></div>
       <div className={`metric-card ${lowItems.length ? 'attention' : ''}`}><div className="metric-icon amber"><AlertTriangle size={20} /></div><div><span>{t('needAttention')}</span><strong>{lowItems.length}</strong><small>{lowItems.length ? t('atOrBelowMinimum') : t('everythingHealthy')}</small></div></div>
       <div className="metric-card"><div className="metric-icon rose"><CalendarClock size={20} /></div><div><span>{t('expiringSoon')}</span><strong>{expiring.length}</strong><small>{t('next3Days')}</small></div></div>
@@ -294,6 +293,7 @@ export default function App() {
   const [items, setItems] = useState([])
   const [movements, setMovements] = useState([])
   const [sales, setSales] = useState([])
+  const [dailySummary, setDailySummary] = useState(null)
   const [metricsData, setMetricsData] = useState(null)
   const [metricsRange, setMetricsRange] = useState('today')
   const [metricsLoading, setMetricsLoading] = useState(false)
@@ -309,7 +309,6 @@ export default function App() {
   const [theme, setTheme] = useState(() => window.localStorage.getItem('bakery-theme') === 'dark' ? 'dark' : 'light')
   const brandLogoRef = useRef(null)
   const refreshSequence = useRef(0)
-  const sessionGeneration = useRef(0)
   const metricsRequest = useRef(null)
   const pendingInventoryReview = useMemo(() => {
     for (const sale of sales) {
@@ -333,13 +332,7 @@ export default function App() {
     if (sequence !== refreshSequence.current) return
     setAuth(next.auth)
     if (!next.auth.authenticated) return
-    setItems(next.items); setMovements(next.movements); setSales(next.sales); setPosConfig(next.posConfig)
-  }, [])
-  const refreshSales = useCallback(async () => {
-    const sequence = refreshSequence.current
-    const session = sessionGeneration.current
-    const next = await api.sales()
-    if (sequence === refreshSequence.current && session === sessionGeneration.current) setSales(next)
+    setItems(next.items); setMovements(next.movements); setSales(next.sales); setPosConfig(next.posConfig); setDailySummary(next.dailySummary)
   }, [])
   const loadMetrics = useCallback(async (range = metricsRange) => {
     metricsRequest.current?.abort()
@@ -362,31 +355,8 @@ export default function App() {
   }, [refresh])
   useEffect(() => {
     if (!auth?.authenticated) return undefined
-    let stopped = false
-    let polling = false
-    let timeoutId
-    const schedule = () => {
-      if (!stopped && document.visibilityState === 'visible') timeoutId = window.setTimeout(poll, 6000)
-    }
-    const poll = async () => {
-      window.clearTimeout(timeoutId)
-      if (stopped || polling || document.visibilityState !== 'visible') return
-      polling = true
-      try { await refreshSales() } catch { /* A later poll retries a failed read. */ }
-      finally { polling = false; schedule() }
-    }
-    const onVisibilityChange = () => {
-      window.clearTimeout(timeoutId)
-      if (document.visibilityState === 'visible') poll()
-    }
-    schedule()
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    return () => {
-      stopped = true
-      window.clearTimeout(timeoutId)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-    }
-  }, [auth?.authenticated, refreshSales])
+    return watchUpdates({ refresh, onUnauthorized: () => setAuth(current => ({ ...current, authenticated: false })) })
+  }, [auth?.authenticated, refresh])
   useEffect(() => {
     if (page === 'metrics' && auth?.authenticated) loadMetrics(metricsRange)
     return () => metricsRequest.current?.abort()
@@ -399,10 +369,10 @@ export default function App() {
     try { await refresh() } finally { setLoading(false) }
   }
   const handleLogout = async () => {
-    refreshSequence.current += 1; sessionGeneration.current += 1
+    refreshSequence.current += 1
     metricsRequest.current?.abort()
     await api.logout()
-    setAuth({ ...auth, authenticated: false }); setItems([]); setSales([]); setMovements([]); setMetricsData(null)
+    setAuth({ ...auth, authenticated: false }); setItems([]); setSales([]); setMovements([]); setMetricsData(null); setDailySummary(null)
   }
   const toggleSidebar = () => {
     if (window.matchMedia('(max-width: 780px)').matches) setMobileMenu(false)
@@ -487,7 +457,7 @@ export default function App() {
     <main className="main-content">
       <header className="topbar"><button className="icon-button menu-button" onClick={() => setMobileMenu(true)} aria-label={t('openMenu')}><Menu size={21} /></button><div className="topbar-context"><span>Bakery POS</span><strong>{pageTitle}</strong></div>{page === 'pos' && <button className={`terminal-chip topbar-terminal ${posConfig.configured ? 'ready' : ''}`} onClick={checkPoint} disabled={!posConfig.configured} aria-label={t('pointStatus')} title={posConfig.configured ? t('pointStatus') : t('pointOffline')}><Wifi size={15} /><span className="terminal-dot" /><span className="topbar-terminal-copy"><strong>{posConfig.mockMode ? t('pointDemoMode') : posConfig.configured ? `Point · ${posConfig.terminalLabel}` : t('pointOffline')}</strong><small>{posConfig.mockMode ? t('pointDemoMode') : posConfig.configured ? t('pointStatusReady') : t('pointOffline')}</small></span></button>}<span className="topbar-spacer" /><ThemeToggle theme={theme} onToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} /><LanguageToggle />{['dashboard', 'inventory'].includes(page) && <button className="button primary mobile-add" onClick={() => setModal({ type: 'add' })}><Plus size={20} /><span>{t('add')}</span></button>}<div className="date-chip"><Clock3 size={17} /><span>{formatDate(new Date().toISOString().slice(0, 10))}</span></div></header>
       {loading ? <div className="loading"><div className="loader-mark"><Croissant size={28} /></div><span>{t('preparing')}</span></div> : <Suspense fallback={<div className="loading"><span>{t('preparing')}</span></div>}>
-        {page === 'dashboard' && <Dashboard items={items} movements={movements} sales={sales} onAdd={() => setModal({ type: 'add' })} onAdjust={(item) => setModal({ type: 'adjust', item })} onGoInventory={() => setPage('inventory')} onGoPos={() => setPage('pos')} />}
+        {page === 'dashboard' && <Dashboard items={items} movements={movements} dailySummary={dailySummary} onAdd={() => setModal({ type: 'add' })} onAdjust={(item) => setModal({ type: 'adjust', item })} onGoInventory={() => setPage('inventory')} onGoPos={() => setPage('pos')} />}
         {page === 'pos' && <SalesCounter items={items} sales={sales} posConfig={posConfig} onRefresh={refresh} setToast={setToast} />}
         {page === 'inventory' && <Inventory items={items} onAdd={() => setModal({ type: 'add' })} onAdjust={(item) => setModal({ type: 'adjust', item })} onEdit={(item) => setModal({ type: 'edit', item })} />}
         {page === 'metrics' && <MetricsPage metrics={metricsData} range={metricsRange} onRangeChange={setMetricsRange} onRefresh={() => loadMetrics(metricsRange)} onOpenClose={() => setModal({ type: 'cash-close' })} onExport={exportDailyReport} loading={metricsLoading} exporting={exportingReport} />}

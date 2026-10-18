@@ -13,12 +13,13 @@ import {
 } from './mercadopago.js'
 import {
   adjustItem, attachPointOrder, closeStore, completeRefund,
-  createItem, createSale, deleteItem, failRefund, getSale,
-  getBootstrapData, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales,
+  claimPointOrder, createItem, createSale, deleteItem, failRefund, getSale,
+  getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales,
   markCardSaleFailed, prepareRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
   updateItem, updateSaleFromPoint, updateSalePaymentDetails,
 } from './store.js'
 import { createDailyReport } from './report.js'
+import { closeChangeListener, listenForDatabaseChanges, subscribeToChanges } from './changes.js'
 
 const app = express()
 const port = Number(process.env.PORT || 3000)
@@ -27,7 +28,7 @@ const htmlCacheControl = 'public, max-age=0, s-maxage=60, stale-while-revalidate
 
 app.disable('x-powered-by')
 app.set('trust proxy', process.env.RAILWAY_ENVIRONMENT_ID ? 1 : false)
-app.use(compression())
+app.use(compression({ filter: (req, res) => req.path !== '/api/events' && compression.filter(req, res) }))
 app.use('/api', (_req, res, next) => {
   // Cookie-authenticated data and errors must never enter a shared edge cache.
   res.setHeader('Cache-Control', 'private, no-store')
@@ -74,6 +75,12 @@ function cleanCart(body) {
     combined.set(itemId, (combined.get(itemId) || 0) + quantity)
   }
   return [...combined.entries()].map(([itemId, quantity]) => ({ itemId, quantity }))
+}
+
+function checkoutKey(value) {
+  if (value == null) return null // Older open tabs remain compatible during deployment.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw badRequest('Invalid checkout key.')
+  return value.toLowerCase()
 }
 
 function cleanRefund(body) {
@@ -314,6 +321,34 @@ app.get('/api/bootstrap', async (req, res, next) => {
 })
 app.use('/api', requireAuth)
 
+const eventStreams = new Set()
+app.get('/api/events', (req, res) => {
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'private, no-store', 'X-Accel-Buffering': 'no' })
+  res.flushHeaders()
+  eventStreams.add(res)
+  let debounce
+  const unsubscribe = subscribeToChanges(() => {
+    clearTimeout(debounce)
+    debounce = setTimeout(() => { if (!res.destroyed) res.write('event: change\ndata: {}\n\n') }, 50)
+  })
+  const heartbeat = setInterval(() => {
+    if (!authStatus(req).authenticated) {
+      res.write('event: unauthorized\ndata: {}\n\n')
+      res.end()
+    } else res.write(': heartbeat\n\n')
+  }, 20000)
+  res.write('event: ready\ndata: {}\n\n')
+  res.on('close', () => { clearTimeout(debounce); clearInterval(heartbeat); unsubscribe(); eventStreams.delete(res) })
+})
+
+app.get('/api/checkouts/:key', async (req, res, next) => {
+  try {
+    const sale = await getSaleByCheckoutKey(checkoutKey(req.params.key))
+    if (!sale) return res.status(404).json({ error: 'Checkout not found.' })
+    res.json(sale)
+  } catch (error) { next(error) }
+})
+
 app.get('/api/items', async (_req, res, next) => {
   try { res.json(await listItems()) } catch (error) { next(error) }
 })
@@ -379,7 +414,10 @@ app.get('/api/sales', async (req, res, next) => {
   } catch (error) { next(error) }
 })
 app.post('/api/sales/cash', async (req, res, next) => {
-  try { res.status(201).json(await createSale(cleanCart(req.body), 'cash')) } catch (error) { next(error) }
+  try {
+    const sale = await createSale(cleanCart(req.body), 'cash', checkoutKey(req.headers['idempotency-key']))
+    res.status(sale.checkoutReplayed ? 200 : 201).json(sale)
+  } catch (error) { next(error) }
 })
 app.post('/api/sales/card', async (req, res, next) => {
   let sale
@@ -389,7 +427,11 @@ app.post('/api/sales/card', async (req, res, next) => {
   try {
     requireProtectedPoint()
     const reserveStartedAt = performance.now()
-    sale = await createSale(cleanCart(req.body), 'card')
+    sale = await createSale(cleanCart(req.body), 'card', checkoutKey(req.headers['idempotency-key']))
+    // A replay only recovers the original sale, including uncertain reservations.
+    // It must not send a second terminal order or fail another request's sale.
+    if (sale.checkoutReplayed) return res.json(sale)
+    if (!await claimPointOrder(sale.id)) return res.status(202).json(await getSale(sale.id))
     timings.reserve = elapsedMilliseconds(reserveStartedAt)
     const mercadoPagoStartedAt = performance.now()
     const order = await createPointOrder(sale)
@@ -423,6 +465,7 @@ app.post('/api/sales/:id/retry-card', async (req, res, next) => {
     if (!sale) return res.status(404).json({ error: 'Sale not found.' })
     if (sale.paymentMethod !== 'card' || sale.status !== 'pending') throw Object.assign(new Error('This card sale cannot be retried.'), { status: 409 })
     if (sale.mpOrderId) return res.json(sale)
+    if (!await claimPointOrder(sale.id)) return res.status(202).json(await getSale(sale.id))
     const mercadoPagoStartedAt = performance.now()
     const order = await createPointOrder(sale)
     timings.mercadopago = elapsedMilliseconds(mercadoPagoStartedAt)
@@ -690,6 +733,7 @@ app.use((error, _req, res, _next) => {
 })
 
 await initializeStore()
+await listenForDatabaseChanges(process.env.DATABASE_URL)
 const pointSecurity = pointConfiguration()
 console.info(JSON.stringify({
   event: 'point_integration_configuration',
@@ -706,6 +750,8 @@ console.info(JSON.stringify({
 const server = app.listen(port, '0.0.0.0', () => console.log(`Bakery POS listening on port ${server.address().port}`))
 
 async function shutdown() {
+  for (const stream of eventStreams) stream.end()
+  await closeChangeListener()
   server.close(async () => {
     await closeStore()
     process.exit(0)

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, Check, ChevronRight, CreditCard, FileCheck2, History, LayoutDashboard, Minus, PackageOpen, Plus, ReceiptText, RotateCw, Search, ShoppingBasket, Monitor, Trash2, Undo2, Wifi, X } from 'lucide-react'
 import { api } from './api.js'
+import { beginCheckout, clearCheckout, pendingCheckout } from './checkoutAttempts.js'
 import { useI18n } from './i18n.js'
 import { categories, CategoryIcon, categoryClass, formatQuantity, Modal } from './ui.jsx'
 
@@ -226,10 +227,13 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('All')
   const [inStockOnly, setInStockOnly] = useState(true)
-  const [cart, setCart] = useState([])
+  const [attempt, setAttempt] = useState(pendingCheckout)
+  const [cart, setCart] = useState(() => pendingCheckout()?.items || [])
   const [checkout, setCheckout] = useState(null)
   const [selectedSale, setSelectedSale] = useState(null)
   const [busy, setBusy] = useState(false)
+  const submitting = useRef(false)
+  const recoveryKey = useRef(attempt?.key)
   const sellable = useMemo(() => items.filter((item) => item.sellable && item.price > 0), [items])
   const catalogItems = useMemo(() => inStockOnly ? sellable.filter((item) => item.quantity > 0) : sellable, [inStockOnly, sellable])
   const presentCategories = useMemo(() => categories.filter((category) => catalogItems.some((item) => item.category === category)), [catalogItems])
@@ -249,39 +253,66 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
     event.currentTarget.querySelector(`#caja-${next}-tab`)?.focus()
   }
 
-  const changeQuantity = (item, delta) => setCart((current) => {
+  const changeQuantity = (item, delta) => {
+    if (attempt) return
+    setCart((current) => {
     const existing = current.find((line) => line.itemId === item.id)
     const next = Math.max(0, Math.min(item.quantity, (existing?.quantity || 0) + delta))
     if (!existing && next > 0) return [...current, { itemId: item.id, quantity: next }]
     if (next === 0) return current.filter((line) => line.itemId !== item.id)
     return current.map((line) => line.itemId === item.id ? { ...line, quantity: next } : line)
-  })
+    })
+  }
   const payload = () => cartLines.map((line) => ({ itemId: line.itemId, quantity: line.quantity }))
   const finish = async (sale) => {
+    const pending = pendingCheckout()
+    if (pending?.key === sale.checkoutKey) { clearCheckout(pending.key); setAttempt(null) }
     setCheckout((current) => ({ ...current, stage: sale.status === 'paid' ? 'success' : 'error', sale, error: sale.status === 'paid' ? '' : t('stockRestored') }))
     if (sale.status === 'paid') setCart([])
-    await onRefresh()
+    await onRefresh().catch(error => setToast({ type: 'error', message: error.message }))
   }
-  const payCash = async () => {
+  const acceptSale = async (sale) => {
+    if (sale.status !== 'pending') return finish(sale)
+    setCheckout({ stage: sale.mpOrderId ? 'processing' : 'connection-error', sale, total: sale.total,
+      error: sale.mpOrderId ? '' : t('reservedSaleRecovery') })
+    await onRefresh().catch(() => {})
+  }
+  const pay = async (paymentMethod) => {
+    if (submitting.current) return
+    submitting.current = true
+    const pending = beginCheckout(payload(), paymentMethod, total)
+    setAttempt(pending)
     setBusy(true)
-    try { await finish(await api.cashSale(payload())) } catch (error) { setCheckout((current) => ({ ...current, stage: 'error', error: error.message })) } finally { setBusy(false) }
-  }
-  const payCard = async () => {
-    setBusy(true); setCheckout((current) => ({ ...current, stage: 'connecting' }))
+    if (pending.paymentMethod === 'card') setCheckout(current => ({ ...current, stage: 'connecting' }))
     try {
-      const sale = await api.cardSale(payload())
-      setCheckout((current) => ({ ...current, stage: 'processing', sale }))
-      await onRefresh()
+      const sale = await (pending.paymentMethod === 'cash' ? api.cashSale : api.cardSale)(pending.items, pending.key)
+      await acceptSale(sale)
     } catch (error) {
-      const sale = error.saleId && error.uncertain ? { id: error.saleId, shortId: error.saleId.replaceAll('-', '').slice(0, 8).toUpperCase(), total, status: 'pending' } : null
-      setCheckout((current) => ({ ...current, stage: error.uncertain ? 'connection-error' : 'error', sale, error: error.message }))
-      await onRefresh().catch(() => {})
+      const uncertain = error.uncertain || !error.status || error.status >= 500 || error.code === 'CHECKOUT_CONFLICT'
+      if (!uncertain) { clearCheckout(pending.key); setAttempt(null) }
+      const sale = error.saleId && uncertain ? { id: error.saleId, shortId: error.saleId.replaceAll('-', '').slice(0, 8).toUpperCase(), total: pending.total, status: 'pending' } : null
+      setCheckout(current => ({ ...current, stage: uncertain ? 'connection-error' : 'error', sale,
+        error: uncertain ? t('checkoutUncertain') : error.message }))
+    } finally { setBusy(false); submitting.current = false }
+  }
+  const payCash = () => pay('cash')
+  const payCard = () => pay('card')
+  const recoverCheckout = async () => {
+    const pending = pendingCheckout()
+    if (!pending) return
+    setBusy(true)
+    try { await acceptSale(await api.checkout(pending.key)) }
+    catch (error) {
+      setCheckout({ stage: 'connection-error', total: pending.total, error: t('checkoutUncertain') })
     } finally { setBusy(false) }
   }
+  useEffect(() => {
+    if (recoveryKey.current) { recoveryKey.current = null; recoverCheckout() }
+  }, [])
   const retry = async () => {
-    if (!checkout.sale?.id) return
+    if (!checkout.sale?.id) return pay(pendingCheckout()?.paymentMethod || 'cash')
     setBusy(true)
-    try { const sale = await api.retryCardSale(checkout.sale.id); setCheckout((current) => ({ ...current, stage: 'processing', sale, error: '' })) }
+    try { await acceptSale(await api.retryCardSale(checkout.sale.id)) }
     catch (error) { setCheckout((current) => ({ ...current, stage: error.uncertain ? 'connection-error' : 'error', error: error.message })) }
     finally { setBusy(false) }
   }
@@ -438,7 +469,7 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
         </div>
         {sellable.length === 0 ? <div className="card pos-empty"><div className="empty-art"><ReceiptText size={31} /></div><h3>{t('configureProductsForSale')}</h3><p>{t('configureProductsDescription')}</p></div> : products.length ? <div className="product-grid">{products.map((item) => {
           const inCart = cart.find((line) => line.itemId === item.id)?.quantity || 0
-          return <button key={item.id} className={`sale-product category-${categoryClass(item.category)} ${item.quantity <= 0 ? 'is-unavailable' : ''}`} disabled={item.quantity <= 0 || inCart >= item.quantity} onClick={() => changeQuantity(item, 1)}>
+          return <button key={item.id} className={`sale-product category-${categoryClass(item.category)} ${item.quantity <= 0 ? 'is-unavailable' : ''}`} disabled={Boolean(attempt) || item.quantity <= 0 || inCart >= item.quantity} onClick={() => changeQuantity(item, 1)}>
             <ProductArtwork item={item} />
             {inCart > 0 && <span className="cart-badge">{formatQuantity(inCart)}</span>}
             <strong className="sale-product-name">{item.name}</strong>
@@ -448,9 +479,9 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
         })}</div> : <div className="pos-empty compact"><Search size={27} /><h3>{t('noProductsFound')}</h3></div>}
       </div>
       <aside className={`cart-panel ${cartLines.length ? 'has-items' : ''}`}>
-        <header><div><ShoppingBasket size={20} /><h2>{t('cart')}</h2><span className="cart-count" aria-label={t('productsCount', { count: formatQuantity(count) })}>{formatQuantity(count)}</span></div>{cartLines.length > 0 && <button onClick={() => setCart([])}><Trash2 size={14} />{t('clear')}</button>}</header>
-        {cartLines.length ? <div className="cart-lines">{cartLines.map(({ item, quantity }) => <article key={item.id}><div className="cart-line-main"><div><strong>{item.name}</strong><span>{formatCurrency(item.price)} · {unitLabel(item.unit)}</span></div><b>{formatCurrency(item.price * quantity)}</b></div><div className="quantity-stepper"><button onClick={() => changeQuantity(item, -1)} aria-label={t('removeOne')}><Minus size={16} /></button><span>{formatQuantity(quantity)}</span><button onClick={() => changeQuantity(item, 1)} disabled={quantity >= item.quantity} aria-label={t('addOne')}><Plus size={16} /></button><button className="remove-line" onClick={() => changeQuantity(item, -quantity)} aria-label={t('removeFromCart')}><Trash2 size={16} /></button></div></article>)}</div> : <div className="cart-empty"><div><ShoppingBasket size={28} /></div><h3>{t('emptyCart')}</h3><p>{t('tapProducts')}</p></div>}
-        <footer><div className="cart-summary"><div><span>{t('total')}</span><strong>{formatCurrency(total)}</strong></div></div><button className="button primary pay-button" disabled={!cartLines.length} onClick={() => setCheckout({ stage: 'method', total })}>{t('charge')}<ArrowRight size={19} /></button></footer>
+        <header><div><ShoppingBasket size={20} /><h2>{t('cart')}</h2><span className="cart-count" aria-label={t('productsCount', { count: formatQuantity(count) })}>{formatQuantity(count)}</span></div>{cartLines.length > 0 && <button disabled={Boolean(attempt)} onClick={() => setCart([])}><Trash2 size={14} />{t('clear')}</button>}</header>
+        {cartLines.length ? <div className="cart-lines">{cartLines.map(({ item, quantity }) => <article key={item.id}><div className="cart-line-main"><div><strong>{item.name}</strong><span>{formatCurrency(item.price)} · {unitLabel(item.unit)}</span></div><b>{formatCurrency(item.price * quantity)}</b></div><div className="quantity-stepper"><button onClick={() => changeQuantity(item, -1)} disabled={Boolean(attempt)} aria-label={t('removeOne')}><Minus size={16} /></button><span>{formatQuantity(quantity)}</span><button onClick={() => changeQuantity(item, 1)} disabled={Boolean(attempt) || quantity >= item.quantity} aria-label={t('addOne')}><Plus size={16} /></button><button className="remove-line" onClick={() => changeQuantity(item, -quantity)} disabled={Boolean(attempt)} aria-label={t('removeFromCart')}><Trash2 size={16} /></button></div></article>)}</div> : <div className="cart-empty"><div><ShoppingBasket size={28} /></div><h3>{t('emptyCart')}</h3><p>{t('tapProducts')}</p></div>}
+        <footer><div className="cart-summary"><div><span>{t('total')}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong></div></div><button className="button primary pay-button" disabled={busy || (!attempt && !cartLines.length)} onClick={() => attempt ? recoverCheckout() : setCheckout({ stage: 'method', total })}>{t(attempt ? 'reviewPendingCheckout' : 'charge')}<ArrowRight size={19} /></button></footer>
       </aside>
     </section> : <section className="card register-history" id="caja-history-panel" role="tabpanel" aria-labelledby="caja-history-tab">
       <header className="card-header"><div><h2>{t('registerHistory')}</h2><p>{t('recentSales')}</p></div><span className="history-count">{sales.length}</span></header>

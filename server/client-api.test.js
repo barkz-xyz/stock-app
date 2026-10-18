@@ -67,3 +67,13 @@ test('mutations never coalesce and reads cannot reuse a pre-mutation response', 
   assert.equal(writes, 2)
   assert.equal(reads, 3)
 })
+
+test('checkout retries carry a stable key and never retry a write automatically', async (t) => {
+  const calls = []
+  const api = await client(t, async (url, options) => { calls.push({ url, options }); if (calls.length === 1) throw new TypeError('Lost response'); return json({ id: 'original' }) })
+  await assert.rejects(api.cashSale([{ itemId: 'item', quantity: 1 }], 'key'), /Lost response/)
+  assert.equal(calls.length, 1)
+  await api.cashSale([{ itemId: 'item', quantity: 1 }], 'key')
+  assert.ok(calls.every(call => call.options.headers.get('Idempotency-Key') === 'key'))
+  assert.equal(calls[0].options.body, calls[1].options.body)
+})

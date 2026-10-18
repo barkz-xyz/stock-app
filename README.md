@@ -55,11 +55,23 @@ The app starts with `/api/bootstrap`, which checks the staff session and returns
 
 CAJA, metrics, and Point settings load as separate page modules. React and icons have stable, fingerprinted vendor bundles so ordinary application updates can reuse cached framework code. Product photos remain lazy-loaded and fingerprinted.
 
-Concurrent GETs share one in-flight request. Sales polling revalidates its ETag every time; unchanged history returns `304` and reuses the existing array to avoid an unnecessary React render. Mutations and sign-out invalidate read state. Reads time out after 20 seconds, polling waits for the previous read to finish, and hidden tabs stop polling. Payment/refund writes are never automatically retried or coalesced. Metrics requests are cancelled when changing ranges or leaving the page, and date/currency formatters are reused per language.
+Concurrent GETs share one in-flight request. Explicit sales-history reads revalidate their ETag; unchanged history returns `304` and reuses the existing array. Mutations and sign-out invalidate read state. Reads time out after 20 seconds. Authenticated server-sent events refresh the full snapshot after changes; bursts coalesce and changes during an in-flight refresh trigger another read. Hidden tabs close the stream, and returning to the tab reconciles missed changes. A one-minute reconciliation handles day rollover or lost events; disconnected streams fall back to 15-second refreshes. Payment/refund writes are never automatically retried or coalesced. Metrics requests are cancelled when changing ranges or leaving the page, and date/currency formatters are reused per language.
 
 Run `npm run measure:load` against a running local compiled app. Set `PRODUCTION_BASE_URL` and `STAFF_PIN` for authenticated production measurements; the script only reads application data and opens a staff session. Add `-- --legacy` to measure the former five-request startup flow. Results go to `output/performance.json` or `PERFORMANCE_OUTPUT`. The report counts all initial JavaScript, including preloaded vendors; gzip byte counts are estimates and timings use warm HTTP connections, not total browser page-load time.
 
 `npm run audit:performance:db` accepts `DATABASE_PUBLIC_URL` or `DATABASE_URL` and runs SELECT/EXPLAIN queries inside a read-only transaction. It reports query plans and timings without changing stock or history.
+
+### Daily totals, checkout recovery, and live stock
+
+The bootstrap snapshot includes `dailySummary`, aggregated over the whole business day in `BAKERY_TIME_ZONE` (default `America/Santiago`). Its transaction count includes paid and fully refunded sales; revenue subtracts refunds processed that day, including refunds for older sales. The recent-history list remains limited to 50 records and does not determine daily totals.
+
+The register stores an unresolved checkout key and its frozen cart in tab session storage. Cash/card creation sends that UUID in `Idempotency-Key`. The database serializes matching keys, persists a unique key and cart/payment fingerprint, and returns the original sale on replay even after stock is depleted. Changing the cart or payment method with the same key returns `409 CHECKOUT_CONFLICT`. Card replays recover the existing reservation without creating another Point order. `GET /api/checkouts/:key` recovers a lost result without issuing a payment; writes are never automatically retried. Older tabs without a key remain compatible, so reload open registers after deployment.
+
+A durable 30-second Point-order lease prevents overlapping terminal requests when a tab reloads during order creation. An active lease returns the existing pending sale; after an interrupted server request the reservation can be retried with the same sale/provider idempotency key once the lease expires.
+
+`GET /api/events` is an authenticated, uncompressed, private SSE signal stream. It carries no product, session, or sales payload. PostgreSQL statement triggers notify only after committed changes, and a dedicated reconnecting listener supports multiple app instances and external database updates. Local JSON writes publish the same signal after saving. Streams close when authentication expires or the server shuts down. No extra message broker is needed.
+
+`npm test` covers daily totals beyond 50 sales, Chilean midnight, duplicate checkout attempts, recovery, and two-session stock updates. To additionally verify PostgreSQL concurrency and commit notifications, set `TEST_DATABASE_URL` and run `node --test server/postgres-reliability.test.js`; it creates and removes an isolated schema without modifying business tables.
 
 ### Railway CDN
 

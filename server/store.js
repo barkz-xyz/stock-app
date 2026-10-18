@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import pg from 'pg'
 import { dateOnly } from '../src/dates.js'
+import { publishChange } from './changes.js'
 
 const { Pool } = pg
 const databaseUrl = process.env.DATABASE_URL
@@ -121,6 +122,7 @@ function normalizeSale(row, items = row.items || [], refunds = row.refunds || []
   return {
     id: row.id,
     shortId: shortId(row.id),
+    checkoutKey: row.checkout_key ?? row.checkoutKey ?? null,
     status: row.status,
     paymentMethod: row.payment_method ?? row.paymentMethod,
     total: Number(row.total),
@@ -257,6 +259,10 @@ export async function initializeStore() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         paid_at TIMESTAMPTZ
       );
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS checkout_key UUID;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS checkout_fingerprint TEXT;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS point_order_lease_until TIMESTAMPTZ;
+      CREATE UNIQUE INDEX IF NOT EXISTS sales_checkout_key_idx ON sales(checkout_key);
       CREATE TABLE IF NOT EXISTS sale_items (
         id UUID PRIMARY KEY,
         sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
@@ -388,6 +394,18 @@ export async function initializeStore() {
       CREATE INDEX IF NOT EXISTS refund_items_refund_id_idx ON refund_items(refund_id);
       CREATE INDEX IF NOT EXISTS tax_documents_sale_id_idx ON tax_documents(sale_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS cash_closures_business_date_idx ON cash_closures(business_date DESC);
+      CREATE OR REPLACE FUNCTION bakery_notify_change() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        PERFORM pg_notify('bakery_changes', 'changed');
+        RETURN NULL;
+      END $$;
+      DO $$ DECLARE target TEXT; BEGIN
+        FOREACH target IN ARRAY ARRAY['items','sales','sale_items','refunds','refund_items','tax_documents','movements','cash_closures'] LOOP
+          IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass(target) AND tgname='bakery_changed') THEN
+            EXECUTE format('CREATE TRIGGER bakery_changed AFTER INSERT OR UPDATE OR DELETE ON %I FOR EACH STATEMENT EXECUTE FUNCTION bakery_notify_change()', target);
+          END IF;
+        END LOOP;
+      END $$;
     `)
     return
   }
@@ -415,6 +433,7 @@ function mutateFileData(callback) {
     const data = await readFileData()
     const result = await callback(data)
     await fs.writeFile(dataPath, JSON.stringify(data, null, 2))
+    publishChange()
     return result
   })
   fileQueue = operation.catch(() => {})
@@ -456,10 +475,10 @@ export async function listItems() {
   return data.items.sort((a, b) => a.name.localeCompare(b.name)).map(normalizeItem)
 }
 
-export async function getBootstrapData() {
+export async function getBootstrapData(now = new Date()) {
   if (pool) {
-    const [items, movements, sales] = await Promise.all([listItems(), listMovements(100), listSales(50)])
-    return { items, movements, sales }
+    const [items, movements, sales, dailySummary] = await Promise.all([listItems(), listMovements(100), listSales(50), getDailySummary(now)])
+    return { items, movements, sales, dailySummary }
   }
   // Local mode needs one JSON read/parse for the whole snapshot, not three.
   const data = await readFileData()
@@ -467,6 +486,7 @@ export async function getBootstrapData() {
     items: data.items.sort((a, b) => a.name.localeCompare(b.name)).map(normalizeItem),
     movements: data.movements.slice(0, 100).map(normalizeMovement),
     sales: data.sales.slice(0, 50).map(sale => normalizeSale(sale)),
+    dailySummary: summarizeDay(data, now),
   }
 }
 
@@ -621,13 +641,33 @@ function validateSaleLines(items, requested) {
   })
 }
 
-function reserveSaleInFile(data, requested, paymentMethod) {
+function checkoutFingerprint(requested, paymentMethod) {
+  const combined = new Map()
+  for (const line of requested) combined.set(line.itemId, (combined.get(line.itemId) || 0) + Number(line.quantity))
+  return crypto.createHash('sha256').update(JSON.stringify([paymentMethod, [...combined].sort(([a], [b]) => a.localeCompare(b))])).digest('hex')
+}
+
+function assertSameCheckout(sale, fingerprint) {
+  if ((sale.checkout_fingerprint ?? sale.checkoutFingerprint) !== fingerprint) {
+    throw Object.assign(new Error('This checkout key was already used for a different cart or payment method.'), { status: 409, code: 'CHECKOUT_CONFLICT' })
+  }
+}
+
+function reserveSaleInFile(data, requested, paymentMethod, checkoutKey) {
+  const fingerprint = checkoutFingerprint(requested, paymentMethod)
+  const existing = checkoutKey && data.sales.find(sale => sale.checkoutKey === checkoutKey)
+  if (existing) {
+    assertSameCheckout(existing, fingerprint)
+    return { ...normalizeSale(existing), checkoutReplayed: true }
+  }
   const lines = validateSaleLines(data.items.map(normalizeItem), requested)
   const now = new Date().toISOString()
   const id = crypto.randomUUID()
   const total = lines.reduce((sum, line) => sum + line.lineTotal, 0)
   const sale = {
     id,
+    checkoutKey,
+    checkoutFingerprint: fingerprint,
     status: paymentMethod === 'cash' ? 'paid' : 'pending',
     paymentMethod,
     total,
@@ -672,12 +712,24 @@ function reserveSaleInFile(data, requested, paymentMethod) {
   return normalizeSale(sale)
 }
 
-export async function createSale(requested, paymentMethod) {
-  if (!pool) return mutateFileData((data) => reserveSaleInFile(data, requested, paymentMethod))
+export async function createSale(requested, paymentMethod, checkoutKey = null) {
+  if (!pool) return mutateFileData((data) => reserveSaleInFile(data, requested, paymentMethod, checkoutKey))
 
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+    const fingerprint = checkoutFingerprint(requested, paymentMethod)
+    if (checkoutKey) {
+      // Serialize the same checkout across processes before touching inventory.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`checkout:${checkoutKey}`])
+      const existing = await client.query('SELECT * FROM sales WHERE checkout_key=$1', [checkoutKey])
+      if (existing.rows.length) {
+        assertSameCheckout(existing.rows[0], fingerprint)
+        const [sale] = await hydratePostgresSales(existing.rows, client)
+        await client.query('COMMIT')
+        return { ...sale, checkoutReplayed: true }
+      }
+    }
     const ids = [...new Set(requested.map((line) => line.itemId))].sort()
     const itemResult = await client.query('SELECT * FROM items WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE', [ids])
     const lines = validateSaleLines(itemResult.rows.map(normalizeItem), requested)
@@ -685,9 +737,9 @@ export async function createSale(requested, paymentMethod) {
     const total = lines.reduce((sum, line) => sum + line.lineTotal, 0)
     const status = paymentMethod === 'cash' ? 'paid' : 'pending'
     const saleResult = await client.query(
-      `INSERT INTO sales (id, status, payment_method, total, mp_external_reference, inventory_applied, paid_at)
-       VALUES ($1,$2,$3,$4,$5,TRUE,CASE WHEN $2='paid' THEN NOW() ELSE NULL END) RETURNING *`,
-      [id, status, paymentMethod, total, saleExternalReference(id)],
+      `INSERT INTO sales (id, status, payment_method, total, mp_external_reference, inventory_applied, paid_at, checkout_key, checkout_fingerprint)
+       VALUES ($1,$2,$3,$4,$5,TRUE,CASE WHEN $2='paid' THEN NOW() ELSE NULL END,$6,$7) RETURNING *`,
+      [id, status, paymentMethod, total, saleExternalReference(id), checkoutKey, fingerprint],
     )
     const persistedLines = lines.map((line) => ({ ...line, lineId: crypto.randomUUID() }))
     await client.query(
@@ -1497,17 +1549,20 @@ export async function recordCreditNote(saleId, refundId, input) {
   }
 }
 
-async function hydratePostgresSales(rows) {
+async function hydratePostgresSales(rows, queryable = pool) {
   if (!rows.length) return []
   const saleIds = rows.map((row) => row.id)
-  const [itemResult, refundResult, taxDocumentResult] = await Promise.all([
-    pool.query('SELECT * FROM sale_items WHERE sale_id = ANY($1::uuid[]) ORDER BY item_name', [saleIds]),
-    pool.query('SELECT * FROM refunds WHERE sale_id = ANY($1::uuid[]) ORDER BY created_at DESC', [saleIds]),
-    pool.query('SELECT * FROM tax_documents WHERE sale_id = ANY($1::uuid[]) ORDER BY created_at DESC', [saleIds]),
-  ])
+  const queries = [
+    'SELECT * FROM sale_items WHERE sale_id = ANY($1::uuid[]) ORDER BY item_name',
+    'SELECT * FROM refunds WHERE sale_id = ANY($1::uuid[]) ORDER BY created_at DESC',
+    'SELECT * FROM tax_documents WHERE sale_id = ANY($1::uuid[]) ORDER BY created_at DESC',
+  ]
+  const results = queryable === pool ? await Promise.all(queries.map(sql => queryable.query(sql, [saleIds]))) : []
+  if (queryable !== pool) for (const sql of queries) results.push(await queryable.query(sql, [saleIds]))
+  const [itemResult, refundResult, taxDocumentResult] = results
   const refundIds = refundResult.rows.map((refund) => refund.id)
   const refundItemResult = refundIds.length
-    ? await pool.query('SELECT * FROM refund_items WHERE refund_id = ANY($1::uuid[]) ORDER BY item_name', [refundIds])
+    ? await queryable.query('SELECT * FROM refund_items WHERE refund_id = ANY($1::uuid[]) ORDER BY item_name', [refundIds])
     : { rows: [] }
 
   const itemsBySale = new Map(saleIds.map((id) => [id, []]))
@@ -1534,6 +1589,31 @@ export async function getSale(id) {
   }
   const saleResult = await pool.query('SELECT * FROM sales WHERE id=$1', [id])
   return saleResult.rows[0] ? (await hydratePostgresSales(saleResult.rows))[0] : null
+}
+
+export async function getSaleByCheckoutKey(key) {
+  if (!pool) {
+    const data = await readFileData()
+    const sale = data.sales.find(sale => sale.checkoutKey === key)
+    return sale ? normalizeSale(sale) : null
+  }
+  const result = await pool.query('SELECT * FROM sales WHERE checkout_key=$1', [key])
+  return result.rows.length ? (await hydratePostgresSales(result.rows))[0] : null
+}
+
+export async function claimPointOrder(saleId, now = Date.now()) {
+  // A short durable lease prevents a reload/retry overlapping the original request.
+  // An abandoned reservation can be recovered after 30 seconds with the same sale id.
+  if (!pool) return mutateFileData(data => {
+    const sale = data.sales.find(sale => sale.id === saleId)
+    if (!sale || sale.status !== 'pending' || sale.mpOrderId || Number(sale.pointOrderLeaseUntil || 0) > now) return false
+    sale.pointOrderLeaseUntil = now + 30000
+    return true
+  })
+  const result = await pool.query(`UPDATE sales SET point_order_lease_until=NOW()+INTERVAL '30 seconds'
+    WHERE id=$1 AND status='pending' AND payment_method='card' AND mp_order_id IS NULL
+      AND (point_order_lease_until IS NULL OR point_order_lease_until<=NOW()) RETURNING id`, [saleId])
+  return result.rowCount === 1
 }
 
 export async function getSaleByPointOrder(orderId) {
@@ -1579,6 +1659,37 @@ function localDateKey(value) {
 
 function completedSale(sale) {
   return sale.status === 'paid' || sale.status === 'refunded'
+}
+
+function summarizeDay(data, now) {
+  const businessDate = localDateKey(now)
+  const onDay = value => value && localDateKey(value) === businessDate
+  const paid = data.sales.filter(sale => completedSale(sale) && onDay(sale.paidAt || sale.createdAt))
+  const refunds = data.sales.flatMap(sale => sale.refunds || []).filter(refund => refund.status === 'processed' && onDay(refund.processedAt || refund.updatedAt || refund.createdAt))
+  const grossRevenue = paid.reduce((sum, sale) => sum + Number(sale.total), 0)
+  const refundedTotal = refunds.reduce((sum, refund) => sum + Number(refund.amount), 0)
+  return { businessDate, transactions: paid.length, grossRevenue, refundedTotal, revenue: grossRevenue - refundedTotal }
+}
+
+export async function getDailySummary(now = new Date()) {
+  if (!pool) return summarizeDay(await readFileData(), now)
+  const businessDate = localDateKey(now)
+  const { rows: [row] } = await pool.query(`
+    WITH bounds AS (
+      SELECT $1::date::timestamp AT TIME ZONE $2 AS start_at,
+             ($1::date + 1)::timestamp AT TIME ZONE $2 AS end_at
+    ), paid AS (
+      SELECT COUNT(*) AS transactions, COALESCE(SUM(total), 0) AS gross
+      FROM sales, bounds WHERE status IN ('paid','refunded')
+        AND COALESCE(paid_at, created_at) >= start_at AND COALESCE(paid_at, created_at) < end_at
+    ), returned AS (
+      SELECT COALESCE(SUM(amount), 0) AS refunded FROM refunds, bounds
+      WHERE status='processed' AND COALESCE(processed_at, updated_at, created_at) >= start_at
+        AND COALESCE(processed_at, updated_at, created_at) < end_at
+    ) SELECT paid.transactions, paid.gross, returned.refunded FROM paid CROSS JOIN returned
+  `, [businessDate, bakeryTimeZone])
+  return { businessDate, transactions: Number(row.transactions), grossRevenue: Number(row.gross),
+    refundedTotal: Number(row.refunded), revenue: Number(row.gross) - Number(row.refunded) }
 }
 
 function refundTimestamp(refund) {

@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { inflateSync } from 'node:zlib'
 import { PDFDocument } from 'pdf-lib'
 import { businessDateAt, closurePeriod, buildClosureSummary, cleanClosureInput, createClosure } from './cash-closure.js'
 import { createCashClosurePdf } from './cash-closure-pdf.js'
@@ -103,19 +104,59 @@ test('file closures preserve snapshots and revisions, reject racing writes and d
   } finally { await store.closeStore(); await fs.rm(directory, { recursive: true, force: true }) }
 })
 
-test('detailed cash close PDF is paginated, compressed and bounded for a busy day', async () => {
-  const period = closurePeriod('2026-10-17')
-  const sales = Array.from({ length: 150 }, (_, i) => sale(i % 2 ? 'cash' : 'card', 1500, '2026-10-17T12:00:00Z', [],
-    { items: [{ name: `Empanada champiñón / queso ${'x'.repeat(150)}`, quantity: 1, unitPrice: 1500, lineTotal: 1500 }] }))
-  const summary = buildClosureSummary(sales, period)
+function readPdfText(pdf) {
+  return pdf.getPages().map(page => page.node.Contents().asArray().map(ref => {
+    const commands = inflateSync(pdf.context.lookup(ref).getContents()).toString('latin1')
+    return [...commands.matchAll(/<([a-fA-F0-9]+)>\s*Tj/g)].map(match => Buffer.from(match[1], 'hex').toString('latin1')).join('\n')
+  }).join('\n')).join('\n')
+}
+
+test('cash close PDF fits a normal day on one page and preserves accounting totals', async () => {
+  const sales = Array.from({ length: 10 }, (_, i) => sale(i % 2 ? 'cash' : 'card', 1500, '2026-10-17T12:00:00Z',
+    i < 2 ? [refund(500, '2026-10-17T13:00:00Z')] : [], { shortId: String(i + 1).padStart(8, '0') }))
+  const summary = buildClosureSummary(sales, closurePeriod('2026-10-17'))
   const closure = createClosure(summary, cleanClosureInput(draft(summary)), null)
   const bytes = await createCashClosurePdf(closure)
+  const pdf = await PDFDocument.load(bytes), text = readPdfText(pdf)
+  assert.equal(pdf.getPageCount(), 1)
   assert.equal(bytes.subarray(0, 5).toString(), '%PDF-')
   assert.match(bytes.toString('latin1'), /FlateDecode/)
   assert.match(bytes.toString('latin1'), /ObjStm/)
-  assert.ok(bytes.length < 150000, `${bytes.length} bytes`)
-  const pdf = await PDFDocument.load(bytes)
-  assert.ok(pdf.getPageCount() > 10)
+  assert.ok(bytes.length < 15000)
+  for (const amount of ['$15.000', '$14.000', '$17.300', '$7.000']) assert.ok(text.includes(amount), amount)
+  assert.match(text, /MOVIMIENTOS \(12\)/)
+  assert.match(text, /ARQUEO EFECTIVO/)
+  assert.match(text, /CONCILIACIÓN TARJETAS/)
+  assert.doesNotMatch(text, /Fotografía de las operaciones|Estos datos pueden ser/)
+  assert.equal(pdf.getCreationDate().toISOString(), new Date(closure.closedAt).toISOString().replace(/\.\d{3}Z$/, '.000Z'))
+})
+
+test('cash close PDF paginates a busy day without losing transactions or growing with product prose', async () => {
+  const sales = Array.from({ length: 150 }, (_, i) => sale(i % 2 ? 'cash' : 'card', 1500, '2026-10-17T12:00:00Z', [],
+    { shortId: String(i + 1).padStart(8, '0'), items: [{ name: `Empanada champiñón / queso ${'x'.repeat(150)}`, quantity: 1, unitPrice: 1500, lineTotal: 1500 }] }))
+  const summary = buildClosureSummary(sales, closurePeriod('2026-10-17'))
+  const closure = createClosure(summary, cleanClosureInput(draft(summary)), null)
+  const bytes = await createCashClosurePdf(closure)
+  const pdf = await PDFDocument.load(bytes), text = readPdfText(pdf)
+  assert.ok(pdf.getPageCount() >= 3 && pdf.getPageCount() <= 5, `${pdf.getPageCount()} pages`)
+  assert.ok(bytes.length < 50000, `${bytes.length} bytes`)
+  for (const sale of sales) assert.ok(text.includes(sale.shortId), `Missing transaction ${sale.shortId}`)
+  assert.ok(text.includes('$225.000'))
+  assert.equal((text.match(/BAKERY POS/g) || []).length, pdf.getPageCount())
   assert.match(pdf.getTitle(), /2026-10-17/)
   assert.equal(pdf.getAuthor(), 'Bakery POS')
+})
+
+test('cash close PDF retains long notes, negative card days and denomination totals', async () => {
+  const sales = [sale('card', 2000, '2026-10-16T12:00:00Z', [refund(2000, '2026-10-17T13:00:00Z')])]
+  const summary = buildClosureSummary(sales, closurePeriod('2026-10-17'))
+  const input = { ...draft(summary), cashIn: 0, cashOut: 0, countedCash: 10000, countedCard: -2000,
+    denominations: { 10000: 1 }, operator: 'Responsable '.repeat(6).trim(), terminalReference: 'REF'.repeat(30),
+    note: 'Detalle contable de ajuste. '.repeat(30) + 'FIN DEL REGISTRO.' }
+  const closure = createClosure(summary, cleanClosureInput(input), null)
+  const pdf = await PDFDocument.load(await createCashClosurePdf(closure)), text = readPdfText(pdf)
+  assert.ok(text.includes('FIN DEL REGISTRO.'))
+  assert.ok(text.includes('$-2.000'))
+  assert.ok(text.includes('$10.000 x 1'))
+  assert.equal(closure.cardDifference, 0)
 })

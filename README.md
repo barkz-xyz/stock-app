@@ -196,7 +196,7 @@ Count cash against opening cash + collected cash sales - processed cash refunds 
 
 Saving requires a declared operator and a fresh operations fingerprint/revision. Differences, extra cash movements, pending operations and corrections require a note. PostgreSQL takes a consistent transaction snapshot; competing or stale closes return 409 instead of overwriting silently. Each correction retains the previous version. New sales/refunds remain allowed and mark a saved close as stale until a correction includes them. Older legacy closes remain readable and require a correction before detailed PDF export.
 
-The authenticated, private/no-store API exposes `GET /api/cash-closures?date=YYYY-MM-DD`, `POST /api/cash-closures`, and `GET /api/cash-closures/YYYY-MM-DD/pdf?revision=N`. PDFs use saved version data, paginated transaction/product/refund details, standard vector fonts, Flate-compressed content and compressed object streams. No business data or PDF files are sent to an external renderer. The Bakery POS styling stays simple and searchable.
+The authenticated, private/no-store API exposes `GET /api/cash-closures?date=YYYY-MM-DD`, `POST /api/cash-closures`, and `GET /api/cash-closures/YYYY-MM-DD/pdf?revision=N`. PDFs use saved version data in compact sales and reconciliation tables, followed by a paginated ledger of cash/card receipts and refunds. Product descriptions and provider boilerplate stay out of this accounting report; the full snapshot remains stored. Standard vector fonts, Flate-compressed content and compressed object streams keep exports small. No business data or PDF files are sent to an external renderer. The Bakery POS styling stays simple and searchable.
 
 ## Commands
 

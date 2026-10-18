@@ -9,10 +9,10 @@ export function pendingCheckout() {
   return memory
 }
 
-export function beginCheckout(items, paymentMethod, total) {
+export function beginCheckout(items, paymentMethod, total, cashReceived = null) {
   const existing = pendingCheckout()
   if (existing) return existing
-  memory = { key: crypto.randomUUID(), items, paymentMethod, total }
+  memory = { key: crypto.randomUUID(), items, paymentMethod, total, ...(cashReceived != null ? { cashReceived } : {}) }
   try { globalThis.sessionStorage?.setItem(storageKey, JSON.stringify(memory)) } catch { /* Memory still protects retries in this tab. */ }
   return memory
 }

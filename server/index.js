@@ -12,7 +12,7 @@ import {
   setupPointTerminal, updatePointPos, updatePointStore, validatePointWebhook,
 } from './mercadopago.js'
 import {
-  adjustItem, attachPointOrder, closeStore, completeRefund,
+  adjustItem, saveInventoryBatch, searchSales, attachPointOrder, closeStore, completeRefund,
   claimPointOrder, createItem, createSale, deleteItem, failRefund, getSale,
   getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales,
   markCardSaleFailed, prepareRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
@@ -338,6 +338,9 @@ app.get('/api/checkouts/:key', async (req, res, next) => {
 app.get('/api/items', async (_req, res, next) => {
   try { res.json(await listItems()) } catch (error) { next(error) }
 })
+app.post('/api/inventory/batch', async (req, res, next) => {
+  try { res.json(await saveInventoryBatch(req.body, req.headers['idempotency-key'])) } catch (error) { next(error) }
+})
 app.post('/api/items', async (req, res, next) => {
   try { res.status(201).json(await createItem(cleanItem(req.body))) } catch (error) { next(error) }
 })
@@ -410,9 +413,12 @@ app.get('/api/sales', async (req, res, next) => {
 })
 app.post('/api/sales/cash', async (req, res, next) => {
   try {
-    const sale = await createSale(cleanCart(req.body), 'cash', checkoutKey(req.headers['idempotency-key']))
+    const sale = await createSale(cleanCart(req.body), 'cash', checkoutKey(req.headers['idempotency-key']), req.body.cashReceived ?? null)
     res.status(sale.checkoutReplayed ? 200 : 201).json(sale)
   } catch (error) { next(error) }
+})
+app.get('/api/sales/history', async (req, res, next) => {
+  try { res.json(await searchSales(req.query)) } catch (error) { next(error) }
 })
 app.post('/api/sales/card', async (req, res, next) => {
   let sale

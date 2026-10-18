@@ -1,3 +1,4 @@
+import { LoadingSkeleton } from './ui.jsx'
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ArrowRight, Banknote, Check, ChevronDown, CreditCard, Download, History, RotateCw, ShieldCheck } from 'lucide-react'
 import { api } from './api.js'
@@ -84,7 +85,7 @@ export default function CashClosurePage({ date, onNavigate, setToast, refreshTok
       {data && form && <div className={`closure-status ${data.stale || changed ? 'attention' : ''}`} role="status" title={data.closure ? `${time(data.closure.closedAt)} · ${data.closure.operator || ''}` : tx('Día completo · Chile · CLP', 'Full day · Chile · CLP')}><ShieldCheck size={16} /><strong>{changed ? tx('Actualizar cierre', 'Refresh close') : data.stale ? tx('Cambios sin incluir', 'Changes not included') : data.closure ? tx(`Guardado · v${data.closure.revision}`, `Saved · v${data.closure.revision}`) : tx('Sin cierre', 'Not closed')}</strong></div>}
     </section>
     {error && <div className="closure-notice error" role="alert"><AlertTriangle size={18} /><span>{error}</span></div>}
-    {loading && !data && <div className="loading" role="status">{tx('Preparando cierre…', 'Preparing close…')}</div>}
+    {loading && !data && <LoadingSkeleton />}
     {data && form && <>
       {changed && <div className="closure-notice" role="status"><AlertTriangle size={16} /><span>{tx('El día cambió. Actualiza para continuar.', 'The day changed. Refresh to continue.')}</span></div>}
       <section className="closure-kpis" aria-label={tx('Resumen del día', 'Day summary')}>

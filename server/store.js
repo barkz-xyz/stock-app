@@ -4,6 +4,8 @@ import path from 'node:path'
 import pg from 'pg'
 import { dateOnly } from '../src/dates.js'
 import { publishChange } from './changes.js'
+import { cleanInventoryBatch, inventoryBatchChanges } from './inventory-batch.js'
+import { cleanHistoryQuery, historyMatches } from './sales-history.js'
 import { closurePeriod, buildClosureSummary, cleanClosureInput, createClosure, closureError, businessDateAt } from './cash-closure.js'
 
 const { Pool } = pg
@@ -127,6 +129,8 @@ function normalizeSale(row, items = row.items || [], refunds = row.refunds || []
     status: row.status,
     paymentMethod: row.payment_method ?? row.paymentMethod,
     total: Number(row.total),
+    cashReceived: row.cash_received == null && row.cashReceived == null ? null : Number(row.cash_received ?? row.cashReceived),
+    cashChange: row.cash_received == null && row.cashReceived == null ? null : Number(row.cash_received ?? row.cashReceived) - Number(row.total),
     items: items.map((item) => ({
       lineId: item.id ?? item.line_id ?? item.lineId,
       itemId: item.item_id ?? item.itemId,
@@ -193,6 +197,7 @@ function ensureFileShape(data) {
   data.movements ||= []
   data.sales ||= []
   data.cashClosures ||= []
+  data.stockBatches ||= []
   for (const item of data.items) {
     item.price = Number(item.price || 0)
     item.sellable = Boolean(item.sellable)
@@ -264,6 +269,10 @@ export async function initializeStore() {
         paid_at TIMESTAMPTZ
       );
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS checkout_key UUID;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS cash_received NUMERIC(12,0) CHECK (cash_received IS NULL OR (payment_method='cash' AND cash_received >= total));
+      CREATE TABLE IF NOT EXISTS stock_batches (
+        id UUID PRIMARY KEY, fingerprint TEXT NOT NULL, result JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS checkout_fingerprint TEXT;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS point_order_lease_until TIMESTAMPTZ;
       CREATE UNIQUE INDEX IF NOT EXISTS sales_checkout_key_idx ON sales(checkout_key);
@@ -587,6 +596,47 @@ export async function deleteItem(id) {
   }
 }
 
+export async function saveInventoryBatch(input, key) {
+  const batch = cleanInventoryBatch(input, key)
+  const replay = existing => {
+    if (existing.fingerprint !== batch.fingerprint) throw Object.assign(new Error('Esta referencia ya se usó para otro lote.'), { status: 409, code: 'BATCH_CONFLICT' })
+    return { ...existing.result, replayed: true }
+  }
+  if (!pool) return mutateFileData(data => {
+    const existing = data.stockBatches.find(b => b.key === batch.key)
+    if (existing) return replay(existing)
+    const changes = inventoryBatchChanges(data.items, batch), now = new Date().toISOString()
+    for (const { item, next, delta } of changes) {
+      item.quantity = next; item.updatedAt = now
+      data.movements.unshift({ id: crypto.randomUUID(), itemId: item.id, itemName: item.name, saleId: null,
+        type: batch.type, quantity: delta, balanceAfter: next, note: batch.note || (batch.type === 'stock_in' ? 'Producción por lote' : 'Conteo por lote'), createdAt: now })
+    }
+    const result = { id: batch.key, items: changes.map(c => normalizeItem(c.item)), count: changes.length }
+    data.stockBatches.push({ key: batch.key, fingerprint: batch.fingerprint, result })
+    return result
+  })
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`stock-batch:${batch.key}`])
+    const previous = await client.query('SELECT fingerprint,result FROM stock_batches WHERE id=$1', [batch.key])
+    if (previous.rows[0]) { const result = replay(previous.rows[0]); await client.query('COMMIT'); return result }
+    const current = await client.query('SELECT * FROM items WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE', [batch.items.map(l => l.itemId)])
+    const changes = inventoryBatchChanges(current.rows.map(normalizeItem), batch)
+    const updated = await client.query(`UPDATE items i SET quantity=b.quantity, updated_at=NOW()
+      FROM UNNEST($1::uuid[],$2::numeric[]) AS b(id,quantity) WHERE i.id=b.id RETURNING i.*`, [changes.map(c => c.item.id), changes.map(c => c.next)])
+    await client.query(`INSERT INTO movements (id,item_id,item_name,type,quantity,balance_after,note)
+      SELECT * FROM UNNEST($1::uuid[],$2::uuid[],$3::text[],$4::text[],$5::numeric[],$6::numeric[],$7::text[])`,
+    [changes.map(() => crypto.randomUUID()), changes.map(c => c.item.id), changes.map(c => c.item.name), changes.map(() => batch.type),
+      changes.map(c => c.delta), changes.map(c => c.next), changes.map(() => batch.note || (batch.type === 'stock_in' ? 'Producción por lote' : 'Conteo por lote'))])
+    const result = { id: batch.key, items: updated.rows.map(normalizeItem), count: changes.length }
+    await client.query('INSERT INTO stock_batches (id,fingerprint,result) VALUES ($1,$2,$3)', [batch.key, batch.fingerprint, JSON.stringify(result)])
+    await client.query('COMMIT')
+    return result
+  } catch (error) { await client.query('ROLLBACK'); throw error }
+  finally { client.release() }
+}
+
 export async function adjustItem(id, input) {
   if (!pool) {
     return mutateFileData((data) => {
@@ -649,10 +699,12 @@ function validateSaleLines(items, requested) {
   })
 }
 
-function checkoutFingerprint(requested, paymentMethod) {
+function checkoutFingerprint(requested, paymentMethod, cashReceived = null) {
   const combined = new Map()
   for (const line of requested) combined.set(line.itemId, (combined.get(line.itemId) || 0) + Number(line.quantity))
-  return crypto.createHash('sha256').update(JSON.stringify([paymentMethod, [...combined].sort(([a], [b]) => a.localeCompare(b))])).digest('hex')
+  const values = [paymentMethod, [...combined].sort(([a], [b]) => a.localeCompare(b))]
+  if (cashReceived != null) values.push(cashReceived)
+  return crypto.createHash('sha256').update(JSON.stringify(values)).digest('hex')
 }
 
 function assertSameCheckout(sale, fingerprint) {
@@ -661,8 +713,8 @@ function assertSameCheckout(sale, fingerprint) {
   }
 }
 
-function reserveSaleInFile(data, requested, paymentMethod, checkoutKey) {
-  const fingerprint = checkoutFingerprint(requested, paymentMethod)
+function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashReceived) {
+  const fingerprint = checkoutFingerprint(requested, paymentMethod, cashReceived)
   const existing = checkoutKey && data.sales.find(sale => sale.checkoutKey === checkoutKey)
   if (existing) {
     assertSameCheckout(existing, fingerprint)
@@ -672,6 +724,7 @@ function reserveSaleInFile(data, requested, paymentMethod, checkoutKey) {
   const now = new Date().toISOString()
   const id = crypto.randomUUID()
   const total = lines.reduce((sum, line) => sum + line.lineTotal, 0)
+  validateCashReceived(cashReceived, paymentMethod, total)
   const sale = {
     id,
     checkoutKey,
@@ -679,6 +732,7 @@ function reserveSaleInFile(data, requested, paymentMethod, checkoutKey) {
     status: paymentMethod === 'cash' ? 'paid' : 'pending',
     paymentMethod,
     total,
+    cashReceived,
     items: lines.map(({ item, quantity, unitPrice, lineTotal }) => ({ lineId: crypto.randomUUID(), itemId: item.id, name: item.name, unit: item.unit, quantity, unitPrice, lineTotal })),
     refunds: [],
     mpOrderId: null,
@@ -720,13 +774,19 @@ function reserveSaleInFile(data, requested, paymentMethod, checkoutKey) {
   return normalizeSale(sale)
 }
 
-export async function createSale(requested, paymentMethod, checkoutKey = null) {
-  if (!pool) return mutateFileData((data) => reserveSaleInFile(data, requested, paymentMethod, checkoutKey))
+function validateCashReceived(received, method, total) {
+  if (received != null && (method !== 'cash' || !Number.isSafeInteger(received) || received < total || received > 999999999999)) {
+    throw Object.assign(new Error('El efectivo recibido debe cubrir el total y ser un monto entero en CLP.'), { status: 400 })
+  }
+}
+
+export async function createSale(requested, paymentMethod, checkoutKey = null, cashReceived = null) {
+  if (!pool) return mutateFileData((data) => reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashReceived))
 
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    const fingerprint = checkoutFingerprint(requested, paymentMethod)
+    const fingerprint = checkoutFingerprint(requested, paymentMethod, cashReceived)
     if (checkoutKey) {
       // Serialize the same checkout across processes before touching inventory.
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`checkout:${checkoutKey}`])
@@ -743,11 +803,12 @@ export async function createSale(requested, paymentMethod, checkoutKey = null) {
     const lines = validateSaleLines(itemResult.rows.map(normalizeItem), requested)
     const id = crypto.randomUUID()
     const total = lines.reduce((sum, line) => sum + line.lineTotal, 0)
+    validateCashReceived(cashReceived, paymentMethod, total)
     const status = paymentMethod === 'cash' ? 'paid' : 'pending'
     const saleResult = await client.query(
-      `INSERT INTO sales (id, status, payment_method, total, mp_external_reference, inventory_applied, paid_at, checkout_key, checkout_fingerprint)
-       VALUES ($1,$2,$3,$4,$5,TRUE,CASE WHEN $2='paid' THEN NOW() ELSE NULL END,$6,$7) RETURNING *`,
-      [id, status, paymentMethod, total, saleExternalReference(id), checkoutKey, fingerprint],
+      `INSERT INTO sales (id, status, payment_method, total, mp_external_reference, inventory_applied, paid_at, checkout_key, checkout_fingerprint, cash_received)
+       VALUES ($1,$2,$3,$4,$5,TRUE,CASE WHEN $2='paid' THEN NOW() ELSE NULL END,$6,$7,$8) RETURNING *`,
+      [id, status, paymentMethod, total, saleExternalReference(id), checkoutKey, fingerprint, cashReceived],
     )
     const persistedLines = lines.map((line) => ({ ...line, lineId: crypto.randomUUID() }))
     await client.query(
@@ -1632,6 +1693,34 @@ export async function getSaleByPointOrder(orderId) {
   }
   const { rows } = await pool.query('SELECT id FROM sales WHERE mp_order_id=$1 LIMIT 1', [orderId])
   return rows[0] ? getSale(rows[0].id) : null
+}
+
+export async function searchSales(input) {
+  const q = cleanHistoryQuery(input)
+  if (!pool) {
+    const all = (await readFileData()).sales.map(s => normalizeSale(s)).filter(s => historyMatches(s, q))
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt) || b.id.localeCompare(a.id))
+    return { sales: all.slice(q.offset, q.offset + q.limit), total: all.length, hasMore: q.offset + q.limit < all.length }
+  }
+  const params = [], clauses = []
+  const add = (sql, value) => { params.push(value); clauses.push(sql.replace('?', `$${params.length}`)) }
+  if (q.from) add('s.created_at >= ?', q.from)
+  if (q.to) add('s.created_at < ?', q.to)
+  if (q.method) add('s.payment_method = ?', q.method)
+  if (q.status === 'refunded') clauses.push("(s.status='refunded' OR EXISTS (SELECT 1 FROM refunds r WHERE r.sale_id=s.id AND r.status='processed'))")
+  else if (q.status) add('s.status = ?', q.status)
+  if (q.search) add("LOWER(REPLACE(s.id::text || ' ' || COALESCE(s.mp_external_reference,''),'-','')) LIKE ? ESCAPE '\\'", `%${q.search.replaceAll('-', '').toLowerCase().replace(/[\\%_]/g, '\\$&')}%`)
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    const count = await client.query(`SELECT COUNT(*) AS total FROM sales s ${where}`, params)
+    const rows = await client.query(`SELECT s.* FROM sales s ${where} ORDER BY s.created_at DESC,s.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`, [...params, q.limit, q.offset])
+    const sales = await hydratePostgresSales(rows.rows, client), total = Number(count.rows[0].total)
+    await client.query('COMMIT')
+    return { sales, total, hasMore: q.offset + q.limit < total }
+  } catch (error) { await client.query('ROLLBACK'); throw error }
+  finally { client.release() }
 }
 
 export async function listSales(limit = 50) {

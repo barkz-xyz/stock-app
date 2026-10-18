@@ -209,6 +209,25 @@ test('HTTP authentication rejects malformed sessions and validates product calen
     assert.equal(after.dailySummary.transactions, before.dailySummary.transactions + 1)
     assert.equal(after.dailySummary.revenue, before.dailySummary.revenue + 2000)
   })
+  await t.test('batch entry and filtered history are authenticated, private, and replay-safe', async () => {
+    assert.equal((await request('/api/inventory/batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401)
+    assert.equal((await request('/api/sales/history')).status, 401)
+    const headers = { Cookie: cookie, 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }
+    const body = JSON.stringify({ type: 'stock_in', items: [{ itemId: created.id, quantity: 3 }] })
+    for (let i = 0; i < 2; i++) {
+      const result = await request('/api/inventory/batch', { method: 'POST', headers, body })
+      assert.equal(result.status, 200); assertPrivate(result)
+      assert.equal(Boolean((await result.json()).replayed), i === 1)
+    }
+    assert.equal((await (await request('/api/items', { headers })).json())[0].quantity, 7)
+    const tender = await request('/api/sales/cash', { method: 'POST', headers: { ...headers, 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify({ items: [{ itemId: created.id, quantity: 1 }], cashReceived: 5000 }) })
+    const paid = await tender.json()
+    assert.equal(tender.status, 201); assert.equal(paid.cashChange, 4000)
+    const history = await request(`/api/sales/history?search=${paid.shortId}&method=cash`, { headers })
+    assertPrivate(history); assert.equal(history.headers.get('cache-control'), 'private, no-store')
+    const result = await history.json()
+    assert.equal(result.total, 1); assert.equal(result.sales[0].cashReceived, 5000)
+  })
   for (let attempt = 0; attempt < 9; attempt++) {
     const response = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': `192.0.2.${attempt}` }, body: JSON.stringify({ pin: 'wrong' }) })
     assert.equal(response.status, attempt < 8 ? 401 : 429)

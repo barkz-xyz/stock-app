@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, Check, ChevronRight, CreditCard, FileCheck2, History, LayoutDashboard, Minus, PackageOpen, Plus, ReceiptText, RotateCw, Search, ShoppingBasket, Monitor, Trash2, Undo2, Wifi, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, Check, ChevronRight, ChevronUp, ChevronDown, CreditCard, FileCheck2, History, LayoutDashboard, Minus, PackageOpen, Plus, ReceiptText, RotateCw, Search, ShoppingBasket, Monitor, Star, Trash2, Undo2, Wifi, X } from 'lucide-react'
 import { api } from './api.js'
 import { beginCheckout, clearCheckout, pendingCheckout } from './checkoutAttempts.js'
 import { useI18n } from './i18n.js'
@@ -7,6 +7,7 @@ import { categories, CategoryIcon, categoryClass, formatQuantity, Modal } from '
 
 import { getProductPhoto } from './productPhotos.js'
 import CajaHeader from './CajaHeader.jsx'
+import { loadCartDraft, saveCartDraft, loadFavorites, saveFavorites, productLabel, searchText, cashTender } from './posWorkspace.js'
 
 function ProductArtwork({ item }) {
   const photo = getProductPhoto(item.name)
@@ -30,25 +31,10 @@ function saleState(status, t) {
   return states[status] || states.pending
 }
 
-function SaleList({ sales, onResume, onSelect, compact = false }) {
-  const { t, formatCurrency, formatTime } = useI18n()
-  if (!sales.length) return <div className="sales-empty"><ReceiptText size={25} /><span>{t('noSalesYet')}</span></div>
-  return <div className={`sales-list ${compact ? 'compact' : ''}`}>{sales.map((sale) => {
-    const state = sale.status === 'paid' && sale.refundedTotal > 0
-      ? { label: t('salePartiallyRefunded'), tone: 'warning' }
-      : saleState(sale.status, t)
-    const interactive = sale.status === 'pending' || sale.status === 'paid' || sale.status === 'refunded'
-    return <button key={sale.id} disabled={!interactive} aria-label={`${t('openSaleDetails')} #${sale.shortId}`} onClick={() => sale.status === 'pending' ? onResume(sale) : onSelect?.(sale)}>
-      <div className={`sale-icon ${sale.paymentMethod}`} >{sale.paymentMethod === 'card' ? <CreditCard size={17} /> : <Banknote size={17} />}</div>
-      <div className="sale-copy"><strong>#{sale.shortId}</strong><span>{sale.items.length} {sale.items.length === 1 ? t('item') : t('items')} · {formatTime(sale.createdAt)}</span></div>
-      <div className="sale-value"><strong>{formatCurrency(sale.total)}</strong><span className={`sale-status ${state.tone}`}>{state.label}</span></div>
-      {interactive && <ChevronRight size={17} />}
-    </button>
-  })}</div>
-}
-
 function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelSale, onClose, busy }) {
   const { t, formatCurrency } = useI18n()
+  const [cashMode, setCashMode] = useState(false), [received, setReceived] = useState('')
+  const tender = cashTender(checkout.total, received)
   const sale = checkout.sale
   const pending = checkout.stage === 'processing' || checkout.stage === 'connecting'
   const finalState = sale ? saleState(sale.status, t) : null
@@ -61,15 +47,23 @@ function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelS
   const progressDescription = checkout.stage === 'connecting'
     ? t('connectingPointDescription')
     : pointHasTerminal ? t('customerUseTerminal') : t('waitingForPointDescription')
-  return <Modal title={checkout.stage === 'method' ? t('choosePaymentMethod') : sale ? `#${sale.shortId}` : t('cardPayment')} eyebrow={t('checkout')} onClose={onClose} closeable={!pending}>
-    {checkout.stage === 'method' && <div className="checkout-body">
+  return <Modal title={checkout.stage === 'method' ? t(cashMode ? 'cash' : 'choosePaymentMethod') : sale ? `#${sale.shortId}` : t('cardPayment')} eyebrow={t('checkout')} onClose={onClose} closeable={!pending}>
+    {checkout.stage === 'method' && !cashMode && <div className="checkout-body">
       <div className="checkout-total"><span>{t('totalToPay')}</span><strong>{formatCurrency(checkout.total)}</strong></div>
       <div className="payment-options">
-        <button onClick={onCash} disabled={busy}><div className="payment-icon cash"><Banknote size={25} /></div><span><strong>{t('cash')}</strong><small>{t('cashDescription')}</small></span><ChevronRight size={20} /></button>
+        <button onClick={() => setCashMode(true)} disabled={busy}><div className="payment-icon cash"><Banknote size={25} /></div><span><strong>{t('cash')}</strong></span><ChevronRight size={20} /></button>
         <button onClick={onCard} disabled={busy || !posConfig.configured}><div className="payment-icon card"><CreditCard size={25} /></div><span><strong>{t('card')}</strong><small>{posConfig.configured ? t('pointSmart2Description') : t('pointNotConfigured')}</small></span><ChevronRight size={20} /></button>
       </div>
       {!posConfig.configured && <div className="setup-hint"><AlertTriangle size={17} /><span>{t('pointSetupHint')}</span></div>}
     </div>}
+    {checkout.stage === 'method' && cashMode && <form className="checkout-body cash-tender" onSubmit={e => { e.preventDefault(); if (tender.valid && !busy) onCash(Number(received)) }}>
+      <div className="checkout-total"><span>{t('totalToPay')}</span><strong>{formatCurrency(checkout.total)}</strong></div>
+      <label className="field"><span>{t('receivedCash')}</span><div className="money-input"><span>$</span><input autoFocus required type="number" inputMode="numeric" min={checkout.total} max="999999999999" step="1" value={received} disabled={busy} onChange={e => setReceived(e.target.value)} aria-invalid={received !== '' && !tender.valid} /></div></label>
+      <div className="cash-shortcuts"><button type="button" disabled={busy} onClick={() => setReceived(String(checkout.total))}>{t('exactAmount')}</button>{[1000,2000,5000,10000,20000].filter(n => n > checkout.total).slice(0,4).map(n => <button key={n} type="button" disabled={busy} onClick={() => setReceived(String(n))}>{formatCurrency(n)}</button>)}</div>
+      <div className="tender-change" aria-live="polite"><span>{t('cashChange')}</span><strong>{tender.valid ? formatCurrency(tender.change) : '—'}</strong></div>
+      {received !== '' && !tender.valid && <p className="inline-error">{t('cashInsufficient')}</p>}
+      <div className="tender-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => setCashMode(false)}>{t('back')}</button><button className="button primary" disabled={busy || !tender.valid}>{busy ? t('saving') : t('confirmCash')}<Check size={18} /></button></div>
+    </form>}
     {(checkout.stage === 'connecting' || checkout.stage === 'processing') && <div className="payment-progress">
       <div className="terminal-animation"><CreditCard size={31} /><i /><i /><i /></div>
       <h3>{progressTitle}</h3>
@@ -89,8 +83,9 @@ function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelS
       <button className="button primary" onClick={onClose}>{t('returnToCart')}</button>
     </div>}
     {checkout.stage === 'success' && <div className="payment-result success">
-      <div><BadgeCheck size={34} /></div><h3>{t('paymentApproved')}</h3><p>{sale?.paymentMethod === 'card' ? t('cardSaleCompleted') : t('cashSaleCompleted')}</p>
+      <div><BadgeCheck size={34} /></div><h3>{t('paymentApproved')}</h3>
       <div className="success-total"><span>#{sale?.shortId}</span><strong>{formatCurrency(sale?.total || 0)}</strong></div>
+      {sale?.cashReceived != null && <div className="cash-result"><span>{t('receivedCash')}<b>{formatCurrency(sale.cashReceived)}</b></span><span>{t('cashChange')}<b>{formatCurrency(sale.cashChange)}</b></span></div>}
       {sale?.paymentMethod === 'card' && <div className="point-receipt-reminder"><ReceiptText size={17} /><span>{t('deliverPointReceipt')}</span></div>}
       <button className="button primary" onClick={onClose}>{t('newSale')}</button>
     </div>}
@@ -166,6 +161,7 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
         <div><span>{t('refundableAmount')}</span><strong>{formatCurrency(sale.refundableTotal || 0)}</strong></div>
       </div>
       <div className="sale-detail-meta"><span className={`sale-status ${state.tone}`}>{state.label}</span><span>{sale.paymentMethod === 'card' ? t('card') : t('cash')} · {formatTime(sale.createdAt)}</span></div>
+      {sale.cashReceived != null && <div className="cash-result"><span>{t('receivedCash')}<b>{formatCurrency(sale.cashReceived)}</b></span><span>{t('cashChange')}<b>{formatCurrency(sale.cashChange)}</b></span></div>}
       {sale.paymentMethod === 'card' && <section className="point-payment-details">
         <header><div><CreditCard size={17} /><strong>{t('pointPaymentDetails')}</strong></div><button type="button" className="button compact" onClick={() => onReconcilePoint().catch(() => {})} disabled={busy}><RotateCw size={15} />{t('syncPoint')}</button></header>
         <div className="point-payment-grid">
@@ -222,14 +218,55 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
   </Modal>
 }
 
-export default function SalesCounter({ items, sales, posConfig, onRefresh, setToast, onNavigate, registerView = 'cart', onRegisterViewChange }) {
+function SalesHistory({ refreshToken, onResume, onSelect }) {
+  const { t, formatCurrency, language } = useI18n()
+  const dateFormat = new Intl.DateTimeFormat(language === 'es' ? 'es-CL' : 'en-US', { timeZone: 'America/Santiago', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  const [filters, setFilters] = useState({ search: '', from: '', to: '', method: '', status: '' }), [offset, setOffset] = useState(0)
+  const [data, setData] = useState(null), [loading, setLoading] = useState(true), [error, setError] = useState(''), [retry, setRetry] = useState(0)
+  const size = 40
+  useEffect(() => {
+    const controller = new AbortController()
+    setLoading(true); setError('')
+    const timer = setTimeout(() => {
+      api.salesHistory({ ...filters, offset, limit: size }, { signal: controller.signal })
+        .then(next => { if (!controller.signal.aborted) setData(next) })
+        .catch(e => { if (!controller.signal.aborted) setError(e.message) })
+        .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    }, filters.search ? 250 : 0)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [filters, offset, refreshToken, retry])
+  const update = key => e => { setOffset(0); setFilters(f => ({ ...f, [key]: e.target.value })) }
+  const reset = () => { setOffset(0); setFilters({ search: '', from: '', to: '', method: '', status: '' }) }
+  return <section className="card register-history" id="caja-history-panel" role="tabpanel" aria-labelledby="caja-history-tab" aria-busy={loading}>
+    <div className="history-filters">
+      <label className="search-box"><Search size={17} /><input value={filters.search} onChange={update('search')} placeholder={t('searchSale')} aria-label={t('searchSale')} /></label>
+      <div className="history-filter-row"><label><span>{t('fromDate')}</span><input type="date" value={filters.from} onChange={update('from')} /></label><label><span>{t('toDate')}</span><input type="date" value={filters.to} min={filters.from || undefined} onChange={update('to')} /></label><select aria-label={t('payment')} value={filters.method} onChange={update('method')}><option value="">{t('allMethods')}</option><option value="cash">{t('cash')}</option><option value="card">{t('card')}</option></select><select aria-label={t('status')} value={filters.status} onChange={update('status')}><option value="">{t('allStatuses')}</option>{['paid','pending','refunded','failed','cancelled','expired'].map(s => <option key={s} value={s}>{saleState(s, t).label}</option>)}</select><button type="button" className="icon-button" onClick={reset} aria-label={t('clearFilters')} title={t('clearFilters')}><X size={17} /></button></div>
+    </div>
+    {error && <div className="inline-error" role="alert"><AlertTriangle size={16} />{error}<button className="text-button" onClick={() => setRetry(n => n + 1)}>{t('retryConnection')}</button></div>}
+    <div className={`history-ledger ${loading ? 'is-updating' : ''}`}>
+      <div className="ledger-head"><span>{t('saleReference')}</span><span>{t('payment')}</span><span>{t('status')}</span><span>{t('total')}</span></div>
+      {!data && loading ? <div className="section-skeleton" aria-label={t('loadingSection')}>{[0,1,2,3,4].map(n => <i key={n} />)}</div> : data?.sales.map(sale => {
+        const state = sale.status === 'paid' && sale.refundedTotal > 0 ? { label: t('salePartiallyRefunded'), tone: 'warning' } : saleState(sale.status, t)
+        const interactive = ['paid','pending','refunded'].includes(sale.status)
+        return <button className="ledger-row" key={sale.id} disabled={!interactive || loading} onClick={() => sale.status === 'pending' ? onResume(sale) : onSelect(sale)} aria-label={`${t('openSaleDetails')} #${sale.shortId}`}>
+          <span className="ledger-reference"><strong>#{sale.shortId}</strong><small>{dateFormat.format(new Date(sale.createdAt))}</small></span><span className="ledger-method">{sale.paymentMethod === 'card' ? <CreditCard size={16} /> : <Banknote size={16} />}{t(sale.paymentMethod === 'card' ? 'card' : 'cash')}</span><span className={`sale-status ${state.tone}`}>{state.label}</span><strong className="ledger-amount">{formatCurrency(sale.total)}<ChevronRight size={15} /></strong>
+        </button>
+      })}
+      {data && !data.sales.length && <div className="sales-empty"><Search size={23} /><span>{t('noMatchingSales')}</span></div>}
+    </div>
+    {data && <footer className="history-pagination"><span role="status">{t('resultRange', { from: data.total ? offset + 1 : 0, to: Math.min(offset + size, data.total), total: data.total })}</span><button className="button compact" disabled={loading || offset === 0} onClick={() => setOffset(n => Math.max(0,n-size))}>{t('previousPage')}</button><button className="button compact" disabled={loading || !data.hasMore} onClick={() => setOffset(n => n + size)}>{t('nextPage')}</button></footer>}
+  </section>
+}
+
+export default function SalesCounter({ items, sales, posConfig, onRefresh, setToast, onNavigate, registerView = 'cart', onRegisterViewChange, serverAvailable = true }) {
   const { t, categoryLabel, unitLabel, formatCurrency } = useI18n()
   const setRegisterView = onRegisterViewChange
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('All')
   const [inStockOnly, setInStockOnly] = useState(true)
   const [attempt, setAttempt] = useState(pendingCheckout)
-  const [cart, setCart] = useState(() => pendingCheckout()?.items || [])
+  const [cart, setCart] = useState(() => pendingCheckout()?.items || loadCartDraft())
+  const [favorites, setFavorites] = useState(loadFavorites), [cartExpanded, setCartExpanded] = useState(false)
   const [checkout, setCheckout] = useState(null)
   const [selectedSale, setSelectedSale] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -238,8 +275,11 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
   const sellable = useMemo(() => items.filter((item) => item.sellable && item.price > 0), [items])
   const catalogItems = useMemo(() => inStockOnly ? sellable.filter((item) => item.quantity > 0) : sellable, [inStockOnly, sellable])
   const presentCategories = useMemo(() => categories.filter((category) => catalogItems.some((item) => item.category === category)), [catalogItems])
-  const products = catalogItems.filter((item) => (filter === 'All' || item.category === filter) && `${item.name} ${item.sku}`.toLowerCase().includes(search.toLowerCase()))
-  const cartLines = cart.map((line) => ({ ...line, item: items.find((item) => item.id === line.itemId) })).filter((line) => line.item)
+  const products = catalogItems.filter((item) => (filter === 'All' || filter === 'Favorites' && favorites.includes(item.id) || item.category === filter) && searchText(`${item.name} ${item.sku}`).includes(searchText(search))).sort((a,b) => Number(favorites.includes(b.id)) - Number(favorites.includes(a.id)) || a.name.localeCompare(b.name, 'es'))
+  const cartLines = cart.map((line) => ({ ...line, item: items.find((item) => item.id === line.itemId) || { id: line.itemId, name: t('unavailableProduct'), price: 0, quantity: 0, unit: 'pieces', missing: true } }))
+  const cartInvalid = cartLines.some(l => l.item.missing || !l.item.sellable || l.item.price <= 0 || l.quantity > l.item.quantity)
+  useEffect(() => { saveCartDraft(cart) }, [cart])
+  useEffect(() => { saveFavorites(favorites) }, [favorites])
   const total = cartLines.reduce((sum, line) => sum + Math.round(line.item.price * line.quantity), 0)
   const count = cartLines.reduce((sum, line) => sum + line.quantity, 0)
   const resumeSale = (sale) => {
@@ -278,15 +318,15 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
       error: sale.mpOrderId ? '' : t('reservedSaleRecovery') })
     await onRefresh().catch(() => {})
   }
-  const pay = async (paymentMethod) => {
+  const pay = async (paymentMethod, cashReceived = null) => {
     if (submitting.current) return
     submitting.current = true
-    const pending = beginCheckout(payload(), paymentMethod, total)
+    const pending = beginCheckout(payload(), paymentMethod, total, cashReceived)
     setAttempt(pending)
     setBusy(true)
     if (pending.paymentMethod === 'card') setCheckout(current => ({ ...current, stage: 'connecting' }))
     try {
-      const sale = await (pending.paymentMethod === 'cash' ? api.cashSale : api.cardSale)(pending.items, pending.key)
+      const sale = await (pending.paymentMethod === 'cash' ? api.cashSale : api.cardSale)(pending.items, pending.key, pending.cashReceived)
       await acceptSale(sale)
     } catch (error) {
       const uncertain = error.uncertain || !error.status || error.status >= 500 || error.code === 'CHECKOUT_CONFLICT'
@@ -296,7 +336,7 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
         error: uncertain ? t('checkoutUncertain') : error.message }))
     } finally { setBusy(false); submitting.current = false }
   }
-  const payCash = () => pay('cash')
+  const payCash = received => pay('cash', received)
   const payCard = () => pay('card')
   const recoverCheckout = async () => {
     const pending = pendingCheckout()
@@ -442,7 +482,7 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
     setSelectedSale((current) => current ? sales.find((sale) => sale.id === current.id) || current : null)
   }, [sales])
   useEffect(() => {
-    if (filter !== 'All' && !presentCategories.includes(filter)) setFilter('All')
+    if (!['All','Favorites'].includes(filter) && !presentCategories.includes(filter)) setFilter('All')
   }, [filter, presentCategories])
 
   return <div className="page pos-page enter">
@@ -463,6 +503,7 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
           <div className="catalog-category-row">
             <div className="filter-scroll" role="group" aria-label={t('byCategory')}>
               <button type="button" className={filter === 'All' ? 'active' : ''} aria-pressed={filter === 'All'} onClick={() => setFilter('All')}><LayoutDashboard size={15} aria-hidden="true" />{t('all')}<span>{catalogItems.length}</span></button>
+              <button type="button" className={filter === 'Favorites' ? 'active' : ''} aria-pressed={filter === 'Favorites'} onClick={() => setFilter('Favorites')}><Star size={15} />{t('favorites')}<span>{catalogItems.filter(i => favorites.includes(i.id)).length}</span></button>
               {presentCategories.map((category) => <button type="button" key={category} className={filter === category ? 'active' : ''} aria-pressed={filter === category} onClick={() => setFilter(category)}><CategoryIcon category={category} size={16} />{categoryLabel(category)}<span>{catalogItems.filter((item) => item.category === category).length}</span></button>)}
             </div>
             <span className="catalog-result-count" role="status">{t('productsCount', { count: products.length })}</span>
@@ -470,25 +511,26 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
         </div>
         {sellable.length === 0 ? <div className="card pos-empty"><div className="empty-art"><ReceiptText size={31} /></div><h3>{t('configureProductsForSale')}</h3><p>{t('configureProductsDescription')}</p></div> : products.length ? <div className="product-grid">{products.map((item) => {
           const inCart = cart.find((line) => line.itemId === item.id)?.quantity || 0
-          return <button key={item.id} className={`sale-product category-${categoryClass(item.category)} ${item.quantity <= 0 ? 'is-unavailable' : ''}`} disabled={Boolean(attempt) || item.quantity <= 0 || inCart >= item.quantity} onClick={() => changeQuantity(item, 1)}>
+          const label = productLabel(item.name), favorite = favorites.includes(item.id)
+          return <div key={item.id} className="product-tile"><button className={`sale-product category-${categoryClass(item.category)} ${item.quantity <= 0 ? 'is-unavailable' : ''}`} aria-label={`${item.name} · ${formatCurrency(item.price)}`} title={item.name} disabled={Boolean(attempt) || item.quantity <= 0 || inCart >= item.quantity} onClick={() => changeQuantity(item, 1)}>
             <ProductArtwork item={item} />
             {inCart > 0 && <span className="cart-badge">{formatQuantity(inCart)}</span>}
-            <strong className="sale-product-name">{item.name}</strong>
+            <span className="sale-product-label"><strong>{label.title}</strong>{label.variant && <small>{label.variant}</small>}</span>
             <div className="sale-product-footer"><span className="sale-product-price">{formatCurrency(item.price)}</span>{item.quantity > 0 && <span className="sale-product-stock"><b>{formatQuantity(item.quantity)}</b><small>{unitLabel(item.unit)}</small></span>}</div>
             {item.quantity <= 0 ? <i>{t('outOfStock')}</i> : <Plus className="sale-product-add" size={16} />}
-          </button>
+          </button><button type="button" className={`favorite-button ${favorite ? 'active' : ''}`} aria-label={`${t(favorite ? 'removeFavorite' : 'addFavorite')}: ${item.name}`} aria-pressed={favorite} onClick={() => setFavorites(v => favorite ? v.filter(id => id !== item.id) : [...v, item.id])}><Star size={15} fill={favorite ? 'currentColor' : 'none'} /></button></div>
         })}</div> : <div className="pos-empty compact"><Search size={27} /><h3>{t('noProductsFound')}</h3></div>}
       </div>
-      <aside className={`cart-panel ${cartLines.length ? 'has-items' : ''}`}>
-        <header><div><ShoppingBasket size={20} /><h2>{t('cart')}</h2><span className="cart-count" aria-label={t('productsCount', { count: formatQuantity(count) })}>{formatQuantity(count)}</span></div>{cartLines.length > 0 && <button disabled={Boolean(attempt)} onClick={() => setCart([])}><Trash2 size={14} />{t('clear')}</button>}</header>
-        {cartLines.length ? <div className="cart-lines">{cartLines.map(({ item, quantity }) => <article key={item.id}><div className="cart-line-main"><div><strong>{item.name}</strong><span>{formatCurrency(item.price)} · {unitLabel(item.unit)}</span></div><b>{formatCurrency(item.price * quantity)}</b></div><div className="quantity-stepper"><button onClick={() => changeQuantity(item, -1)} disabled={Boolean(attempt)} aria-label={t('removeOne')}><Minus size={16} /></button><span>{formatQuantity(quantity)}</span><button onClick={() => changeQuantity(item, 1)} disabled={Boolean(attempt) || quantity >= item.quantity} aria-label={t('addOne')}><Plus size={16} /></button><button className="remove-line" onClick={() => changeQuantity(item, -quantity)} disabled={Boolean(attempt)} aria-label={t('removeFromCart')}><Trash2 size={16} /></button></div></article>)}</div> : <div className="cart-empty"><div><ShoppingBasket size={28} /></div><h3>{t('emptyCart')}</h3><p>{t('tapProducts')}</p></div>}
-        <footer><div className="cart-summary"><div><span>{t('total')}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong></div></div><button className="button primary pay-button" disabled={busy || (!attempt && !cartLines.length)} onClick={() => attempt ? recoverCheckout() : setCheckout({ stage: 'method', total })}>{t(attempt ? 'reviewPendingCheckout' : 'charge')}<ArrowRight size={19} /></button></footer>
+      <aside className={`cart-panel ${cartLines.length ? 'has-items' : ''} ${cartExpanded ? 'is-expanded' : ''}`}>
+        <header><div><ShoppingBasket size={20} /><h2>{t('cart')}</h2><span className="cart-count">{formatQuantity(count)}</span></div><div>{cartLines.length > 0 && <button disabled={Boolean(attempt)} onClick={() => setCart([])}><Trash2 size={14} />{t('clear')}</button>}<button className="cart-collapse" onClick={() => setCartExpanded(false)} aria-label={t('hideCart')}><ChevronDown size={19} /></button></div></header>
+        <div className="cart-detail" id="cart-detail">
+        {cartInvalid && !attempt && <div className="inline-error" role="alert"><AlertTriangle size={15} />{t('cartReview')}</div>}
+        {cartLines.length ? <div className="cart-lines">{cartLines.map(({ item, quantity }) => <article className={quantity > item.quantity || item.missing ? 'invalid-line' : ''} key={item.id}><div className="cart-line-main"><div><strong>{item.name}</strong><span>{formatCurrency(item.price)} · {unitLabel(item.unit)}{quantity > item.quantity && ` · ${t('available')}: ${formatQuantity(item.quantity)}`}</span></div><b>{formatCurrency(item.price * quantity)}</b></div><div className="quantity-stepper"><button onClick={() => changeQuantity(item, -1)} disabled={Boolean(attempt)} aria-label={`${t('removeOne')}: ${item.name}`}><Minus size={16} /></button><span>{formatQuantity(quantity)}</span><button onClick={() => changeQuantity(item, 1)} disabled={Boolean(attempt) || quantity >= item.quantity} aria-label={`${t('addOne')}: ${item.name}`}><Plus size={16} /></button><button className="remove-line" onClick={() => changeQuantity(item, -quantity)} disabled={Boolean(attempt)} aria-label={`${t('removeFromCart')}: ${item.name}`}><Trash2 size={16} /></button></div></article>)}</div> : <div className="cart-empty"><div><ShoppingBasket size={28} /></div><h3>{t('emptyCart')}</h3></div>}
+        </div>
+        <footer><button type="button" className="cart-summary-toggle" onClick={() => setCartExpanded(v => !v)} aria-expanded={cartExpanded} aria-controls="cart-detail" aria-label={t(cartExpanded ? 'hideCart' : 'cartDetails')}><span>{t('productsCount', { count: formatQuantity(count) })}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong>{cartExpanded ? <ChevronDown size={17} /> : <ChevronUp size={17} />}</button><div className="cart-summary"><div><span>{t('total')}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong></div></div><button className="button primary pay-button" disabled={busy || !serverAvailable || (!attempt && (!cartLines.length || cartInvalid))} onClick={() => attempt ? recoverCheckout() : setCheckout({ stage: 'method', total })}>{t(!serverAvailable ? 'serverOffline' : attempt ? 'reviewPendingCheckout' : 'charge')}<ArrowRight size={19} /></button></footer>
       </aside>
-    </section> : <section className="card register-history" id="caja-history-panel" role="tabpanel" aria-labelledby="caja-history-tab">
-      <header className="card-header"><div><h2>{t('registerHistory')}</h2><p>{t('recentSales')}</p></div><span className="history-count">{sales.length}</span></header>
-      <SaleList sales={sales} onResume={resumeSale} onSelect={setSelectedSale} />
-    </section>}
-    {checkout && <CheckoutModal checkout={checkout} posConfig={posConfig} onCash={payCash} onCard={payCard} onRetry={retry} onCancelSale={cancelSale} onClose={() => setCheckout(null)} busy={busy} />}
+    </section> : <SalesHistory refreshToken={sales} onResume={resumeSale} onSelect={setSelectedSale} />}
+    {checkout && <CheckoutModal checkout={checkout} posConfig={posConfig} onCash={payCash} onCard={payCard} onRetry={retry} onCancelSale={cancelSale} onClose={() => setCheckout(null)} busy={busy || !serverAvailable} />}
     {selectedSale && <SaleDetailsModal sale={selectedSale} onClose={() => setSelectedSale(null)} onRefund={refundSale} onRetryRefund={retryRefund} onPrintRefundCopy={printRefundCopy} onCreditNote={recordCreditNote} onReconcilePoint={reconcilePointSale} onResolveInventory={resolveRefundInventory} busy={busy} />}
   </div>
 }

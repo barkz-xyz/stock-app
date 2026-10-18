@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Banknote, BarChart3, Boxes, Calculator, CreditCard, Download, ReceiptText, RotateCw, TrendingDown, TrendingUp, WalletCards } from 'lucide-react'
 
 import { useI18n } from './i18n.js'
-import { formatQuantity } from './ui.jsx'
+import { formatQuantity, LoadingSkeleton } from './ui.jsx'
 
 function BarSeries({ data, valueKey = 'revenue', formatValue }) {
   const { t } = useI18n()
@@ -45,7 +45,7 @@ function dailySeries(source, range, language) {
 
 export default function MetricsPage({ metrics, range, onRangeChange, onRefresh, onExport, loading, exporting }) {
   const { t, language, formatCurrency } = useI18n()
-  if (loading && !metrics) return <div className="page analytics-page"><div className="analytics-loading"><div className="loader-mark"><BarChart3 size={27} /></div><span>{t('preparing')}</span></div></div>
+  if (loading && !metrics) return <LoadingSkeleton />
   const data = metrics || {
     summary: {}, paymentMethods: { cash: {}, card: {} }, daily: [], hourly: [], topProducts: [], today: {}, cashClosure: null,
   }

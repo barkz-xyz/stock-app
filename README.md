@@ -198,6 +198,16 @@ Saving requires a declared operator and a fresh operations fingerprint/revision.
 
 The authenticated, private/no-store API exposes `GET /api/cash-closures?date=YYYY-MM-DD`, `POST /api/cash-closures`, and `GET /api/cash-closures/YYYY-MM-DD/pdf?revision=N`. PDFs use saved version data in compact sales and reconciliation tables, followed by a paginated ledger of cash/card receipts and refunds. Product descriptions and provider boilerplate stay out of this accounting report; the full snapshot remains stored. Standard vector fonts, Flate-compressed content and compressed object streams keep exports small. No business data or PDF files are sent to an external renderer. The Bakery POS styling stays simple and searchable.
 
+## Counter and daily inventory
+
+On mobile the counter uses a collapsible cart summary above four navigation destinations: Resumen, Caja, Inventario and Más. Cart drafts survive section changes and reloads in the same tab for 24 hours; logout clears the draft. Pending checkout keys and declared cash remain recoverable independently. Product favorites are a device preference. Product families and variants are displayed separately without modifying catalog names.
+
+Cash checkout records an integer CLP `cashReceived` and computes `cashChange` from the server-priced sale. Underpayment is rejected before stock is changed. Retries recover the original sale and tender; changing the tender with an existing key returns a conflict. Older cash sales keep a null tender instead of inventing a received amount.
+
+Inventory includes zero-stock items by default and has independent status/category filters. `POST /api/inventory/batch` requires an Idempotency-Key and atomically records up to 200 production entries or physical counts with their stock movements. Physical counts require the displayed `expectedQuantity`; a concurrent change aborts the entire batch with 409. Uncertain browser submissions retain the same frozen batch/key in session storage. `stock_batches` stores replay results and is included in PostgreSQL backups.
+
+`GET /api/sales/history` searches the complete sales history with `search`, `from`, `to`, `method`, `status`, `limit`, and `offset`. Calendar filters use Chile boundaries, results are ordered by creation time and ID, and the refunded filter includes partial refunds. History responses are authenticated and private/no-store. Initial loading uses skeletons; refreshes retain visible data. Server refresh status and the explicitly checked Point state are shown separately. Action errors remain visible until dismissed.
+
 ## Commands
 
 ```bash
@@ -220,4 +230,4 @@ Catalog source assets live in `Imagenes/`; the Python catalog/sign scripts use P
 
 ## Production note
 
-Keep staff authentication enabled on any public Railway deployment. This release provides one shared staff PIN; individual accounts, roles, approval limits, automatic tax issuance, and searchable long-term sales history remain necessary before a larger rollout.
+Keep staff authentication enabled on any public Railway deployment. This release provides one shared staff PIN; individual accounts, roles, approval limits, and automatic tax issuance remain necessary before a larger rollout.

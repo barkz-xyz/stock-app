@@ -1,0 +1,42 @@
+name: Production checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and all tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: bakery_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bakery_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:ci-only-password@localhost:5432/bakery_test
+      PGSSLMODE: disable
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Check source, build, and run every test
+        run: npm run validate

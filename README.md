@@ -61,6 +61,18 @@ Run `npm run measure:load` against a running local compiled app. Set `PRODUCTION
 
 `npm run audit:performance:db` accepts `DATABASE_PUBLIC_URL` or `DATABASE_URL` and runs SELECT/EXPLAIN queries inside a read-only transaction. It reports query plans and timings without changing stock or history.
 
+### Section URLs
+
+The app uses normal browser URLs: `/resumen`, `/caja`, `/caja/historial`, `/inventario`, `/metricas`, `/actividad`, and `/configuracion`. `/` redirects within the app to `/resumen`. Metrics periods use `/metricas?periodo=7d` or `periodo=30d`. Refresh, bookmarks, opening navigation links in another tab, and browser Back/Forward retain the selected section. Authentication keeps the destination URL. Unknown sections show a recovery link to the overview. Transient forms and cart filters are not encoded in the URL; unresolved checkouts keep their existing recovery storage.
+
+### Production deployment gate
+
+GitHub Actions runs `npm run validate` on every push to `main`, every pull request, and manual dispatch, using an isolated PostgreSQL 17 service. This checks syntax, builds the app, and runs every test. Railway's production trigger has **Wait for CI** enabled. No workflow paths or concurrency cancellation can skip the required run.
+
+Railway also enforces the gate independently: `npm run build:deploy` must succeed while building, and `npm run test:deploy` runs before the new release starts. The pre-deploy gate requires a database connection, verifies the built HTML exists, and rejects failed, skipped, cancelled, pending, or missing test results. A failure leaves the existing healthy release serving traffic. This protects manual redeploys as well as GitHub deployments.
+
+The test runner strips live payment, staff-session, Railway, and application database settings from its child process. Only `TEST_DATABASE_URL` reaches the PostgreSQL integration test, which creates and removes a fresh isolated schema. When running in Railway's private network, the pre-deploy gate takes this test connection from `DATABASE_URL`; business tables are untouched. For local validation set `TEST_DATABASE_URL` (and `PGSSLMODE=disable` for a local non-TLS database) before running `npm run validate`. Plain `npm test` remains available for local unit tests, where PostgreSQL integration may be skipped; production gating never allows skips.
+
 ### Daily totals, checkout recovery, and live stock
 
 The bootstrap snapshot includes `dailySummary`, aggregated over the whole business day in `BAKERY_TIME_ZONE` (default `America/Santiago`). Its transaction count includes paid and fully refunded sales; revenue subtracts refunds processed that day, including refunds for older sales. The recent-history list remains limited to 50 records and does not determine daily totals.

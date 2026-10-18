@@ -1,7 +1,8 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, BarChart3, Boxes, CalendarClock, Check, ChevronRight, CirclePlus, Clock3, Croissant, History, LayoutDashboard, LineChart, LockKeyhole, LogOut, Menu, Minus, Moon, PanelLeftClose, PackageOpen, Pencil, Plus, ReceiptText, Search, ShoppingBasket, Settings, SlidersHorizontal, Sparkles, Sun, Trash2, Undo2, Wifi, X } from 'lucide-react'
 import { api } from './api.js'
 import { watchUpdates } from './liveUpdates.js'
+import { createRouter, isPlainNavigation, parseRoute, sectionHref } from './routes.js'
 import { dateOnly, parseCalendarDate } from './dates.js'
 import { useI18n } from './i18n.js'
 import { categories, CategoryIcon, categoryClass, formatQuantity, Modal } from './ui.jsx'
@@ -13,6 +14,7 @@ const MetricsPage = lazy(() => import('./MetricsPage.jsx'))
 const CashCloseForm = lazy(() => import('./MetricsPage.jsx').then(module => ({ default: module.CashCloseForm })))
 const MercadoPagoSettings = lazy(() => import('./MercadoPagoSettings.jsx'))
 const noop = () => {}
+const router = createRouter(window)
 
 function daysUntil(dateValue) {
   const target = parseCalendarDate(dateValue)
@@ -289,13 +291,17 @@ function Activity({ movements }) {
 
 export default function App() {
   const { t, formatDate, language } = useI18n()
-  const [page, setPage] = useState('dashboard')
+  const routeUrl = useSyncExternalStore(router.subscribe, router.getSnapshot)
+  const route = useMemo(() => parseRoute(routeUrl), [routeUrl])
+  const page = route.page
+  const setPage = page => router.navigate(sectionHref(page))
   const [items, setItems] = useState([])
   const [movements, setMovements] = useState([])
   const [sales, setSales] = useState([])
   const [dailySummary, setDailySummary] = useState(null)
   const [metricsData, setMetricsData] = useState(null)
-  const [metricsRange, setMetricsRange] = useState('today')
+  const metricsRange = route.metricsRange
+  const setMetricsRange = range => router.navigate(sectionHref('metrics', { range }))
   const [metricsLoading, setMetricsLoading] = useState(false)
   const [exportingReport, setExportingReport] = useState(false)
   const [posConfig, setPosConfig] = useState({ configured: false, mockMode: false, terminalLabel: '' })
@@ -310,6 +316,8 @@ export default function App() {
   const brandLogoRef = useRef(null)
   const refreshSequence = useRef(0)
   const metricsRequest = useRef(null)
+  useEffect(() => { if (route.canonical) router.navigate(route.canonical, { replace: true }) }, [route.canonical])
+  useEffect(() => { setModal(null); setMobileMenu(false) }, [routeUrl])
   const pendingInventoryReview = useMemo(() => {
     for (const sale of sales) {
       const refund = sale.refunds?.find((entry) => entry.status === 'processed' && entry.inventoryReviewStatus === 'pending')
@@ -442,7 +450,11 @@ export default function App() {
     { id: 'activity', label: t('activity'), icon: History },
     { id: 'settings', label: t('settings'), icon: Settings },
   ]
-  const pageTitle = nav.find((entry) => entry.id === page)?.label
+  const pageTitle = nav.find((entry) => entry.id === page)?.label || t('sectionNotFound')
+  useEffect(() => { document.title = `${pageTitle} · Bakery POS` }, [pageTitle])
+  const followSection = (event, href) => {
+    if (isPlainNavigation(event)) { event.preventDefault(); router.navigate(href); setMobileMenu(false) }
+  }
 
   if (loading && !auth) return <div className="loading full"><div className="loader-mark"><Croissant size={28} /></div><span>{t('preparing')}</span></div>
   if (auth?.required && !auth.authenticated) return <LoginScreen onLogin={handleLogin} theme={theme} onThemeToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} />
@@ -450,7 +462,7 @@ export default function App() {
   return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${page === 'pos' ? 'is-caja' : ''}`}>
     <aside className={`sidebar ${mobileMenu ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
       <div className="brand"><button ref={brandLogoRef} className="brand-logo" onClick={toggleSidebar} aria-expanded={!sidebarCollapsed} aria-label={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')} title={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')}><span className="brand-mark"><Croissant size={24} /></span></button><span className="brand-copy"><strong>Bakery POS</strong><span>{t('brandSubtitle')}</span></span><button className="sidebar-toggle" onClick={toggleSidebar} aria-label={t('collapseSidebar')} title={t('collapseSidebar')}><PanelLeftClose size={17} /></button></div>
-      <nav>{nav.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? 'active' : ''} title={sidebarCollapsed ? label : undefined} onClick={() => { setPage(id); setMobileMenu(false) }}><Icon size={20} /><span className="nav-label">{label}</span>{page === id && <i />}</button>)}</nav>
+      <nav>{nav.map(({ id, label, icon: Icon }) => <a key={id} href={sectionHref(id)} aria-current={page === id ? 'page' : undefined} className={page === id ? 'active' : ''} title={sidebarCollapsed ? label : undefined} onClick={event => followSection(event, sectionHref(id))}><Icon size={20} /><span className="nav-label">{label}</span>{page === id && <i />}</a>)}</nav>
       <div className="sidebar-footer"><ThemeToggle theme={theme} onToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} />{auth?.required && <button onClick={handleLogout} aria-label={t('signOut')}><LogOut size={15} /></button>}</div>
     </aside>
     {mobileMenu && <button className="menu-backdrop" onClick={() => setMobileMenu(false)} aria-label={t('close')} />}
@@ -458,14 +470,15 @@ export default function App() {
       <header className="topbar"><button className="icon-button menu-button" onClick={() => setMobileMenu(true)} aria-label={t('openMenu')}><Menu size={21} /></button><div className="topbar-context"><span>Bakery POS</span><strong>{pageTitle}</strong></div>{page === 'pos' && <button className={`terminal-chip topbar-terminal ${posConfig.configured ? 'ready' : ''}`} onClick={checkPoint} disabled={!posConfig.configured} aria-label={t('pointStatus')} title={posConfig.configured ? t('pointStatus') : t('pointOffline')}><Wifi size={15} /><span className="terminal-dot" /><span className="topbar-terminal-copy"><strong>{posConfig.mockMode ? t('pointDemoMode') : posConfig.configured ? `Point · ${posConfig.terminalLabel}` : t('pointOffline')}</strong><small>{posConfig.mockMode ? t('pointDemoMode') : posConfig.configured ? t('pointStatusReady') : t('pointOffline')}</small></span></button>}<span className="topbar-spacer" /><ThemeToggle theme={theme} onToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} /><LanguageToggle />{['dashboard', 'inventory'].includes(page) && <button className="button primary mobile-add" onClick={() => setModal({ type: 'add' })}><Plus size={20} /><span>{t('add')}</span></button>}<div className="date-chip"><Clock3 size={17} /><span>{formatDate(new Date().toISOString().slice(0, 10))}</span></div></header>
       {loading ? <div className="loading"><div className="loader-mark"><Croissant size={28} /></div><span>{t('preparing')}</span></div> : <Suspense fallback={<div className="loading"><span>{t('preparing')}</span></div>}>
         {page === 'dashboard' && <Dashboard items={items} movements={movements} dailySummary={dailySummary} onAdd={() => setModal({ type: 'add' })} onAdjust={(item) => setModal({ type: 'adjust', item })} onGoInventory={() => setPage('inventory')} onGoPos={() => setPage('pos')} />}
-        {page === 'pos' && <SalesCounter items={items} sales={sales} posConfig={posConfig} onRefresh={refresh} setToast={setToast} />}
+        {page === 'pos' && <SalesCounter items={items} sales={sales} posConfig={posConfig} onRefresh={refresh} setToast={setToast} registerView={route.registerView} onRegisterViewChange={view => router.navigate(sectionHref('pos', { view }))} />}
         {page === 'inventory' && <Inventory items={items} onAdd={() => setModal({ type: 'add' })} onAdjust={(item) => setModal({ type: 'adjust', item })} onEdit={(item) => setModal({ type: 'edit', item })} />}
         {page === 'metrics' && <MetricsPage metrics={metricsData} range={metricsRange} onRangeChange={setMetricsRange} onRefresh={() => loadMetrics(metricsRange)} onOpenClose={() => setModal({ type: 'cash-close' })} onExport={exportDailyReport} loading={metricsLoading} exporting={exportingReport} />}
         {page === 'activity' && <Activity movements={movements} />}
         {page === 'settings' && <MercadoPagoSettings setToast={setToast} />}
+        {page === 'not-found' && <section className="page empty-state"><h1>{t('sectionNotFound')}</h1><p>{t('sectionNotFoundDescription')}</p><a className="button primary" href={sectionHref('dashboard')} onClick={event => followSection(event, sectionHref('dashboard'))}>{t('backToOverview')}</a></section>}
       </Suspense>}
     </main>
-    <nav className="bottom-nav">{nav.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? 'active' : ''} onClick={() => setPage(id)}><Icon size={20} /><span>{label}</span></button>)}</nav>
+    <nav className="bottom-nav">{nav.map(({ id, label, icon: Icon }) => <a key={id} href={sectionHref(id)} aria-current={page === id ? 'page' : undefined} className={page === id ? 'active' : ''} onClick={event => followSection(event, sectionHref(id))}><Icon size={20} /><span>{label}</span></a>)}</nav>
     {modal?.type === 'add' && <Modal title={t('addProduct')} eyebrow={t('inventorySetup')} onClose={() => setModal(null)}><ProductForm onSubmit={addItem} onClose={() => setModal(null)} busy={busy} theme={theme} /></Modal>}
     {modal?.type === 'edit' && <Modal title={modal.item.name} eyebrow={t('productDetails')} onClose={() => setModal(null)}><ProductForm item={modal.item} onSubmit={(form) => editItem(modal.item, form)} onDelete={() => deleteItem(modal.item)} onClose={() => setModal(null)} busy={busy} theme={theme} /></Modal>}
     {modal?.type === 'adjust' && <Modal title={modal.item.name} eyebrow={t('updateStock')} onClose={() => setModal(null)}><AdjustForm item={modal.item} onSubmit={(form) => adjustItem(modal.item, form)} onClose={() => setModal(null)} busy={busy} /></Modal>}

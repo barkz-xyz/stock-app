@@ -32,7 +32,7 @@ button, input, select { font: inherit; }
 button { color: inherit; }
 button, a, input, select { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
-button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid rgba(109, 69, 53, .2); outline-offset: 2px; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid rgba(109, 69, 53, .2); outline-offset: 2px; }
 h1, h2, h3, p { margin-top: 0; }
 
 .app-shell { --sidebar-width: 210px; --sidebar-collapsed-width: 76px; --sidebar-motion: .34s cubic-bezier(.22,.8,.2,1); min-height: 100vh; }
@@ -53,15 +53,15 @@ h1, h2, h3, p { margin-top: 0; }
 .sidebar.collapsed .brand-copy { width: 0; max-width: 0; opacity: 0; transform: translateX(-6px); }
 .sidebar.collapsed .sidebar-toggle { width: 0; margin: 0; overflow: hidden; opacity: 0; pointer-events: none; }
 .sidebar nav { display: grid; gap: 6px; }
-.sidebar nav button { position: relative; display: flex; width: 100%; min-height: 48px; align-items: center; gap: 12px; padding: 0 13px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); text-align: left; transition: width var(--sidebar-motion), margin var(--sidebar-motion), padding var(--sidebar-motion), background .2s ease, color .2s ease, transform .2s ease; }
-.sidebar nav button:hover { background: #f5efe9; color: var(--ink); }
-.sidebar nav button:active { transform: scale(.985); }
-.sidebar nav button.active { background: var(--cocoa-soft); color: var(--cocoa-dark); font-weight: 700; }
-.sidebar nav button i { position: absolute; right: 10px; width: 5px; height: 5px; border-radius: 50%; background: var(--cocoa); transition: right var(--sidebar-motion), opacity .18s ease; }
+.sidebar nav :is(button, a) { position: relative; display: flex; width: 100%; min-height: 48px; align-items: center; gap: 12px; padding: 0 13px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); text-align: left; transition: width var(--sidebar-motion), margin var(--sidebar-motion), padding var(--sidebar-motion), background .2s ease, color .2s ease, transform .2s ease; }
+.sidebar nav :is(button, a):hover { background: #f5efe9; color: var(--ink); }
+.sidebar nav :is(button, a):active { transform: scale(.985); }
+.sidebar nav :is(button, a).active { background: var(--cocoa-soft); color: var(--cocoa-dark); font-weight: 700; }
+.sidebar nav :is(button, a) i { position: absolute; right: 10px; width: 5px; height: 5px; border-radius: 50%; background: var(--cocoa); transition: right var(--sidebar-motion), opacity .18s ease; }
 .nav-label { max-width: 110px; overflow: hidden; opacity: 1; transform: translateX(0); white-space: nowrap; transition: max-width var(--sidebar-motion), opacity .18s ease, transform var(--sidebar-motion); }
 .sidebar.collapsed .nav-label { max-width: 0; opacity: 0; transform: translateX(-6px); }
-.sidebar.collapsed nav button { width: 48px; justify-content: center; padding-inline: 0; margin-inline: auto; }
-.sidebar.collapsed nav button i { right: 2px; }
+.sidebar.collapsed nav :is(button, a) { width: 48px; justify-content: center; padding-inline: 0; margin-inline: auto; }
+.sidebar.collapsed nav :is(button, a) i { right: 2px; }
 .sidebar-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: auto; padding: 18px 5px 0; color: var(--muted); font-size: 11px; }
 .sidebar.collapsed .sidebar-footer { justify-content: center; padding-inline: 0; }
 .sidebar-footer button { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 9px; background: transparent; color: var(--muted); }
@@ -614,8 +614,8 @@ body:has(.is-caja) { overflow: hidden; padding-bottom: 0; }
   .sidebar.collapsed .brand-copy { width: 85px; max-width: 85px; opacity: 1; transform: none; }
   .sidebar.collapsed .sidebar-toggle { width: 30px; margin: 6px 0 0 auto; overflow: visible; opacity: 1; pointer-events: auto; }
   .sidebar.collapsed .nav-label { max-width: 110px; opacity: 1; transform: none; }
-  .sidebar.collapsed nav button { width: 100%; justify-content: flex-start; padding-inline: 13px; margin-inline: 0; }
-  .sidebar.collapsed nav button i { right: 10px; }
+  .sidebar.collapsed nav :is(button, a) { width: 100%; justify-content: flex-start; padding-inline: 13px; margin-inline: 0; }
+  .sidebar.collapsed nav :is(button, a) i { right: 10px; }
   .sidebar.collapsed .sidebar-footer { justify-content: flex-end; padding-inline: 5px; }
   .sidebar.collapsed .sidebar-footer button { margin-left: auto; }
   .menu-backdrop { position: fixed; inset: 0; z-index: 25; display: block; border: 0; background: rgba(40,31,25,.35); backdrop-filter: blur(3px); }
@@ -674,9 +674,9 @@ body:has(.is-caja) { overflow: hidden; padding-bottom: 0; }
   .row-actions .button { position: static; min-width: 106px; min-height: 41px; }
   .row-actions .icon-button { display: grid; }
   .bottom-nav { position: fixed; right: 0; bottom: 0; left: 0; z-index: 40; display: grid; height: calc(66px + env(safe-area-inset-bottom)); grid-template-columns: repeat(4, 1fr); padding: 6px 10px env(safe-area-inset-bottom); border-top: 1px solid var(--line); background: rgba(255,253,249,.95); box-shadow: 0 -8px 25px rgba(47,35,27,.06); backdrop-filter: blur(18px); }
-  .bottom-nav button { position: relative; display: flex; min-height: 54px; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); font-size: 9px; font-weight: 650; }
-  .bottom-nav button.active { color: var(--cocoa); }
-  .bottom-nav button.active::before { position: absolute; top: 3px; width: 26px; height: 3px; border-radius: 99px; background: var(--cocoa); content: ''; }
+  .bottom-nav :is(button, a) { position: relative; display: flex; min-height: 54px; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); font-size: 9px; font-weight: 650; }
+  .bottom-nav :is(button, a).active { color: var(--cocoa); }
+  .bottom-nav :is(button, a).active::before { position: absolute; top: 3px; width: 26px; height: 3px; border-radius: 99px; background: var(--cocoa); content: ''; }
   .history-card { padding: 4px 12px 16px; }
   .modal-backdrop { align-items: flex-end; padding: 0; }
   .modal { width: 100%; max-height: 92vh; border: 0; border-radius: 23px 23px 0 0; animation-name: sheet-in; }
@@ -944,7 +944,7 @@ body:has(.is-caja) { overflow: hidden; padding-bottom: 0; }
   .topbar > .theme-toggle { display: none; }
   .sidebar-footer .theme-toggle { display: grid; }
   .bottom-nav { grid-template-columns: repeat(6,1fr); padding-inline: 5px; }
-  .bottom-nav button { font-size: 8px; }
+  .bottom-nav :is(button, a) { font-size: 8px; }
   .analytics-heading { display: grid; gap: 17px; }
   .analytics-actions { width: 100%; }
   .analytics-actions { flex-wrap: wrap; }
@@ -994,7 +994,7 @@ body:has(.is-caja) { overflow: hidden; padding-bottom: 0; }
 /* Soft pastel light theme */
 html[data-theme='light'] .sidebar { border-color: #d9cabc; background: rgba(255,249,243,.94); }
 html[data-theme='light'] .topbar { border-color: rgba(206,188,173,.78); background: rgba(242,235,228,.88); }
-html[data-theme='light'] .sidebar nav button:hover { background: #f2e7dc; }
+html[data-theme='light'] .sidebar nav :is(button, a):hover { background: #f2e7dc; }
 html[data-theme='light'] :is(.card,.inventory-row,.cart-panel,.sale-product,.modal,.app-error-card) { border-color: #ddcfc2; background: rgba(255,250,245,.96); }
 html[data-theme='light'] .card-header { background: rgba(250,238,228,.48); }
 html[data-theme='light'] .analytics-kpis article:nth-child(1) { background: linear-gradient(145deg,#fff8f1,#f5e2d7); }
@@ -1040,7 +1040,7 @@ html[data-theme='dark'] .language-toggle { background: rgba(53,54,56,.9); }
 html[data-theme='dark'] :is(.card,.metric-card,.analytics-kpis article,.range-switch,.operations-strip,.cash-close-card,.inventory-row,.cart-panel,.sale-product,.modal,.app-error-card) { background: var(--surface); }
 html[data-theme='dark'] :is(.button.secondary,.button.compact,.icon-button,.terminal-chip,.payment-options > button,.quantity-stepper button,.payment-reference,.field input,.field select,.field textarea,.pin-input,.toast) { border-color: var(--line); background: var(--surface-strong); color: var(--ink); }
 html[data-theme='dark'] :is(.button.secondary,.button.compact,.icon-button):hover:not(:disabled) { background: #3d3e40; }
-html[data-theme='dark'] :is(.sidebar nav button:hover,.attention-list > button:hover,.inventory-row:hover,.sales-list > button:not(:disabled):hover) { background: #373638; }
+html[data-theme='dark'] :is(.sidebar nav :is(button, a):hover,.attention-list > button:hover,.inventory-row:hover,.sales-list > button:not(:disabled):hover) { background: #373638; }
 html[data-theme='dark'] :is(.inventory-head,.cart-panel > footer,.checkout-total,.success-total,.current-balance,.sellable-panel) { background: #323234; }
 html[data-theme='dark'] :is(.search-box,.filter-scroll button,.segmented) { border-color: var(--line); background: #323234; }
 html[data-theme='dark'] .stock-only-toggle { border-color: var(--line); background: #323234; }
@@ -1108,3 +1108,5 @@ html[data-theme='dark'] .product-glyph.category-other { color: #b7a5ca; backgrou
   .inventory-decision-actions { flex-direction: column-reverse; }
   .inventory-decision-actions .button { width: 100%; }
 }
+
+.sidebar nav a, .bottom-nav a, a.button { text-decoration: none; }

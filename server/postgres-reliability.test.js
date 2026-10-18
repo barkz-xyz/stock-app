@@ -68,7 +68,7 @@ test('PostgreSQL serializes checkout retries and aggregates the full business da
     process.env.DATABASE_URL = previousUrl || ''
     await store?.closeStore()
     // schema is generated above with only a constant prefix and UUID hex characters.
-    await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).catch(() => {})
+    await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
     await admin.end()
   }
 })

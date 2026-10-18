@@ -221,9 +221,9 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
   </Modal>
 }
 
-export default function SalesCounter({ items, sales, posConfig, onRefresh, setToast }) {
+export default function SalesCounter({ items, sales, posConfig, onRefresh, setToast, registerView = 'cart', onRegisterViewChange }) {
   const { t, categoryLabel, unitLabel, formatCurrency } = useI18n()
-  const [registerView, setRegisterView] = useState('cart')
+  const setRegisterView = onRegisterViewChange
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('All')
   const [inStockOnly, setInStockOnly] = useState(true)

@@ -80,7 +80,7 @@ test('HTTP authentication rejects malformed sessions and validates product calen
   const cookie = login.headers.get('set-cookie').split(';')[0]
   const builtHtml = await fs.readFile(path.join('dist', 'index.html'), 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null })
   await t.test('built HTML shell is shared safely while versioned assets remain immutable', { skip: !builtHtml }, async () => {
-    for (const route of ['/', '/index.html']) {
+    for (const route of ['/', '/index.html', '/resumen', '/caja', '/caja/historial', '/inventario', '/metricas?periodo=30d', '/actividad', '/configuracion']) {
       const anonymous = await request(route)
       const authenticated = await request(route, { headers: { Cookie: cookie } })
       assert.equal(anonymous.status, 200)

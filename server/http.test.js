@@ -77,7 +77,13 @@ test('HTTP authentication rejects malformed sessions and validates product calen
   const login = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '7351' }) })
   assert.equal(login.status, 200)
   assertPrivate(login)
-  const cookie = login.headers.get('set-cookie').split(';')[0]
+  let cookie = login.headers.get('set-cookie').split(';')[0]
+  assert.equal((await login.json()).user.mustChangePassword,true)
+  assert.equal((await request('/api/items',{headers:{Cookie:cookie}})).status,403)
+  const rotated=await request('/api/auth/password',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({currentPassword:'7351',password:'HTTP-Admin-1234'})})
+  assert.equal(rotated.status,200);cookie=rotated.headers.get('set-cookie').split(';')[0]
+  const shift=await request('/api/register-sessions',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({openingCash:0})})
+  assert.equal(shift.status,200)
   const builtHtml = await fs.readFile(path.join('dist', 'index.html'), 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null })
   await t.test('built HTML shell is shared safely while versioned assets remain immutable', { skip: !builtHtml }, async () => {
     for (const route of ['/', '/index.html', '/resumen', '/caja', '/caja/historial', '/caja/cierre?fecha=2026-10-17', '/inventario', '/metricas?periodo=30d', '/actividad', '/configuracion']) {
@@ -190,7 +196,7 @@ test('HTTP authentication rejects malformed sessions and validates product calen
     const post = (quantity, method = 'cash') => request(`/api/sales/${method}`, { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: JSON.stringify({ items: [{ itemId: created.id, quantity }] }) })
     const replies = await Promise.all(Array.from({ length: 8 }, () => post(2)))
     assert.equal(replies.filter(reply => reply.status === 201).length, 1)
-    assert.equal(replies.filter(reply => reply.status === 200).length, 7)
+    assert.equal(replies.filter(reply => reply.status === 200).length, 7, JSON.stringify(replies.map(r=>r.status)))
     const sales = await Promise.all(replies.map(reply => reply.json()))
     assert.equal(new Set(sales.map(sale => sale.id)).size, 1)
     assert.ok(sales.every(sale => sale.checkoutKey === key))
@@ -227,6 +233,47 @@ test('HTTP authentication rejects malformed sessions and validates product calen
     assertPrivate(history); assert.equal(history.headers.get('cache-control'), 'private, no-store')
     const result = await history.json()
     assert.equal(result.total, 1); assert.equal(result.sales[0].cashReceived, 5000)
+  })
+  await t.test('cashiers can only operate their own register session and admins retain full control',async()=>{
+    const adminHeaders={Cookie:cookie,'Content-Type':'application/json'}
+    const make=async(username,name)=>{
+      const created=await request('/api/users',{method:'POST',headers:adminHeaders,body:JSON.stringify({username,name,role:'cashier',password:'Temp-User-1234'})});assert.equal(created.status,201);const user=await created.json()
+      const signed=await request('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password:'Temp-User-1234',role:'admin'})});assert.equal(signed.status,200)
+      let Cookie=signed.headers.get('set-cookie').split(';')[0];assert.equal((await signed.json()).user.role,'cashier')
+      assert.equal((await request('/api/items',{headers:{Cookie}})).status,403)
+      const changed=await request('/api/auth/password',{method:'POST',headers:{Cookie,'Content-Type':'application/json'},body:JSON.stringify({currentPassword:'Temp-User-1234',password:'Personal-User-1234'})});assert.equal(changed.status,200);Cookie=changed.headers.get('set-cookie').split(';')[0]
+      const headers={Cookie,'Content-Type':'application/json'}
+      const session=await(await request('/api/register-sessions',{method:'POST',headers,body:JSON.stringify({openingCash:10000})})).json()
+      return {user,headers,session}
+    }
+    const a=await make('caja.a','Caja A'),b=await make('caja.b','Caja B')
+    for(const path of ['/api/users','/api/metrics','/api/movements','/api/cash-closures','/api/reports/daily','/api/pos/management'])assert.equal((await request(path,{headers:a.headers})).status,403,path)
+    for(const path of ['/api/items','/api/inventory/batch',`/api/sales/${pendingId}/refunds`])assert.equal((await request(path,{method:'POST',headers:a.headers,body:'{}'})).status,403,path)
+    const product=await(await request('/api/items',{method:'POST',headers:adminHeaders,body:JSON.stringify({name:'Session test',category:'Bread',unit:'pieces',quantity:20,price:2000,sellable:true})})).json()
+    const sale=async(account,quantity,key)=>request('/api/sales/cash',{method:'POST',headers:{...account.headers,'Idempotency-Key':key},body:JSON.stringify({items:[{itemId:product.id,quantity}],cashReceived:5000,cashierId:b.user.id,registerSessionId:b.session.id})})
+    const keyA=crypto.randomUUID(),keyB=crypto.randomUUID()
+    const saleA=await(await sale(a,1,keyA)).json(),saleB=await(await sale(b,2,keyB)).json()
+    assert.equal(saleA.cashierId,a.user.id);assert.equal(saleA.registerSessionId,a.session.id)
+    const bootstrap=await(await request('/api/bootstrap',{headers:a.headers})).json()
+    assert.ok(bootstrap.sales.every(s=>s.cashierId===a.user.id));assert.equal(bootstrap.movements.length,0);assert.equal(bootstrap.dailySummary,null)
+    assert.ok(bootstrap.registerSessions.every(s=>s.userId===a.user.id))
+    const history=await(await request(`/api/sales/history?userId=${b.user.id}`,{headers:a.headers})).json();assert.equal(history.total,1);assert.equal(history.sales[0].id,saleA.id)
+    for(const path of [`/api/sales/${saleB.id}`,`/api/checkouts/${keyB}`,`/api/register-sessions/${b.session.id}/closure`,`/api/register-sessions/${b.session.id}/closure/pdf?revision=1`])assert.equal((await request(path,{headers:a.headers})).status,404,path)
+    const workspace=await(await request(`/api/register-sessions/${a.session.id}/closure`,{headers:a.headers})).json()
+    assert.equal(workspace.live.cash.net,2000)
+    const closeBody={businessDate:workspace.live.businessDate,openingCash:999999,cashIn:0,cashOut:0,countedCash:12000,countedCard:0,operator:'Spoof',expectedRevision:0,fingerprint:workspace.live.fingerprint}
+    const closed=await request(`/api/register-sessions/${a.session.id}/closure`,{method:'POST',headers:a.headers,body:JSON.stringify(closeBody)});assert.equal(closed.status,200)
+    const closure=await closed.json();assert.equal(closure.openingCash,10000);assert.equal(closure.operator,'Caja A');assert.equal(closure.totalSales,2000);assert.equal(closure.difference,0)
+    assert.equal((await sale(a,1,crypto.randomUUID())).status,409)
+    assert.equal((await sale(a,1,keyA)).status,200)
+    assert.equal((await request(`/api/register-sessions/${a.session.id}/closure`,{method:'POST',headers:a.headers,body:JSON.stringify(closeBody)})).status,409)
+    const pdf=await request(`/api/register-sessions/${a.session.id}/closure/pdf?revision=1`,{headers:a.headers});assert.equal(pdf.status,200);assertPrivate(pdf);assert.ok((await pdf.arrayBuffer()).byteLength<20000)
+    const users=await(await request('/api/users',{headers:adminHeaders})).json();assert.ok(users.every(u=>!('passwordHash'in u)&&!('password_hash'in u)))
+    const admin=users.find(u=>u.role==='admin')
+    assert.equal((await request('/api/users/'+admin.id,{method:'PATCH',headers:adminHeaders,body:JSON.stringify({...admin,role:'cashier'})})).status,409)
+    assert.equal((await request('/api/users/'+a.user.id,{method:'PATCH',headers:adminHeaders,body:JSON.stringify({...a.user,active:false})})).status,200)
+    assert.equal((await request('/api/items',{headers:a.headers})).status,401)
+    assert.equal((await request('/api/auth/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'second-admin',name:'Second',password:'No-Second-1234'})})).status,409)
   })
   for (let attempt = 0; attempt < 9; attempt++) {
     const response = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': `192.0.2.${attempt}` }, body: JSON.stringify({ pin: 'wrong' }) })

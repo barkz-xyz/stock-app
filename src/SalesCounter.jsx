@@ -92,7 +92,7 @@ function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelS
   </Modal>
 }
 
-function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefundCopy, onCreditNote, onReconcilePoint, onResolveInventory, busy }) {
+function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefundCopy, onCreditNote, onReconcilePoint, onResolveInventory, busy, canManage }) {
   const { t, formatCurrency, formatTime, unitLabel } = useI18n()
   const [view, setView] = useState('details')
   const [quantities, setQuantities] = useState({})
@@ -163,7 +163,7 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
       <div className="sale-detail-meta"><span className={`sale-status ${state.tone}`}>{state.label}</span><span>{sale.paymentMethod === 'card' ? t('card') : t('cash')} · {formatTime(sale.createdAt)}</span></div>
       {sale.cashReceived != null && <div className="cash-result"><span>{t('receivedCash')}<b>{formatCurrency(sale.cashReceived)}</b></span><span>{t('cashChange')}<b>{formatCurrency(sale.cashChange)}</b></span></div>}
       {sale.paymentMethod === 'card' && <section className="point-payment-details">
-        <header><div><CreditCard size={17} /><strong>{t('pointPaymentDetails')}</strong></div><button type="button" className="button compact" onClick={() => onReconcilePoint().catch(() => {})} disabled={busy}><RotateCw size={15} />{t('syncPoint')}</button></header>
+        <header><div><CreditCard size={17} /><strong>{t('pointPaymentDetails')}</strong></div>{canManage&&<button type="button" className="button compact" onClick={() => onReconcilePoint().catch(() => {})} disabled={busy}><RotateCw size={15} />{t('syncPoint')}</button>}</header>
         <div className="point-payment-grid">
           <div><span>{t('operationNumber')}</span><strong>{sale.mpOperationId || t('pendingData')}</strong></div>
           <div><span>{t('paymentCard')}</span><strong>{sale.mpCardBrand ? `${sale.mpCardBrand.toUpperCase()}${sale.mpCardLastFour ? ` ···· ${sale.mpCardLastFour}` : ''}` : t('pendingData')}</strong></div>
@@ -175,7 +175,7 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
       <div className="sale-detail-lines">
         {sale.items.map((line) => <div key={line.lineId}><div><strong>{line.name}</strong><span>{formatQuantity(line.quantity)} {unitLabel(line.unit)} · {formatCurrency(line.unitPrice)}</span></div><b>{formatCurrency(line.lineTotal)}</b></div>)}
       </div>
-      {sale.refunds?.length > 0 && <section className="refund-history"><div className="section-label"><span>{t('refundHistory')}</span></div>{sale.refunds.map((refund) => <article key={refund.id}>
+      {canManage && sale.refunds?.length > 0 && <section className="refund-history"><div className="section-label"><span>{t('refundHistory')}</span></div>{sale.refunds.map((refund) => <article key={refund.id}>
         <div className={`refund-icon ${refund.status}`}><Undo2 size={17} /></div>
         <div><strong>{formatCurrency(refund.amount)}</strong><span>{refund.status === 'processed' ? t('refundCompleted') : refund.status === 'pending' ? t('refundPending') : t('refundFailed')}</span>{refund.reason && <small>{refund.reason}</small>}</div>
         <div className="refund-actions">
@@ -186,7 +186,7 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
           {refund.creditNote?.status === 'issued' && <span className="credit-note-state issued"><FileCheck2 size={15} />{t('creditNoteIssued')} · N° {refund.creditNote.folio}</span>}
         </div>
       </article>)}</section>}
-      <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>{t('close')}</button><button type="button" className="button primary" onClick={openRefund} disabled={busy || sale.status !== 'paid' || sale.refundableTotal <= 0}><Undo2 size={18} />{sale.refundableTotal > 0 ? t('refundSale') : t('noRefundableProducts')}</button></div>
+      <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>{t('close')}</button>{canManage&&<button type="button" className="button primary" onClick={openRefund} disabled={busy || sale.status !== 'paid' || sale.refundableTotal <= 0}><Undo2 size={18} />{sale.refundableTotal > 0 ? t('refundSale') : t('noRefundableProducts')}</button>}</div>
     </div>}
 
     {view === 'refund' && <form className="refund-form" onSubmit={submitRefund}>
@@ -218,7 +218,7 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
   </Modal>
 }
 
-function SalesHistory({ refreshToken, onResume, onSelect }) {
+function SalesHistory({ refreshToken, onResume, onSelect, showOperator }) {
   const { t, formatCurrency, language } = useI18n()
   const dateFormat = new Intl.DateTimeFormat(language === 'es' ? 'es-CL' : 'en-US', { timeZone: 'America/Santiago', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   const [filters, setFilters] = useState({ search: '', from: '', to: '', method: '', status: '' }), [offset, setOffset] = useState(0)
@@ -249,7 +249,7 @@ function SalesHistory({ refreshToken, onResume, onSelect }) {
         const state = sale.status === 'paid' && sale.refundedTotal > 0 ? { label: t('salePartiallyRefunded'), tone: 'warning' } : saleState(sale.status, t)
         const interactive = ['paid','pending','refunded'].includes(sale.status)
         return <button className="ledger-row" key={sale.id} disabled={!interactive || loading} onClick={() => sale.status === 'pending' ? onResume(sale) : onSelect(sale)} aria-label={`${t('openSaleDetails')} #${sale.shortId}`}>
-          <span className="ledger-reference"><strong>#{sale.shortId}</strong><small>{dateFormat.format(new Date(sale.createdAt))}</small></span><span className="ledger-method">{sale.paymentMethod === 'card' ? <CreditCard size={16} /> : <Banknote size={16} />}{t(sale.paymentMethod === 'card' ? 'card' : 'cash')}</span><span className={`sale-status ${state.tone}`}>{state.label}</span><strong className="ledger-amount">{formatCurrency(sale.total)}<ChevronRight size={15} /></strong>
+          <span className="ledger-reference"><strong>#{sale.shortId}</strong><small>{dateFormat.format(new Date(sale.createdAt))}{showOperator&&` · ${sale.cashierName||(language==='es'?'Sin asignar':'Unassigned')}`}</small></span><span className="ledger-method">{sale.paymentMethod === 'card' ? <CreditCard size={16} /> : <Banknote size={16} />}{t(sale.paymentMethod === 'card' ? 'card' : 'cash')}</span><span className={`sale-status ${state.tone}`}>{state.label}</span><strong className="ledger-amount">{formatCurrency(sale.total)}<ChevronRight size={15} /></strong>
         </button>
       })}
       {data && !data.sales.length && <div className="sales-empty"><Search size={23} /><span>{t('noMatchingSales')}</span></div>}
@@ -258,8 +258,10 @@ function SalesHistory({ refreshToken, onResume, onSelect }) {
   </section>
 }
 
-export default function SalesCounter({ items, sales, posConfig, onRefresh, setToast, onNavigate, registerView = 'cart', onRegisterViewChange, serverAvailable = true }) {
-  const { t, categoryLabel, unitLabel, formatCurrency } = useI18n()
+export default function SalesCounter({ items, sales, posConfig, onRefresh, setToast, onNavigate, registerView = 'cart', onRegisterViewChange, serverAvailable = true, user, registerSession, onOpenRegister }) {
+  const { t, categoryLabel, unitLabel, formatCurrency, language } = useI18n()
+  const tx=(es,en)=>language==='es'?es:en
+  const [openingCash,setOpeningCash]=useState(''),[opening,setOpening]=useState(false),[openError,setOpenError]=useState('')
   const setRegisterView = onRegisterViewChange
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('All')
@@ -487,13 +489,15 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
 
   return <div className="page pos-page enter">
     <CajaHeader onNavigate={onNavigate} />
+    {registerSession&&<div className="register-session-strip"><span><strong>{registerSession.operator}</strong> · #{registerSession.id.replaceAll('-','').slice(0,8).toUpperCase()} · {tx('Fondo','Opening')} {formatCurrency(registerSession.openingCash)}</span><button className="text-button" onClick={()=>onNavigate('/caja/cierre?sesion='+registerSession.id)}>{tx('Cerrar caja','Close register')}<ChevronRight size={15}/></button></div>}
     <section className="register-subnav">
       <div className="register-tabs" role="tablist" aria-label={t('registerSections')} onKeyDown={handleRegisterTabKey}>
         <button type="button" id="caja-cart-tab" role="tab" aria-selected={registerView === 'cart'} aria-controls="caja-cart-panel" tabIndex={registerView === 'cart' ? 0 : -1} onClick={() => setRegisterView('cart')}><ShoppingBasket size={16} />{t('cart')}</button>
         <button type="button" id="caja-history-tab" role="tab" aria-selected={registerView === 'history'} aria-controls="caja-history-panel" tabIndex={registerView === 'history' ? 0 : -1} onClick={() => setRegisterView('history')}><History size={16} />{t('registerHistory')}</button>
       </div>
     </section>
-    {registerView === 'cart' ? <section className="pos-layout" id="caja-cart-panel" role="tabpanel" aria-labelledby="caja-cart-tab">
+    {registerView==='cart'&&!registerSession&&!attempt&&<form className="card open-register" onSubmit={async e=>{e.preventDefault();setOpening(true);setOpenError('');try{await onOpenRegister(Number(openingCash));setOpeningCash('')}catch(e){setOpenError(e.message)}finally{setOpening(false)}}}><Banknote size={26}/><h2>{tx('Abrir sesión de caja','Open register session')}</h2><label className="field"><span>{tx('Fondo inicial · CLP','Opening cash · CLP')}</span><div className="money-input"><span>$</span><input type="number" inputMode="numeric" min="0" max="100000000000" step="1" required value={openingCash} onChange={e=>setOpeningCash(e.target.value)}/></div></label>{openError&&<div className="inline-error" role="alert">{openError}</div>}<button className="button primary" disabled={opening||!serverAvailable}>{opening?t('saving'):tx('Abrir caja','Open register')}<ArrowRight size={18}/></button></form>}
+    {registerView === 'cart' ? <section className={`pos-layout ${!registerSession&&!attempt?'session-locked':''}`} id="caja-cart-panel" role="tabpanel" aria-labelledby="caja-cart-tab">
       <div className="catalog-panel">
         <div className="toolbar pos-toolbar">
           <div className="catalog-search-row">
@@ -527,10 +531,10 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
         {cartInvalid && !attempt && <div className="inline-error" role="alert"><AlertTriangle size={15} />{t('cartReview')}</div>}
         {cartLines.length ? <div className="cart-lines">{cartLines.map(({ item, quantity }) => <article className={quantity > item.quantity || item.missing ? 'invalid-line' : ''} key={item.id}><div className="cart-line-main"><div><strong>{item.name}</strong><span>{formatCurrency(item.price)} · {unitLabel(item.unit)}{quantity > item.quantity && ` · ${t('available')}: ${formatQuantity(item.quantity)}`}</span></div><b>{formatCurrency(item.price * quantity)}</b></div><div className="quantity-stepper"><button onClick={() => changeQuantity(item, -1)} disabled={Boolean(attempt)} aria-label={`${t('removeOne')}: ${item.name}`}><Minus size={16} /></button><span>{formatQuantity(quantity)}</span><button onClick={() => changeQuantity(item, 1)} disabled={Boolean(attempt) || quantity >= item.quantity} aria-label={`${t('addOne')}: ${item.name}`}><Plus size={16} /></button><button className="remove-line" onClick={() => changeQuantity(item, -quantity)} disabled={Boolean(attempt)} aria-label={`${t('removeFromCart')}: ${item.name}`}><Trash2 size={16} /></button></div></article>)}</div> : <div className="cart-empty"><div><ShoppingBasket size={28} /></div><h3>{t('emptyCart')}</h3></div>}
         </div>
-        <footer><button type="button" className="cart-summary-toggle" onClick={() => setCartExpanded(v => !v)} aria-expanded={cartExpanded} aria-controls="cart-detail" aria-label={t(cartExpanded ? 'hideCart' : 'cartDetails')}><span>{t('productsCount', { count: formatQuantity(count) })}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong>{cartExpanded ? <ChevronDown size={17} /> : <ChevronUp size={17} />}</button><div className="cart-summary"><div><span>{t('total')}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong></div></div><button className="button primary pay-button" disabled={busy || !serverAvailable || (!attempt && (!cartLines.length || cartInvalid))} onClick={() => attempt ? recoverCheckout() : setCheckout({ stage: 'method', total })}>{t(!serverAvailable ? 'serverOffline' : attempt ? 'reviewPendingCheckout' : 'charge')}<ArrowRight size={19} /></button></footer>
+        <footer><button type="button" className="cart-summary-toggle" onClick={() => setCartExpanded(v => !v)} aria-expanded={cartExpanded} aria-controls="cart-detail" aria-label={t(cartExpanded ? 'hideCart' : 'cartDetails')}><span>{t('productsCount', { count: formatQuantity(count) })}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong>{cartExpanded ? <ChevronDown size={17} /> : <ChevronUp size={17} />}</button><div className="cart-summary"><div><span>{t('total')}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong></div></div><button className="button primary pay-button" disabled={busy || !serverAvailable || (!attempt && (!registerSession || !cartLines.length || cartInvalid))} onClick={() => attempt ? recoverCheckout() : setCheckout({ stage: 'method', total })}>{t(!serverAvailable ? 'serverOffline' : attempt ? 'reviewPendingCheckout' : 'charge')}<ArrowRight size={19} /></button></footer>
       </aside>
-    </section> : <SalesHistory refreshToken={sales} onResume={resumeSale} onSelect={setSelectedSale} />}
+    </section> : <SalesHistory showOperator={user?.role==='admin'} refreshToken={sales} onResume={resumeSale} onSelect={setSelectedSale} />}
     {checkout && <CheckoutModal checkout={checkout} posConfig={posConfig} onCash={payCash} onCard={payCard} onRetry={retry} onCancelSale={cancelSale} onClose={() => setCheckout(null)} busy={busy || !serverAvailable} />}
-    {selectedSale && <SaleDetailsModal sale={selectedSale} onClose={() => setSelectedSale(null)} onRefund={refundSale} onRetryRefund={retryRefund} onPrintRefundCopy={printRefundCopy} onCreditNote={recordCreditNote} onReconcilePoint={reconcilePointSale} onResolveInventory={resolveRefundInventory} busy={busy} />}
+    {selectedSale && <SaleDetailsModal canManage={user?.role==='admin'} sale={selectedSale} onClose={() => setSelectedSale(null)} onRefund={refundSale} onRetryRefund={retryRefund} onPrintRefundCopy={printRefundCopy} onCreditNote={recordCreditNote} onReconcilePoint={reconcilePointSale} onResolveInventory={resolveRefundInventory} busy={busy} />}
   </div>
 }

@@ -21,7 +21,7 @@ const backup = {
 try {
   await client.connect()
   await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
-  if ((await client.query("SELECT to_regclass('stock_batches') AS name")).rows[0].name) tables.push('stock_batches')
+  for (const table of ['stock_batches','app_users','register_sessions']) if ((await client.query('SELECT to_regclass($1) AS name',[table])).rows[0].name) tables.push(table)
   for (const table of tables) {
     const { rows } = await client.query(`SELECT * FROM ${table} ORDER BY 1`)
     backup.tables[table] = rows

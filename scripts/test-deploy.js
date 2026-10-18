@@ -8,7 +8,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 export function deploymentTestEnvironment(source) {
   const database = source.TEST_DATABASE_URL || source.DATABASE_URL
   if (!database) throw new Error('Deployment tests require a PostgreSQL test connection; integration tests cannot be skipped.')
-  const env = Object.fromEntries(Object.entries(source).filter(([key]) => !/^(DATABASE_|TEST_DATABASE_URL$|DATA_PATH$|PORT$|STAFF_PIN$|SESSION_SECRET$|MERCADOPAGO_|POINT_|RAILWAY_|PGOPTIONS$|PGSERVICE|PGHOST$|PGPORT$|PGDATABASE$|PGUSER$|PGPASSWORD$)/.test(key)))
+  const env = Object.fromEntries(Object.entries(source).filter(([key]) => !/^(DATABASE_|TEST_DATABASE_URL$|DATA_PATH$|PORT$|STAFF_PIN$|APP_USERNAME$|APP_PASSWORD$|SESSION_SECRET$|MERCADOPAGO_|POINT_|RAILWAY_|PGOPTIONS$|PGSERVICE|PGHOST$|PGPORT$|PGDATABASE$|PGUSER$|PGPASSWORD$)/.test(key)))
   return { ...env, NODE_ENV: 'test', TEST_DATABASE_URL: database, SEED_DEMO_DATA: 'false' }
 }
 

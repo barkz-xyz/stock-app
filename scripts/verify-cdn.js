@@ -62,9 +62,9 @@ if (status.data.required) {
   assert.deepEqual(Object.keys(locked.data), ['auth'])
 }
 let inventory = null
-if (process.env.STAFF_PIN) {
+if (process.env.APP_PASSWORD || process.env.STAFF_PIN) {
   // Obtain a fresh session without ever recording cookies or credentials in reports.
-  const response = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: process.env.STAFF_PIN }), signal: AbortSignal.timeout(20000) })
+  const response = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username:process.env.APP_USERNAME||'admin',password:process.env.APP_PASSWORD||process.env.STAFF_PIN }), signal: AbortSignal.timeout(20000) })
   assert.equal(response.status, 200)
   assert.ok(!['HIT', 'STALE'].includes(response.headers.get('x-cache')))
   if (!baseline) assert.match(response.headers.get('cache-control'), /private, no-store/)

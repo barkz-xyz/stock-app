@@ -2,7 +2,7 @@ const baseUrl = process.env.MP_TEST_BASE_URL || 'https://stock-app-production-c8
 const apiBase = process.env.MERCADOPAGO_API_BASE || 'https://api.mercadopago.com'
 const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN || ''
 const terminalId = process.env.MERCADOPAGO_POINT_TERMINAL_ID || ''
-const staffPin = process.env.STAFF_PIN || ''
+const staffPin = process.env.APP_PASSWORD || process.env.STAFF_PIN || ''
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -13,7 +13,7 @@ assert(process.env.MERCADOPAGO_MOCK === 'false', 'MERCADOPAGO_MOCK must be false
 assert(terminalId === 'NEWLAND_N950__SBX0000001', 'Refusing to run without Mercado Pago standard virtual terminal SBX0000001.')
 assert(apiBase === 'https://api.mercadopago.com', 'Refusing to run against a non-official Mercado Pago API base.')
 assert(accessToken, 'MERCADOPAGO_ACCESS_TOKEN is missing.')
-assert(staffPin, 'STAFF_PIN is missing.')
+assert(staffPin, 'APP_PASSWORD is missing.')
 
 async function parseResponse(response) {
   const text = await response.text()
@@ -28,7 +28,7 @@ async function parseResponse(response) {
 const loginResponse = await fetch(`${baseUrl}/api/auth/login`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ pin: staffPin }),
+  body: JSON.stringify({ username:process.env.APP_USERNAME||'admin',password:staffPin }),
 })
 await parseResponse(loginResponse)
 const cookie = loginResponse.headers.get('set-cookie')?.split(';')[0]

@@ -7,16 +7,16 @@ import { sectionHref } from './routes.js'
 import CajaHeader from './CajaHeader.jsx'
 
 const denominations = [20000, 10000, 5000, 2000, 1000, 500, 100, 50, 10]
-const emptyForm = data => {
+const emptyForm = (data,readOnly=false) => {
   const c = data.closure
-  return { openingCash: c?.openingCash ?? '', cashIn: c?.cashIn ?? Math.max(c?.cashAdjustments || 0, 0),
+  return { openingCash: c?.openingCash ?? data.session?.openingCash ?? '', cashIn: c?.cashIn ?? Math.max(c?.cashAdjustments || 0, 0),
     cashOut: c?.cashOut ?? Math.max(-(c?.cashAdjustments || 0), 0), countedCash: c?.countedCash ?? '',
-    countedCard: c?.countedCard ?? '', operator: c?.operator || '', terminalReference: c?.terminalReference || '', note: '',
+    countedCard: c?.countedCard ?? '', operator: c?.operator || data.session?.operator || '', terminalReference: c?.terminalReference || '', note: readOnly?c?.note||'':'',
     denominations: c?.denominations || Object.fromEntries(denominations.map(n => [n, 0])), useDenominations: Boolean(c?.denominations),
     expectedRevision: c?.revision || 0, fingerprint: data.live.fingerprint }
 }
 
-export default function CashClosurePage({ date, onNavigate, setToast, refreshToken }) {
+export default function CashClosurePage({ date, onNavigate, setToast, refreshToken, user, sessionId, sessions = [], onSessionChange, onClosed }) {
   const { language, formatCurrency: money } = useI18n()
   const tx = (es, en) => language === 'es' ? es : en
   const [data, setData] = useState(null), [form, setForm] = useState(null)
@@ -30,10 +30,11 @@ export default function CashClosurePage({ date, onNavigate, setToast, refreshTok
     const current = generation.current, sequence = ++requestSequence.current
     if (reset) { setLoading(true); setReviewing(false) }
     try {
-      const next = await api.cashClosure(date)
+      if(sessionId==='none'){setLoading(false);return}
+      const next = await (sessionId?api.registerClosure(sessionId):api.cashClosure(date))
       if (current !== generation.current || sequence !== requestSequence.current) return
       setData(next); dataRef.current = next
-      if (reset || !dataRef.current) setForm(emptyForm(next))
+      if (reset || !dataRef.current) setForm(emptyForm(next,Boolean(next.session?.closedAt&&user?.role!=='admin')))
       if (reset) setError('')
     } catch (e) { if (current === generation.current && sequence === requestSequence.current) setError(e.message) }
     finally { if (current === generation.current && sequence === requestSequence.current) setLoading(false) }
@@ -43,7 +44,7 @@ export default function CashClosurePage({ date, onNavigate, setToast, refreshTok
     setData(null); dataRef.current = null; setForm(null); setError(''); setReviewing(false)
     load(true)
     return () => { generation.current++ }
-  }, [date])
+  }, [date,sessionId])
   // Reuse the app's live update stream; keep a draft intact when another register changes the day.
   useEffect(() => { if (dataRef.current) load(false) }, [refreshToken])
   const update = key => event => { setForm(current => ({ ...current, [key]: event.target.value })); setReviewing(false) }
@@ -51,7 +52,7 @@ export default function CashClosurePage({ date, onNavigate, setToast, refreshTok
   const exportPdf = async revision => {
     setExporting(true)
     try {
-      const response = await fetch(api.cashClosurePdfUrl(data.live.businessDate, revision), { cache: 'no-store', signal: AbortSignal.timeout(60000) })
+      const response = await fetch(sessionId?api.registerPdfUrl(sessionId,revision):api.cashClosurePdfUrl(data.live.businessDate, revision), { cache: 'no-store', signal: AbortSignal.timeout(60000) })
       if (!response.ok) throw new Error((await response.json()).error || tx('No se pudo exportar el PDF.', 'PDF export failed.'))
       const blob = await response.blob(), href = URL.createObjectURL(blob), link = document.createElement('a')
       link.href = href; link.download = `bakery-pos-cierre-${data.live.businessDate}-v${revision}.pdf`; link.click()
@@ -63,9 +64,11 @@ export default function CashClosurePage({ date, onNavigate, setToast, refreshTok
   const save = async () => {
     setBusy(true); setError('')
     try {
-      const saved = await api.saveCashClosure({ ...form, businessDate: data.live.businessDate,
-        denominations: form.useDenominations ? Object.fromEntries(Object.entries(form.denominations).map(([value, count]) => [value, Number(count || 0)])) : null })
+      const payload = { ...form, businessDate: data.live.businessDate,
+        denominations: form.useDenominations ? Object.fromEntries(Object.entries(form.denominations).map(([value, count]) => [value, Number(count || 0)])) : null }
+      const saved=await (sessionId?api.saveRegisterClosure(sessionId,payload):api.saveCashClosure(payload))
       await load(true)
+      if(sessionId)await onClosed?.()
       setToast({ type: 'success', message: tx(`Cierre guardado · versión ${saved.revision}`, `Close saved · version ${saved.revision}`) })
     } catch (e) { setError(e.message); setReviewing(false); if (e.status === 409) await load(false) }
     finally { setBusy(false) }
@@ -74,14 +77,16 @@ export default function CashClosurePage({ date, onNavigate, setToast, refreshTok
   const expectedCash = data && form ? Number(form.openingCash || 0) + data.live.cash.net + Number(form.cashIn || 0) - Number(form.cashOut || 0) : 0
   const cashDifference = form?.countedCash === '' ? null : Number(form?.countedCash) - expectedCash
   const cardDifference = form?.countedCard === '' ? null : Number(form?.countedCard) - (data?.live.card.net || 0)
-  const needsNote = data && form && (cashDifference || cardDifference || Number(form.cashIn) || Number(form.cashOut) || data.live.pendingCount || data.closure)
-  const amountField = (key, label, hint, signed = false) => <label className="closure-field" key={key}><span>{label}</span><div className="closure-money"><span>$</span><input name={key} type="number" inputMode={signed ? 'text' : 'numeric'} min={signed ? undefined : 0} max="100000000000" step="1" required value={form[key]} onChange={update(key)} readOnly={key === 'countedCash' && form.useDenominations} placeholder="0" /></div>{hint && <small>{hint}</small>}</label>
+  const readOnly=Boolean(data?.session?.closedAt&&user?.role!=='admin')
+  const needsNote = !readOnly && data && form && (cashDifference || cardDifference || Number(form.cashIn) || Number(form.cashOut) || data.live.pendingCount || data.closure)
+  const amountField = (key, label, hint, signed = false) => <label className="closure-field" key={key}><span>{label}</span><div className="closure-money"><span>$</span><input disabled={readOnly} name={key} type="number" inputMode={signed ? 'text' : 'numeric'} min={signed ? undefined : 0} max="100000000000" step="1" required value={form[key]} onChange={update(key)} readOnly={Boolean(data.session?.closedAt&&user?.role!=='admin')||key==='openingCash'&&Boolean(sessionId)||key === 'countedCash' && form.useDenominations} placeholder="0" /></div>{hint && <small>{hint}</small>}</label>
   const statRow = (label, value, strong = false) => <div className={strong ? 'closure-total' : ''}><span>{label}</span><strong>{money(value)}</strong></div>
   const differenceRow = (label, value) => <div className={`closure-difference ${value == null ? '' : value === 0 ? 'balanced' : 'unbalanced'}`}><span>{label}</span><strong>{value == null ? tx('Por contar', 'Not counted') : value === 0 ? tx('Cuadrado · $0', 'Balanced · $0') : `${value > 0 ? '+' : ''}${money(value)}`}</strong></div>
   return <div className="page closure-page enter">
     <CajaHeader active="close" onNavigate={onNavigate} />
+    <div className="session-selector"><select aria-label={tx('Sesión del cierre','Closing session')} value={sessionId||''} onChange={e=>onSessionChange(e.target.value)}>{user?.role==='admin'&&<option value="">{tx('Cierre diario general','Full daily close')}</option>}{sessionId==='none'&&<option value="none">{tx('Sin sesiones','No sessions')}</option>}{sessions.map(s=><option key={s.id} value={s.id}>{user?.role==='admin'?s.operator+' · ':''}#{s.id.replaceAll('-','').slice(0,6).toUpperCase()} · {new Date(s.openedAt).toLocaleString(language==='es'?'es-CL':'en-US',{dateStyle:'short',timeStyle:'short'})} · {s.closedAt?tx('Cerrada','Closed'):tx('Abierta','Open')}</option>)}</select>{sessionId==='none'&&<button className="button primary" onClick={()=>onNavigate('/caja')}>{tx('Abrir caja','Open register')}</button>}</div>
     <section className="closure-intro" aria-label={tx('Día y estado del cierre', 'Closing date and status')}>
-      <div className="closure-tools"><input aria-label={tx('Día del cierre', 'Closing date')} title={tx('Fecha del cierre · Chile', 'Closing date · Chile')} type="date" value={date || data?.live.businessDate || ''} max={data?.today} min="2000-01-01" onChange={e => e.target.value && onNavigate(sectionHref('pos', { view: 'close', date: e.target.value }))} /><button type="button" className="icon-button" onClick={() => load(true)} disabled={loading || busy} aria-label={tx('Actualizar día y restablecer formulario', 'Refresh day and reset form')} title={tx('Actualizar día y restablecer formulario', 'Refresh day and reset form')}><RotateCw size={16} className={loading ? 'spin' : ''} /></button></div>
+      <div className="closure-tools">{!sessionId&&<input disabled={readOnly} aria-label={tx('Día del cierre', 'Closing date')} title={tx('Fecha del cierre · Chile', 'Closing date · Chile')} type="date" value={date || data?.live.businessDate || ''} max={data?.today} min="2000-01-01" onChange={e => e.target.value && onNavigate(sectionHref('pos', { view: 'close', date: e.target.value }))} />}{sessionId&&data?.session&&<span className="session-period">{new Date(data.session.openedAt).toLocaleString(language==='es'?'es-CL':'en-US')} · {data.session.closedAt?tx('Cerrada','Closed'):tx('Sesión abierta','Open session')}</span>}<button type="button" className="icon-button" onClick={() => load(true)} disabled={loading || busy} aria-label={tx('Actualizar día y restablecer formulario', 'Refresh day and reset form')} title={tx('Actualizar día y restablecer formulario', 'Refresh day and reset form')}><RotateCw size={16} className={loading ? 'spin' : ''} /></button></div>
       {data && form && <div className={`closure-status ${data.stale || changed ? 'attention' : ''}`} role="status" title={data.closure ? `${time(data.closure.closedAt)} · ${data.closure.operator || ''}` : tx('Día completo · Chile · CLP', 'Full day · Chile · CLP')}><ShieldCheck size={16} /><strong>{changed ? tx('Actualizar cierre', 'Refresh close') : data.stale ? tx('Cambios sin incluir', 'Changes not included') : data.closure ? tx(`Guardado · v${data.closure.revision}`, `Saved · v${data.closure.revision}`) : tx('Sin cierre', 'Not closed')}</strong></div>}
     </section>
     {error && <div className="closure-notice error" role="alert"><AlertTriangle size={18} /><span>{error}</span></div>}
@@ -99,11 +104,11 @@ export default function CashClosurePage({ date, onNavigate, setToast, refreshTok
             <div className="closure-pair">{amountField('openingCash', tx('Fondo inicial', 'Opening cash'))}{amountField('countedCash', tx('Contado', 'Counted cash'))}</div>
             <div className="closure-ledger">{statRow(tx('Ventas', 'Sales'), data.live.cash.gross)}{statRow(tx('Devoluciones', 'Refunds'), -data.live.cash.refunds)}</div>
             <div className="closure-pair">{amountField('cashIn', tx('Entradas', 'Cash in'))}{amountField('cashOut', tx('Retiros', 'Cash out'))}</div>
-            <label className="closure-check"><input type="checkbox" checked={form.useDenominations} onChange={e => {
+            <label className="closure-check"><input disabled={readOnly} type="checkbox" checked={form.useDenominations} onChange={e => {
               const enabled = e.target.checked
               setForm(f => ({ ...f, useDenominations: enabled, countedCash: enabled ? denominations.reduce((n, value) => n + value * Number(f.denominations[value] || 0), 0) : f.countedCash })); setReviewing(false)
             }} />{tx('Billetes y monedas', 'Banknotes and coins')}</label>
-            {form.useDenominations && <div className="closure-denominations">{denominations.map(value => <label key={value}><span>{money(value)}</span><input aria-label={`${tx('Cantidad de', 'Number of')} ${money(value)}`} type="number" min="0" max="1000000" step="1" value={form.denominations[value]} onChange={e => {
+            {form.useDenominations && <div className="closure-denominations">{denominations.map(value => <label key={value}><span>{money(value)}</span><input disabled={readOnly} aria-label={`${tx('Cantidad de', 'Number of')} ${money(value)}`} type="number" min="0" max="1000000" step="1" value={form.denominations[value]} onChange={e => {
               const count = e.target.value === '' ? '' : Number(e.target.value)
               setForm(f => { const next = { ...f.denominations, [value]: count }; return { ...f, denominations: next, countedCash: denominations.reduce((total, n) => total + n * Number(next[n] || 0), 0) } }); setReviewing(false)
             }} /></label>)}</div>}
@@ -113,15 +118,15 @@ export default function CashClosurePage({ date, onNavigate, setToast, refreshTok
           <section className="card closure-method"><header className="card-header"><div className="closure-method-title"><span className="metric-icon cocoa"><CreditCard size={21} /></span><h3>{tx('Tarjeta', 'Card')}</h3></div><small>{data.live.card.transactions} {tx('ventas', 'sales')}</small></header><div className="closure-method-body">
             <div className="closure-ledger">{statRow(tx('Ventas', 'Sales'), data.live.card.gross)}{statRow(tx('Devoluciones', 'Refunds'), -data.live.card.refunds)}{statRow(tx('Total esperado', 'Expected total'), data.live.card.net, true)}</div>
             {amountField('countedCard', tx('Total del terminal', 'Terminal total'), tx('Ventas menos devoluciones, sin comisiones.', 'Sales minus refunds, before fees.'), true)}
-            <label className="closure-field"><span>{tx('Lote / referencia', 'Batch / reference')} <small>{tx('(opcional)', '(optional)')}</small></span><input maxLength="100" value={form.terminalReference} onChange={update('terminalReference')} placeholder={tx('Opcional', 'Optional')} /></label>
+            <label className="closure-field"><span>{tx('Lote / referencia', 'Batch / reference')} <small>{tx('(opcional)', '(optional)')}</small></span><input disabled={readOnly} maxLength="100" value={form.terminalReference} onChange={update('terminalReference')} placeholder={tx('Opcional', 'Optional')} /></label>
             {differenceRow(tx('Diferencia', 'Difference'), cardDifference)}
             <details className="closure-settlement"><summary>{tx('Comisiones y liquidación', 'Fees and settlement')}<ChevronDown size={15} /></summary><div className="closure-ledger">{statRow(tx('Comisiones', 'Fees'), data.live.card.recordedFees)}{statRow(tx('Neto del proveedor', 'Provider net'), data.live.card.recordedSettlement)}</div><p>{tx(`${data.live.card.reconciledTransactions} cobros con datos · ${data.live.card.unreconciledTransactions} sin datos. Información parcial; no confirma abono bancario.`, `${data.live.card.reconciledTransactions} collections with data · ${data.live.card.unreconciledTransactions} without data. Partial information; does not confirm a bank deposit.`)}</p></details>
           </div></section>
         </div>
-        <section className="card closure-confirm"><div className="closure-pair"><label className="closure-field"><span>{tx('Responsable', 'Operator')}</span><input required maxLength="80" value={form.operator} onChange={update('operator')} autoComplete="name" placeholder={tx('Nombre de quien cuenta', 'Name of person counting')} /></label><label className="closure-field"><span>{tx('Observaciones', 'Notes')} {needsNote ? '*' : tx('(opcional)', '(optional)')}</span><textarea required={Boolean(needsNote)} maxLength="1000" rows="2" value={form.note} onChange={update('note')} placeholder={tx('Diferencias o movimientos…', 'Differences or cash movements…')} /></label></div>
+        <section className="card closure-confirm"><div className="closure-pair"><label className="closure-field"><span>{tx('Responsable', 'Operator')}</span><input disabled={readOnly} required maxLength="80" value={form.operator} readOnly={Boolean(sessionId)} onChange={update('operator')} autoComplete="name" placeholder={tx('Nombre de quien cuenta', 'Name of person counting')} /></label><label className="closure-field"><span>{tx('Observaciones', 'Notes')} {needsNote ? '*' : tx('(opcional)', '(optional)')}</span><textarea disabled={readOnly} required={Boolean(needsNote)} maxLength="1000" rows="2" value={form.note} onChange={update('note')} placeholder={tx('Diferencias o movimientos…', 'Differences or cash movements…')} /></label></div>
           {data.live.pendingCount > 0 && <div className="closure-notice"><AlertTriangle size={18} /><span>{tx(`${data.live.pendingCount} pendientes fuera del total.`, `${data.live.pendingCount} pending operations excluded.`)}</span></div>}
           {reviewing && <div className="closure-review" role="status"><Check size={20} /><div><strong>{tx('Revisa antes de confirmar', 'Review before confirming')}</strong><p>{tx('Efectivo contado', 'Counted cash')}: {money(form.countedCash)} · {tx('Tarjeta declarada', 'Declared card')}: {money(form.countedCard)}</p><p>{tx('Diferencias', 'Differences')}: {tx('efectivo', 'cash')} {money(cashDifference)} / {tx('tarjeta', 'card')} {money(cardDifference)}</p></div></div>}
-          <div className="closure-actions"><button type="button" className="button secondary" disabled={!data.closure?.snapshot || exporting} title={tx('Descargar cierre guardado', 'Download saved close')} aria-label={tx('Descargar PDF del cierre guardado', 'Download saved close PDF')} onClick={() => exportPdf(data.closure.revision)}><Download size={16} />{exporting ? tx('Preparando…', 'Preparing…') : 'PDF'}</button><div>{reviewing ? <><button type="button" className="button secondary" onClick={() => setReviewing(false)} disabled={busy}>{tx('Volver', 'Back')}</button><button type="button" className="button primary" onClick={save} disabled={busy || changed || loading}><Check size={17} />{busy ? tx('Guardando…', 'Saving…') : tx('Confirmar cierre', 'Confirm close')}</button></> : <button className="button primary" disabled={busy || changed || loading}>{tx(data.closure ? 'Revisar corrección' : 'Revisar cierre', data.closure ? 'Review correction' : 'Review close')}<ArrowRight size={17} /></button>}</div></div>
+          <div className="closure-actions"><button type="button" className="button secondary" disabled={!data.closure?.snapshot || exporting} title={tx('Descargar cierre guardado', 'Download saved close')} aria-label={tx('Descargar PDF del cierre guardado', 'Download saved close PDF')} onClick={() => exportPdf(data.closure.revision)}><Download size={16} />{exporting ? tx('Preparando…', 'Preparing…') : 'PDF'}</button><div>{readOnly?<button type="button" className="button primary" onClick={()=>onNavigate('/caja')}>{tx('Nueva sesión de caja','New register session')}</button>:reviewing ? <><button type="button" className="button secondary" onClick={() => setReviewing(false)} disabled={busy}>{tx('Volver', 'Back')}</button><button type="button" className="button primary" onClick={save} disabled={busy || changed || loading || Boolean(data.session?.closedAt&&user?.role!=='admin')}><Check size={17} />{busy ? tx('Guardando…', 'Saving…') : tx('Confirmar cierre', 'Confirm close')}</button></> : <button className="button primary" disabled={busy || changed || loading || Boolean(data.session?.closedAt&&user?.role!=='admin')}>{tx(data.closure ? 'Revisar corrección' : 'Revisar cierre', data.closure ? 'Review correction' : 'Review close')}<ArrowRight size={17} /></button>}</div></div>
         </section>
       </form>
       {data.stale && <p className="closure-pdf-note">{tx('El PDF corresponde a la versión guardada.', 'The PDF reflects the saved version.')}</p>}

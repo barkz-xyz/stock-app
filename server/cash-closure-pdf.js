@@ -91,9 +91,10 @@ export async function createCashClosurePdf(closure) {
   }
 
   newPage()
-  draw('VENTAS Y CIERRE DE CAJA', left, y, { size: 16, strong: true }); y -= 19
+  draw(closure.scope==='session'?'CIERRE DE CAJA':'VENTAS Y CIERRE DE CAJA', left, y, { size: 16, strong: true }); y -= 19
   note('Responsable:', closure.operator || '-')
   note('Cierre:', `${dateTime.format(new Date(closure.closedAt))}  |  Hora Chile  |  Ref. ${shortId(closure.id)}`)
+  if(closure.scope==='session')note('Turno:', `${shortId(closure.registerSessionId)}  |  Apertura ${dateTime.format(new Date(closure.openedAt))}`)
 
   section('01 / VENTAS')
   table([

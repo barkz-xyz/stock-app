@@ -6,6 +6,7 @@ import { dateOnly } from '../src/dates.js'
 import { publishChange } from './changes.js'
 import { cleanInventoryBatch, inventoryBatchChanges } from './inventory-batch.js'
 import { cleanHistoryQuery, historyMatches } from './sales-history.js'
+import { publicUser, cleanUser, hashPassword, userError } from './user-security.js'
 import { closurePeriod, buildClosureSummary, cleanClosureInput, createClosure, closureError, businessDateAt } from './cash-closure.js'
 
 const { Pool } = pg
@@ -131,6 +132,9 @@ function normalizeSale(row, items = row.items || [], refunds = row.refunds || []
     total: Number(row.total),
     cashReceived: row.cash_received == null && row.cashReceived == null ? null : Number(row.cash_received ?? row.cashReceived),
     cashChange: row.cash_received == null && row.cashReceived == null ? null : Number(row.cash_received ?? row.cashReceived) - Number(row.total),
+    cashierId: row.cashier_id ?? row.cashierId ?? null,
+    cashierName: row.cashier_name ?? row.cashierName ?? '',
+    registerSessionId: row.register_session_id ?? row.registerSessionId ?? null,
     items: items.map((item) => ({
       lineId: item.id ?? item.line_id ?? item.lineId,
       itemId: item.item_id ?? item.itemId,
@@ -198,6 +202,7 @@ function ensureFileShape(data) {
   data.sales ||= []
   data.cashClosures ||= []
   data.stockBatches ||= []
+  data.users ||= []; data.authSessions ||= []; data.registerSessions ||= []
   for (const item of data.items) {
     item.price = Number(item.price || 0)
     item.sellable = Boolean(item.sellable)
@@ -269,6 +274,26 @@ export async function initializeStore() {
         paid_at TIMESTAMPTZ
       );
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS checkout_key UUID;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS cashier_id UUID;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS cashier_name TEXT NOT NULL DEFAULT '';
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS register_session_id UUID;
+      CREATE INDEX IF NOT EXISTS sales_cashier_session_idx ON sales(cashier_id,register_session_id,created_at DESC);
+      CREATE TABLE IF NOT EXISTS app_users (
+        id UUID PRIMARY KEY, username TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('admin','cashier')), active BOOLEAN NOT NULL DEFAULT TRUE,
+        password_hash TEXT NOT NULL, must_change_password BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS auth_sessions (
+        token_hash TEXT PRIMARY KEY, user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        expires_at TIMESTAMPTZ NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS register_sessions (
+        id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES app_users(id), operator TEXT NOT NULL,
+        opening_cash NUMERIC(12,0) NOT NULL CHECK(opening_cash>=0), opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        closed_at TIMESTAMPTZ, closure JSONB
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS one_open_register_per_user ON register_sessions(user_id) WHERE closed_at IS NULL;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS cash_received NUMERIC(12,0) CHECK (cash_received IS NULL OR (payment_method='cash' AND cash_received >= total));
       CREATE TABLE IF NOT EXISTS stock_batches (
         id UUID PRIMARY KEY, fingerprint TEXT NOT NULL, result JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -424,6 +449,7 @@ export async function initializeStore() {
         END LOOP;
       END $$;
     `)
+    await seedInitialAdmin()
     return
   }
 
@@ -431,25 +457,35 @@ export async function initializeStore() {
   try {
     await fs.access(dataPath)
     const data = ensureFileShape(await readFileData())
-    await fs.writeFile(dataPath, JSON.stringify(data, null, 2))
-  } catch {
+    await writeFileData(data)
+  } catch (error) {
+    if(error.code!=='ENOENT')throw error
     const data = { items: [], movements: [], sales: [], cashClosures: [] }
     if (process.env.SEED_DEMO_DATA === 'true') {
       for (const item of demoItems) addItemToData(data, item)
     }
-    await fs.writeFile(dataPath, JSON.stringify(data, null, 2))
+    await writeFileData(data)
   }
+  await seedInitialAdmin()
 }
 
 async function readFileData() {
   return ensureFileShape(JSON.parse(await fs.readFile(dataPath, 'utf8')))
+}
+async function writeFileData(data) {
+  const temporary=`${dataPath}.${crypto.randomUUID()}.tmp`
+  await fs.writeFile(temporary,JSON.stringify(data,null,2))
+  for(let attempt=0;;attempt++){
+    try {await fs.rename(temporary,dataPath);break}
+    catch(error){if(!['EPERM','EACCES','EBUSY'].includes(error.code)||attempt>=12)throw error;await new Promise(resolve=>setTimeout(resolve,10*(attempt+1)))}
+  }
 }
 
 function mutateFileData(callback) {
   const operation = fileQueue.then(async () => {
     const data = await readFileData()
     const result = await callback(data)
-    await fs.writeFile(dataPath, JSON.stringify(data, null, 2))
+    await writeFileData(data)
     publishChange()
     return result
   })
@@ -713,13 +749,15 @@ function assertSameCheckout(sale, fingerprint) {
   }
 }
 
-function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashReceived) {
+function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashReceived, actor) {
   const fingerprint = checkoutFingerprint(requested, paymentMethod, cashReceived)
   const existing = checkoutKey && data.sales.find(sale => sale.checkoutKey === checkoutKey)
   if (existing) {
+    if(actor&&existing.cashierId!==actor.id&&!(actor.role==='admin'&&!existing.cashierId))throw userError('Venta no encontrada.',404)
     assertSameCheckout(existing, fingerprint)
     return { ...normalizeSale(existing), checkoutReplayed: true }
   }
+  if(actor&&!data.registerSessions.some(s=>s.id===actor.sessionId&&s.userId===actor.id&&!s.closedAt))throw userError('Abre una sesión de caja para vender.',409,'SESSION_REQUIRED')
   const lines = validateSaleLines(data.items.map(normalizeItem), requested)
   const now = new Date().toISOString()
   const id = crypto.randomUUID()
@@ -733,6 +771,7 @@ function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashRece
     paymentMethod,
     total,
     cashReceived,
+    cashierId:actor?.id||null,cashierName:actor?.name||'',registerSessionId:actor?.sessionId||null,
     items: lines.map(({ item, quantity, unitPrice, lineTotal }) => ({ lineId: crypto.randomUUID(), itemId: item.id, name: item.name, unit: item.unit, quantity, unitPrice, lineTotal })),
     refunds: [],
     mpOrderId: null,
@@ -780,8 +819,8 @@ function validateCashReceived(received, method, total) {
   }
 }
 
-export async function createSale(requested, paymentMethod, checkoutKey = null, cashReceived = null) {
-  if (!pool) return mutateFileData((data) => reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashReceived))
+export async function createSale(requested, paymentMethod, checkoutKey = null, cashReceived = null, actor = null) {
+  if (!pool) return mutateFileData((data) => reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashReceived, actor))
 
   const client = await pool.connect()
   try {
@@ -792,12 +831,14 @@ export async function createSale(requested, paymentMethod, checkoutKey = null, c
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`checkout:${checkoutKey}`])
       const existing = await client.query('SELECT * FROM sales WHERE checkout_key=$1', [checkoutKey])
       if (existing.rows.length) {
+        if(actor&&existing.rows[0].cashier_id!==actor.id&&!(actor.role==='admin'&&!existing.rows[0].cashier_id))throw userError('Venta no encontrada.',404)
         assertSameCheckout(existing.rows[0], fingerprint)
         const [sale] = await hydratePostgresSales(existing.rows, client)
         await client.query('COMMIT')
         return { ...sale, checkoutReplayed: true }
       }
     }
+    if(actor){const session=(await client.query('SELECT id FROM register_sessions WHERE id=$1 AND user_id=$2 AND closed_at IS NULL FOR UPDATE',[actor.sessionId,actor.id])).rows[0];if(!session)throw userError('Abre una sesión de caja para vender.',409,'SESSION_REQUIRED')}
     const ids = [...new Set(requested.map((line) => line.itemId))].sort()
     const itemResult = await client.query('SELECT * FROM items WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE', [ids])
     const lines = validateSaleLines(itemResult.rows.map(normalizeItem), requested)
@@ -806,9 +847,9 @@ export async function createSale(requested, paymentMethod, checkoutKey = null, c
     validateCashReceived(cashReceived, paymentMethod, total)
     const status = paymentMethod === 'cash' ? 'paid' : 'pending'
     const saleResult = await client.query(
-      `INSERT INTO sales (id, status, payment_method, total, mp_external_reference, inventory_applied, paid_at, checkout_key, checkout_fingerprint, cash_received)
-       VALUES ($1,$2,$3,$4,$5,TRUE,CASE WHEN $2='paid' THEN NOW() ELSE NULL END,$6,$7,$8) RETURNING *`,
-      [id, status, paymentMethod, total, saleExternalReference(id), checkoutKey, fingerprint, cashReceived],
+      `INSERT INTO sales (id, status, payment_method, total, mp_external_reference, inventory_applied, paid_at, checkout_key, checkout_fingerprint, cash_received,cashier_id,cashier_name,register_session_id)
+       VALUES ($1,$2,$3,$4,$5,TRUE,CASE WHEN $2='paid' THEN NOW() ELSE NULL END,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [id, status, paymentMethod, total, saleExternalReference(id), checkoutKey, fingerprint, cashReceived,actor?.id||null,actor?.name||'',actor?.sessionId||null],
     )
     const persistedLines = lines.map((line) => ({ ...line, lineId: crypto.randomUUID() }))
     await client.query(
@@ -1695,15 +1736,17 @@ export async function getSaleByPointOrder(orderId) {
   return rows[0] ? getSale(rows[0].id) : null
 }
 
-export async function searchSales(input) {
+export async function searchSales(input, user = null) {
   const q = cleanHistoryQuery(input)
   if (!pool) {
-    const all = (await readFileData()).sales.map(s => normalizeSale(s)).filter(s => historyMatches(s, q))
+    const all = (await readFileData()).sales.map(s => normalizeSale(s)).filter(s => (!user||user.role==='admin'||s.cashierId===user.id)&&(!input.sessionId||s.registerSessionId===input.sessionId)&&historyMatches(s, q))
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt) || b.id.localeCompare(a.id))
     return { sales: all.slice(q.offset, q.offset + q.limit), total: all.length, hasMore: q.offset + q.limit < all.length }
   }
   const params = [], clauses = []
   const add = (sql, value) => { params.push(value); clauses.push(sql.replace('?', `$${params.length}`)) }
+  if(user?.role==='cashier')add('s.cashier_id = ?',user.id)
+  if(input.sessionId)add('s.register_session_id = ?',input.sessionId)
   if (q.from) add('s.created_at >= ?', q.from)
   if (q.to) add('s.created_at < ?', q.to)
   if (q.method) add('s.payment_method = ?', q.method)
@@ -2050,6 +2093,135 @@ export async function listMovements(limit = 50) {
   }
   const data = await readFileData()
   return data.movements.slice(0, limit).map(normalizeMovement)
+}
+
+function normalizeRegister(row) {
+  return row ? { id:row.id,userId:row.user_id??row.userId,operator:row.operator,openingCash:Number(row.opening_cash??row.openingCash),
+    openedAt:row.opened_at??row.openedAt,closedAt:row.closed_at??row.closedAt??null,closure:row.closure||null } : null
+}
+export async function listRegisterSessions(user) {
+  const rows=pool?(await pool.query(`SELECT id,user_id,operator,opening_cash,opened_at,closed_at,CASE WHEN closure IS NULL THEN NULL ELSE jsonb_build_object('revision',closure->'revision','closedAt',closure->'closedAt','totalSales',closure->'totalSales') END AS closure FROM register_sessions ${user.role==='admin'?'':'WHERE user_id=$1'} ORDER BY opened_at DESC LIMIT 100`,user.role==='admin'?[]:[user.id])).rows:(await readFileData()).registerSessions.filter(s=>user.role==='admin'||s.userId===user.id).sort((a,b)=>new Date(b.openedAt)-new Date(a.openedAt)).slice(0,100)
+  return rows.map(row=>{const s=normalizeRegister(row);return {...s,closure:s.closure?{revision:s.closure.revision,closedAt:s.closure.closedAt,totalSales:s.closure.totalSales}:null}})
+}
+export async function getActiveRegisterSession(user) {
+  return normalizeRegister(pool?(await pool.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NULL',[user.id])).rows[0]:(await readFileData()).registerSessions.find(s=>s.userId===user.id&&!s.closedAt))
+}
+export async function openRegisterSession(user,openingCash) {
+  if(!Number.isSafeInteger(openingCash)||openingCash<0||openingCash>100000000000)throw userError('Indica un fondo inicial válido en CLP.')
+  const build=()=>({id:crypto.randomUUID(),userId:user.id,operator:user.name,openingCash,openedAt:new Date().toISOString(),closedAt:null,closure:null})
+  if(!pool)return mutateFileData(data=>{const old=data.registerSessions.find(s=>s.userId===user.id&&!s.closedAt);if(old)return normalizeRegister(old);const next=build();data.registerSessions.unshift(next);return next})
+  const client=await pool.connect()
+  try {await client.query('BEGIN');await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['register:'+user.id]);const old=(await client.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NULL',[user.id])).rows[0];if(old){await client.query('COMMIT');return normalizeRegister(old)}const {rows}=await client.query('INSERT INTO register_sessions(id,user_id,operator,opening_cash) VALUES($1,$2,$3,$4) RETURNING *',[crypto.randomUUID(),user.id,user.name,openingCash]);await client.query('COMMIT');return normalizeRegister(rows[0])}catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
+}
+function ownedRegister(row,user) {const s=normalizeRegister(row);if(!s||(user.role!=='admin'&&s.userId!==user.id))throw userError('Sesión de caja no encontrada.',404);return s}
+function sessionSummary(sales,session) {
+  const period={businessDate:businessDateAt(session.openedAt),timeZone:process.env.BAKERY_TIME_ZONE||'America/Santiago',from:new Date(session.openedAt),to:new Date('9999-12-31T23:59:59Z')}
+  const summary=buildClosureSummary(sales,period)
+  summary.to=session.closedAt||null;summary.scope='session';summary.registerSessionId=session.id
+  const {fingerprint,...values}=summary
+  summary.fingerprint=crypto.createHash('sha256').update(JSON.stringify(values)).digest('hex')
+  return summary
+}
+async function sessionSales(id,client=pool) {return hydratePostgresSales((await client.query('SELECT * FROM sales WHERE register_session_id=$1 ORDER BY id',[id])).rows,client)}
+export async function getRegisterClosure(user,id,full=false) {
+  let session,sales
+  if(!pool){const d=await readFileData();session=ownedRegister(d.registerSessions.find(s=>s.id===id),user);sales=d.sales.filter(s=>s.registerSessionId===id).map(s=>normalizeSale(s))}
+  else {session=ownedRegister((await pool.query('SELECT * FROM register_sessions WHERE id=$1',[id])).rows[0],user);sales=session.closedAt?[]:await sessionSales(id)}
+  const live=session.closedAt?session.closure.snapshot:sessionSummary(sales,session),{history=[],snapshot,...fields}=session.closure||{}
+  return {session:full?session:{...session,closure:session.closure?{revision:session.closure.revision}:null},live,closure:session.closure?{...fields,snapshot:{fingerprint:snapshot.fingerprint}}:null,today:businessDateAt(),stale:false,
+    revisions:[...history,...(session.closure?[session.closure]:[])].map(c=>({revision:c.revision,closedAt:c.closedAt,operator:c.operator,note:c.note,exportable:true}))}
+}
+export async function saveRegisterClosure(user,id,body) {
+  const make=(session,sales)=>{
+    if(session.closedAt&&user.role!=='admin')throw userError('Esta sesión ya está cerrada.',409,'SESSION_CLOSED')
+    const summary=session.closedAt?session.closure.snapshot:sessionSummary(sales,session)
+    if(summary.pendingCount)throw userError('Resuelve los cobros pendientes antes de cerrar la sesión.',409,'PENDING_PAYMENTS')
+    const input=cleanClosureInput({...body,businessDate:summary.businessDate,openingCash:session.openingCash,operator:session.operator})
+    const result=createClosure(summary,input,session.closure)
+    result.scope='session';result.registerSessionId=id;result.userId=session.userId;result.openedAt=session.openedAt;result.closedBy=user.id
+    result.history=session.closure?[...(session.closure.history||[]),Object.fromEntries(Object.entries(session.closure).filter(([k])=>k!=='history'))]:[]
+    return result
+  }
+  if(!pool)return mutateFileData(data=>{const s=ownedRegister(data.registerSessions.find(s=>s.id===id),user),closure=make(s,data.sales.filter(s=>s.registerSessionId===id).map(s=>normalizeSale(s)));const row=data.registerSessions.find(s=>s.id===id);row.closedAt ||= closure.closedAt;row.closure=closure;return closure})
+  const client=await pool.connect()
+  try {await client.query('BEGIN');const session=ownedRegister((await client.query('SELECT * FROM register_sessions WHERE id=$1 FOR UPDATE',[id])).rows[0],user),closure=make(session,await sessionSales(id,client));await client.query('UPDATE register_sessions SET closed_at=COALESCE(closed_at,$2),closure=$3 WHERE id=$1',[id,closure.closedAt,JSON.stringify(closure)]);await client.query('COMMIT');return closure}catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
+}
+export async function getRegisterClosureRevision(user,id,revision) {
+  const {session}=await getRegisterClosure(user,id,true),latest=session.closure
+  if(!latest)throw userError('Guarda el cierre antes de exportar.',404)
+  const selected=[...(latest.history||[]),latest].find(c=>c.revision===Number(revision))
+  if(!selected)throw userError('Versión no encontrada.',404)
+  return selected
+}
+
+export async function countUsers() {
+  return pool ? Number((await pool.query('SELECT COUNT(*) AS n FROM app_users')).rows[0].n) : (await readFileData()).users.length
+}
+export async function getLoginUser(username) {
+  return pool ? (await pool.query('SELECT * FROM app_users WHERE username=$1', [username])).rows[0] : (await readFileData()).users.find(u=>u.username===username)
+}
+export async function listUsers() {
+  return (pool ? (await pool.query('SELECT * FROM app_users ORDER BY name')).rows : (await readFileData()).users).map(publicUser)
+}
+async function insertUser(input, first = false) {
+  if (!pool) return mutateFileData(data=>{
+    if (first && data.users.length) throw userError('El administrador inicial ya existe.',409)
+    if (data.users.some(u=>u.username===input.username)) throw userError('Ese usuario ya existe.',409)
+    data.users.push(input); return publicUser(input)
+  })
+  const client=await pool.connect()
+  try {
+    await client.query('BEGIN'); await client.query("SELECT pg_advisory_xact_lock(hashtextextended('users-management',0))")
+    if (first && Number((await client.query('SELECT COUNT(*) AS n FROM app_users')).rows[0].n)) throw userError('El administrador inicial ya existe.',409)
+    const {rows}=await client.query('INSERT INTO app_users(id,username,name,role,active,password_hash,must_change_password) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[input.id,input.username,input.name,input.role,input.active,input.passwordHash,input.mustChangePassword])
+    await client.query('COMMIT'); return publicUser(rows[0])
+  } catch(e) { await client.query('ROLLBACK'); if(e.code==='23505') throw userError('Ese usuario ya existe.',409); throw e } finally {client.release()}
+}
+async function seedInitialAdmin() {
+  if (!process.env.STAFF_PIN || await countUsers()) return
+  try { await insertUser({ id:crypto.randomUUID(),username:'admin',name:'Administrador',role:'admin',active:true,passwordHash:await hashPassword(process.env.STAFF_PIN),mustChangePassword:true },true) }
+  catch(e) { if(e.status!==409) throw e }
+}
+export async function createUser(body, first=false) {
+  const input=cleanUser({...body,...(first?{role:'admin',active:true}:{})})
+  return insertUser({...input,id:crypto.randomUUID(),password:undefined,passwordHash:await hashPassword(input.password),mustChangePassword:!first},first)
+}
+export async function updateUser(id,body) {
+  const input=cleanUser(body,false), passwordHash=input.password?await hashPassword(input.password):null
+  if(!pool) return mutateFileData(data=>{
+    const user=data.users.find(u=>u.id===id);if(!user)throw userError('Usuario no encontrado.',404)
+    if(data.users.some(u=>u.username===input.username&&u.id!==id))throw userError('Ese usuario ya existe.',409)
+    if(user.role==='admin'&&user.active&&(!input.active||input.role!=='admin')&&!data.users.some(u=>u.id!==id&&u.role==='admin'&&u.active))throw userError('Debe quedar al menos un administrador activo.',409)
+    Object.assign(user,{username:input.username,name:input.name,role:input.role,active:input.active},passwordHash?{passwordHash,mustChangePassword:true}:{})
+    data.authSessions=data.authSessions.filter(s=>s.userId!==id);return publicUser(user)
+  })
+  const client=await pool.connect()
+  try {
+    await client.query('BEGIN');await client.query("SELECT pg_advisory_xact_lock(hashtextextended('users-management',0))")
+    const current=(await client.query('SELECT * FROM app_users WHERE id=$1 FOR UPDATE',[id])).rows[0]
+    if(!current)throw userError('Usuario no encontrado.',404)
+    if(current.role==='admin'&&current.active&&(!input.active||input.role!=='admin')&&!Number((await client.query("SELECT COUNT(*) AS n FROM app_users WHERE id<>$1 AND active AND role='admin'",[id])).rows[0].n))throw userError('Debe quedar al menos un administrador activo.',409)
+    const {rows}=await client.query('UPDATE app_users SET username=$2,name=$3,role=$4,active=$5,password_hash=COALESCE($6,password_hash),must_change_password=CASE WHEN $6 IS NULL THEN must_change_password ELSE TRUE END WHERE id=$1 RETURNING *',[id,input.username,input.name,input.role,input.active,passwordHash])
+    await client.query('DELETE FROM auth_sessions WHERE user_id=$1',[id]);await client.query('COMMIT');return publicUser(rows[0])
+  }catch(e){await client.query('ROLLBACK');if(e.code==='23505')throw userError('Ese usuario ya existe.',409);throw e}finally{client.release()}
+}
+export async function setOwnPassword(id,passwordHash) {
+  if(!pool)return mutateFileData(data=>{const u=data.users.find(u=>u.id===id&&u.active);if(!u)throw userError('Vuelve a ingresar.',401);u.passwordHash=passwordHash;u.mustChangePassword=false;data.authSessions=data.authSessions.filter(s=>s.userId!==id);return publicUser(u)})
+  const client=await pool.connect()
+  try {await client.query('BEGIN');const {rows}=await client.query('UPDATE app_users SET password_hash=$2,must_change_password=FALSE WHERE id=$1 AND active RETURNING *',[id,passwordHash]);if(!rows[0])throw userError('Vuelve a ingresar.',401);await client.query('DELETE FROM auth_sessions WHERE user_id=$1',[id]);await client.query('COMMIT');return publicUser(rows[0])}catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
+}
+export async function createLoginSession(userId,tokenHash) {
+  const expiresAt=new Date(Date.now()+12*3600000).toISOString()
+  if(!pool)return mutateFileData(data=>{if(!data.users.some(u=>u.id===userId&&u.active))throw userError('Usuario desactivado.',401);data.authSessions=data.authSessions.filter(s=>s.expiresAt>new Date().toISOString());data.authSessions.push({tokenHash,userId,expiresAt})})
+  await pool.query('DELETE FROM auth_sessions WHERE expires_at<NOW()');const {rowCount}=await pool.query('INSERT INTO auth_sessions(token_hash,user_id,expires_at) SELECT $1,id,$3 FROM app_users WHERE id=$2 AND active',[tokenHash,userId,expiresAt]);if(!rowCount)throw userError('Usuario desactivado.',401)
+}
+export async function getSessionUser(tokenHash) {
+  if(!pool){const data=await readFileData(),s=data.authSessions.find(s=>s.tokenHash===tokenHash&&s.expiresAt>new Date().toISOString());return publicUser(s&&data.users.find(u=>u.id===s.userId&&u.active))}
+  return publicUser((await pool.query('SELECT u.* FROM auth_sessions s JOIN app_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>NOW() AND u.active',[tokenHash])).rows[0])
+}
+export async function revokeLoginSession(tokenHash) {
+  if(!pool)return mutateFileData(data=>{data.authSessions=data.authSessions.filter(s=>s.tokenHash!==tokenHash)})
+  await pool.query('DELETE FROM auth_sessions WHERE token_hash=$1',[tokenHash])
 }
 
 export async function closeStore() {

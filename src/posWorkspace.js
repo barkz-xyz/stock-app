@@ -1,4 +1,5 @@
-const draftKey = 'bakery-cart-draft'
+let draftKey = 'bakery-cart-draft'
+export function setWorkspaceUser(id){draftKey=id?`bakery-cart-draft:${id}`:'bakery-cart-draft'}
 const favoriteKey = 'bakery-favorite-products'
 export const searchText = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 export function loadCartDraft(storage = globalThis.sessionStorage) {

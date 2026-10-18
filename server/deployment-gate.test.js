@@ -5,7 +5,7 @@ import { assertAllTestsPassed, deploymentTestEnvironment } from '../scripts/test
 test('deployment gate refuses missing integration credentials and removes live application credentials', () => {
   assert.throws(() => deploymentTestEnvironment({}), /cannot be skipped/)
   const env = deploymentTestEnvironment({ PATH: 'system-path', DATABASE_URL: 'postgresql://isolated-test',
-    DATA_PATH: '/production/inventory.json', STAFF_PIN: 'private', SESSION_SECRET: 'private',
+    DATA_PATH: '/production/inventory.json', STAFF_PIN: 'private', APP_USERNAME:'private', APP_PASSWORD:'private', SESSION_SECRET: 'private',
     MERCADOPAGO_ACCESS_TOKEN: 'private', MERCADOPAGO_POINT_TERMINAL_ID: 'private',
     POINT_PILOT_BUSINESS_RUT: 'private', RAILWAY_TOKEN: 'private', RAILWAY_ENVIRONMENT_ID: 'production',
     PGOPTIONS: 'unsafe-search-path', PGSSLMODE: 'disable', NODE_ENV: 'production' })
@@ -13,7 +13,7 @@ test('deployment gate refuses missing integration credentials and removes live a
   assert.equal(env.NODE_ENV, 'test')
   assert.equal(env.PATH, 'system-path')
   assert.equal(env.PGSSLMODE, 'disable')
-  for (const key of ['DATABASE_URL', 'DATA_PATH', 'STAFF_PIN', 'SESSION_SECRET', 'MERCADOPAGO_ACCESS_TOKEN', 'MERCADOPAGO_POINT_TERMINAL_ID', 'POINT_PILOT_BUSINESS_RUT', 'RAILWAY_TOKEN', 'RAILWAY_ENVIRONMENT_ID', 'PGOPTIONS']) assert.equal(key in env, false)
+  for (const key of ['DATABASE_URL', 'DATA_PATH', 'STAFF_PIN', 'APP_USERNAME', 'APP_PASSWORD', 'SESSION_SECRET', 'MERCADOPAGO_ACCESS_TOKEN', 'MERCADOPAGO_POINT_TERMINAL_ID', 'POINT_PILOT_BUSINESS_RUT', 'RAILWAY_TOKEN', 'RAILWAY_ENVIRONMENT_ID', 'PGOPTIONS']) assert.equal(key in env, false)
 })
 
 test('deployment gate blocks failed, skipped, cancelled, pending, or missing test results', () => {

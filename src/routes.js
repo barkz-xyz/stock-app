@@ -1,6 +1,6 @@
 export const sectionPaths = {
   dashboard: '/resumen', pos: '/caja', inventory: '/inventario',
-  metrics: '/metricas', activity: '/actividad', settings: '/configuracion',
+  metrics: '/metricas', activity: '/actividad', settings: '/configuracion', users:'/usuarios',
 }
 
 export function sectionHref(page, { view = 'cart', range = 'today', date } = {}) {
@@ -17,7 +17,7 @@ export function parseRoute(href) {
     : Object.keys(sectionPaths).find(page => sectionPaths[page] === path) || 'not-found'
   const range = url.searchParams.get('periodo')
   return { page, registerView: path === '/caja/cierre' ? 'close' : path === '/caja/historial' ? 'history' : 'cart',
-    closureDate: url.searchParams.get('fecha') || '',
+    closureDate: url.searchParams.get('fecha') || '', registerSessionId:url.searchParams.get('sesion')||'',
     metricsRange: ['7d', '30d'].includes(range) ? range : 'today',
     canonical: path === '/' ? sectionPaths.dashboard : null }
 }

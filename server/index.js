@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import compression from 'compression'
 import express from 'express'
 import { parseCalendarDate } from '../src/dates.js'
-import { authStatus, login, logout, pointAccessIsProtected, requireAuth } from './auth.js'
+import { authStatus, login, logout, setupAdmin, changePassword, pointAccessIsProtected, requireAuth, requireAdmin, cashierBoundary } from './auth.js'
 import {
   buildPointManagement, cancelPointOrder, createPointOrder, createPointPos, createPointStore, deletePointPos, deletePointStore,
   getConfiguredTerminal, getMercadoPagoAccount, getPointOrder, getPointPayment, getPointPos, getPointStore,
@@ -17,6 +17,7 @@ import {
   getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales,
   markCardSaleFailed, prepareRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
   updateItem, updateSaleFromPoint, updateSalePaymentDetails,
+  listUsers, createUser, updateUser, listRegisterSessions, getActiveRegisterSession, openRegisterSession, getRegisterClosure, saveRegisterClosure, getRegisterClosureRevision,
 } from './store.js'
 import { createDailyReport } from './report.js'
 import { createCashClosurePdf } from './cash-closure-pdf.js'
@@ -291,21 +292,43 @@ app.post('/api/mercadopago/webhook', async (req, res, next) => {
   }
 })
 
-app.get('/api/auth/status', (req, res) => res.json(authStatus(req)))
+app.get('/api/auth/status', async (req, res) => res.json(await authStatus(req)))
 app.post('/api/auth/login', login)
 app.post('/api/auth/logout', logout)
+app.post('/api/auth/setup', setupAdmin)
+app.post('/api/auth/password', changePassword)
 app.get('/api/bootstrap', async (req, res, next) => {
   res.setHeader('Cache-Control', 'private, no-store')
-  const auth = authStatus(req)
-  if (!auth.authenticated) return res.json({ auth })
+  const auth = await authStatus(req)
+  if (!auth.authenticated || auth.user.mustChangePassword) return res.json({ auth })
   try {
     const startedAt = performance.now()
-    const data = await getBootstrapData()
+    const dataPromise=auth.user.role==='admin'?getBootstrapData():Promise.all([listItems(),searchSales({limit:50},auth.user)]).then(([items,history])=>({items:items.filter(i=>i.sellable),movements:[],sales:history.sales,dailySummary:null}))
+    const [registerSessions,registerSession,data]=await Promise.all([listRegisterSessions(auth.user),getActiveRegisterSession(auth.user),dataPromise])
     res.setHeader('Server-Timing', `data;dur=${elapsedMilliseconds(startedAt)}`)
-    res.json({ auth, ...data, posConfig: pointConfiguration() })
+    res.json({ auth, ...data, registerSessions,registerSession, posConfig: pointConfiguration() })
   } catch (error) { next(error) }
 })
-app.use('/api', requireAuth)
+app.use('/api', requireAuth, cashierBoundary)
+app.use('/api',async(req,res,next)=>{
+  if(req.user.role!=='cashier')return next()
+  const match=/^\/sales\/([0-9a-f-]{36})(?:\/|$)/i.exec(req.path)
+  if(match){const sale=await getSale(match[1]);if(!sale||sale.cashierId!==req.user.id)return res.status(404).json({error:'Venta no encontrada.'});req.sale=sale}
+  next()
+})
+app.get('/api/users',requireAdmin,async(_req,res)=>res.json(await listUsers()))
+app.post('/api/users',requireAdmin,async(req,res)=>res.status(201).json(await createUser(req.body)))
+app.patch('/api/users/:id',requireAdmin,async(req,res)=>res.json(await updateUser(req.params.id,req.body)))
+app.get('/api/register-sessions',async(req,res)=>res.json(await listRegisterSessions(req.user)))
+app.post('/api/register-sessions',async(req,res)=>res.json(await openRegisterSession(req.user,req.body.openingCash)))
+app.get('/api/register-sessions/:id/closure',async(req,res)=>res.json(await getRegisterClosure(req.user,req.params.id)))
+app.post('/api/register-sessions/:id/closure',async(req,res)=>res.json(await saveRegisterClosure(req.user,req.params.id,req.body)))
+app.get('/api/register-sessions/:id/closure/pdf',async(req,res)=>{
+  const closure=await getRegisterClosureRevision(req.user,req.params.id,req.query.revision)
+  res.set({'Content-Type':'application/pdf','Content-Disposition':`attachment; filename="cierre-caja-${req.params.id}.pdf"`}).send(Buffer.from(await createCashClosurePdf(closure)))
+})
+async function saleActor(req){const key=checkoutKey(req.headers['idempotency-key']);if(key){const old=await getSaleByCheckoutKey(key);if(old&&(old.cashierId===req.user.id||req.user.role==='admin'&&!old.cashierId))return {...req.user,sessionId:old.registerSessionId}}
+  const session=await getActiveRegisterSession(req.user);if(!session)throw Object.assign(new Error('Abre una sesión de caja para vender.'),{status:409,code:'SESSION_REQUIRED'});return {...req.user,sessionId:session.id}}
 
 const eventStreams = new Set()
 app.get('/api/events', (req, res) => {
@@ -317,12 +340,13 @@ app.get('/api/events', (req, res) => {
     clearTimeout(debounce)
     debounce = setTimeout(() => { if (!res.destroyed) res.write('event: change\ndata: {}\n\n') }, 50)
   })
-  const heartbeat = setInterval(() => {
-    if (!authStatus(req).authenticated) {
+  const heartbeat = setInterval(() => { (async()=>{
+    req.authUser=undefined
+    if (!(await authStatus(req)).authenticated) {
       res.write('event: unauthorized\ndata: {}\n\n')
       res.end()
     } else res.write(': heartbeat\n\n')
-  }, 20000)
+  })().catch(()=>res.end()) }, 20000)
   res.write('event: ready\ndata: {}\n\n')
   res.on('close', () => { clearTimeout(debounce); clearInterval(heartbeat); unsubscribe(); eventStreams.delete(res) })
 })
@@ -331,6 +355,7 @@ app.get('/api/checkouts/:key', async (req, res, next) => {
   try {
     const sale = await getSaleByCheckoutKey(checkoutKey(req.params.key))
     if (!sale) return res.status(404).json({ error: 'Checkout not found.' })
+    if(req.user.role==='cashier'&&sale.cashierId!==req.user.id)return res.status(404).json({error:'Venta no encontrada.'})
     res.json(sale)
   } catch (error) { next(error) }
 })
@@ -408,17 +433,17 @@ app.get('/api/reports/daily', async (req, res, next) => {
 app.get('/api/sales', async (req, res, next) => {
   try {
     res.setHeader('Cache-Control', 'private, no-cache')
-    res.json(await listSales(Math.min(Number(req.query.limit) || 50, 200)))
+    res.json(req.user.role==='cashier'?(await searchSales({limit:req.query.limit||50},req.user)).sales:await listSales(Math.min(Number(req.query.limit) || 50, 200)))
   } catch (error) { next(error) }
 })
 app.post('/api/sales/cash', async (req, res, next) => {
   try {
-    const sale = await createSale(cleanCart(req.body), 'cash', checkoutKey(req.headers['idempotency-key']), req.body.cashReceived ?? null)
+    const sale = await createSale(cleanCart(req.body), 'cash', checkoutKey(req.headers['idempotency-key']), req.body.cashReceived ?? null,await saleActor(req))
     res.status(sale.checkoutReplayed ? 200 : 201).json(sale)
   } catch (error) { next(error) }
 })
 app.get('/api/sales/history', async (req, res, next) => {
-  try { res.json(await searchSales(req.query)) } catch (error) { next(error) }
+  try { res.json(await searchSales(req.query,req.user)) } catch (error) { next(error) }
 })
 app.post('/api/sales/card', async (req, res, next) => {
   let sale
@@ -428,7 +453,7 @@ app.post('/api/sales/card', async (req, res, next) => {
   try {
     requireProtectedPoint()
     const reserveStartedAt = performance.now()
-    sale = await createSale(cleanCart(req.body), 'card', checkoutKey(req.headers['idempotency-key']))
+    sale = await createSale(cleanCart(req.body), 'card', checkoutKey(req.headers['idempotency-key']),null,await saleActor(req))
     // A replay only recovers the original sale, including uncertain reservations.
     // It must not send a second terminal order or fail another request's sale.
     if (sale.checkoutReplayed) return res.json(sale)
@@ -531,7 +556,7 @@ app.get('/api/sales/:id', async (req, res, next) => {
 app.post('/api/sales/:id/reconcile-point', async (req, res, next) => {
   try {
     requireProtectedPoint()
-    const sale = await getSale(req.params.id)
+    const sale = req.sale || await getSale(req.params.id)
     if (!sale) return res.status(404).json({ error: 'Sale not found.' })
     if (sale.paymentMethod !== 'card' || !sale.mpOrderId) {
       throw Object.assign(new Error('This sale has no Point order to synchronize.'), { status: 409 })
@@ -541,7 +566,7 @@ app.post('/api/sales/:id/reconcile-point', async (req, res, next) => {
 })
 app.post('/api/sales/:id/cancel', async (req, res, next) => {
   try {
-    const sale = await getSale(req.params.id)
+    const sale = req.sale || await getSale(req.params.id)
     if (!sale) return res.status(404).json({ error: 'Sale not found.' })
     if (sale.paymentMethod !== 'card' || sale.status !== 'pending') throw Object.assign(new Error('Only a pending card sale can be cancelled.'), { status: 409 })
     if (!sale.mpOrderId) throw Object.assign(new Error('Retry the Mercado Pago connection before cancelling this sale.'), { status: 409 })

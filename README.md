@@ -149,7 +149,7 @@ Official references:
 | `DATABASE_URL` | PostgreSQL connection string. |
 | `DATA_PATH` | JSON storage path when PostgreSQL is not configured. |
 | `SEED_DEMO_DATA` | Set to `true` only for a new local demo database. |
-| `STAFF_PIN` | Bakery staff access code. Required before live Point payments are enabled. |
+| `STAFF_PIN` | One-time bootstrap code for the first `admin` account. The existing shared PIN is accepted until that account changes its password. It does not recreate or reset an existing account. |
 | `SESSION_SECRET` | Long random value used to sign sessions. Required whenever `STAFF_PIN` is set. |
 | `MERCADOPAGO_ACCESS_TOKEN` | Private production or test Access Token. Server-side only. |
 | `MERCADOPAGO_POINT_TERMINAL_ID` | Full ID returned by Mercado Pago's terminal list. |
@@ -188,6 +188,16 @@ Planning and tax research:
 - [SII architecture summary](SII_DTE_RESEARCH.md)
 - [Detailed SII integration analysis](integraci%C3%B3n%20SII.md)
 
+## Users and register sessions
+
+There are two server-enforced roles. Administrators access every section and manage accounts at `/usuarios`. Cashiers only access Caja, their own sales/history, and their own register-session close/PDF. Cashiers cannot change products or stock, view general metrics or daily closes, manage Point, issue refunds, or read another cashier's sales/checkouts/closes by ID. Frontend navigation follows the same rules; it is not the authorization boundary.
+
+Production migrates the existing staff PIN to the first username `admin`, with a mandatory personal-password change before any business data is exposed. Existing shared sessions stop working. New accounts and administrator password resets also require changing the temporary password. Passwords use salted scrypt hashes; random session cookies are HttpOnly, SameSite=Strict and Secure in production, expire after 12 hours, and are stored only as token hashes. Disabling a user, changing their role, or resetting/changing a password revokes their sessions. The last active administrator cannot be removed. Local installations without a bootstrap PIN show first-administrator setup, which is rejected by production and can only run once.
+
+Each user opens a register session with an opening cash amount before selling. Signing out leaves that cash session open, so signing back in resumes it. Closing requires resolving pending payments; a row lock serializes new sales against closing. The server fixes the session owner and opening cash, ignores client-supplied identity, records new sales with cashier/session IDs, and saves a compressed close PDF. A cashier's closed session is read-only. Administrators can view all sessions, correct a saved close with a versioned explanation, and still access the general daily close. Sessions can span midnight. Historical sales stay unassigned; no past sale is relabeled as a new user's sale.
+
+Cart drafts and pending checkout recovery are separated by user in the browser. For authenticated CLI measurements/checks, supply `APP_USERNAME` (default `admin`) and `APP_PASSWORD`; the original `STAFF_PIN` only works during initial migration and cannot bypass a required password change. Backups include user password hashes and register-session snapshots, but exclude login-session tokens; keep backups private.
+
 ## Daily cash close
 
 `/caja` opens the counter with Carrito and Historial. `/caja/cierre` contains the daily close, previously shown in Métricas. A selected day is preserved as `/caja/cierre?fecha=YYYY-MM-DD`; the server uses `America/Santiago` (or `BAKERY_TIME_ZONE`) and handles daylight saving time.
@@ -222,7 +232,7 @@ npm start
 
 `seed:week` only replaces the local JSON demo. The PostgreSQL command is deliberately separate and requires the two explicit confirmation flags shown in the Railway section.
 
-`audit:postgres` uses a read-only transaction to report database counts and integrity checks. It prefers `DATABASE_PUBLIC_URL` for local access. `smoke:production` uses `STAFF_PIN` to check the deployed API and Point terminal without creating sales or refunds. Set `EXPECT_AUTH_HARDENING=true` to require malformed cookies to return 401. Keep the local JSON demonstration dataset separate from the live PostgreSQL records.
+`audit:postgres` uses a read-only transaction to report database counts and integrity checks. It prefers `DATABASE_PUBLIC_URL` for local access. `smoke:production` uses `APP_USERNAME` and `APP_PASSWORD` to check the deployed API and Point terminal without creating sales or refunds. Set `EXPECT_AUTH_HARDENING=true` to require malformed cookies to return 401. Keep the local JSON demonstration dataset separate from the live PostgreSQL records.
 
 The verified `ProductosPrecios` snapshot is in `assets/productos-precios.json`. `npm run import:catalog -- --target=local` previews its replacement of the local product catalog; add `--apply` to execute it. Use `--target=postgres` with the PoS production Postgres service variables for Railway. The import backs up the database, removes the previous products and stock movements, and loads the sheet's names and actual CLP prices with zero opening quantities. Sales, refund snapshots, tax documents and cash closures are retained; old product links are detached. The PostgreSQL replacement verifies history before committing and rolls back on failure.
 
@@ -230,4 +240,4 @@ Catalog source assets live in `Imagenes/`; the Python catalog/sign scripts use P
 
 ## Production note
 
-Keep staff authentication enabled on any public Railway deployment. This release provides one shared staff PIN; individual accounts, roles, approval limits, and automatic tax issuance remain necessary before a larger rollout.
+Keep staff authentication enabled on any public Railway deployment. Individual admin/cashier accounts and register-session closes are supported. Automatic tax issuance is a separate integration.

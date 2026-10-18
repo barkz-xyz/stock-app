@@ -1,6 +1,7 @@
 import { closurePeriod } from './cash-closure.js'
 
 export function cleanHistoryQuery(query = {}) {
+  if(query.sessionId&&!/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(query.sessionId))throw Object.assign(new Error('Sesión inválida.'),{status:400})
   const from = query.from ? closurePeriod(query.from).from : null
   const to = query.to ? closurePeriod(query.to).to : null
   if (from && to && new Date(from) >= new Date(to)) throw Object.assign(new Error('Revisa el rango de fechas.'), { status: 400 })

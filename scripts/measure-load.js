@@ -19,8 +19,8 @@ async function read(route) {
 }
 const status = (await read('/api/auth/status')).data
 if (status.required) {
-  assert.ok(process.env.STAFF_PIN, 'STAFF_PIN is required for authenticated measurements')
-  const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: process.env.STAFF_PIN }), signal: AbortSignal.timeout(20000) })
+  assert.ok(process.env.APP_PASSWORD || process.env.STAFF_PIN, 'APP_PASSWORD is required for authenticated measurements')
+  const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username:process.env.APP_USERNAME||'admin',password:process.env.APP_PASSWORD||process.env.STAFF_PIN }), signal: AbortSignal.timeout(20000) })
   assert.equal(login.status, 200, 'Staff login')
   cookie = login.headers.get('set-cookie')?.split(';')[0]
   assert.ok(cookie)

@@ -1,5 +1,6 @@
-const storageKey = 'bakery-pending-checkout'
+let storageKey = 'bakery-pending-checkout'
 let memory = null
+export function setCheckoutUser(id,legacyAdmin=false){const next=id?`bakery-pending-checkout:${id}`:'bakery-pending-checkout';if(next===storageKey)return;memory=null;try{if(id&&legacyAdmin&&!sessionStorage.getItem(next)&&sessionStorage.getItem('bakery-pending-checkout')){sessionStorage.setItem(next,sessionStorage.getItem('bakery-pending-checkout'));sessionStorage.removeItem('bakery-pending-checkout')}}catch{}storageKey=next}
 
 export function pendingCheckout() {
   try {

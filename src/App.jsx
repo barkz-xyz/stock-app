@@ -6,7 +6,8 @@ import { createRouter, isPlainNavigation, parseRoute, sectionHref } from './rout
 import { dateOnly, parseCalendarDate } from './dates.js'
 import { useI18n } from './i18n.js'
 import { categories, CategoryIcon, categoryClass, formatQuantity, Modal, LoadingSkeleton } from './ui.jsx'
-import { saveCartDraft, searchText } from './posWorkspace.js'
+import { saveCartDraft, searchText, setWorkspaceUser } from './posWorkspace.js'
+import { setCheckoutUser } from './checkoutAttempts.js'
 import { Cloud as CloudCheck, CloudOff, Ellipsis, LoaderCircle } from 'lucide-react'
 
 const units = ['pieces', 'loaves', 'cakes', 'kg', 'g', 'litres', 'bottles', 'boxes', 'packs']
@@ -16,6 +17,7 @@ const MetricsPage = lazy(() => import('./MetricsPage.jsx'))
 const CashClosurePage = lazy(() => import('./CashClosurePage.jsx'))
 const MercadoPagoSettings = lazy(() => import('./MercadoPagoSettings.jsx'))
 const InventoryBatch = lazy(() => import('./InventoryBatch.jsx'))
+const UserManagement = lazy(() => import('./UserManagement.jsx'))
 const noop = () => {}
 const router = createRouter(window)
 
@@ -49,30 +51,28 @@ function ThemeToggle({ theme, onToggle }) {
   </button>
 }
 
-function LoginScreen({ onLogin, theme, onThemeToggle }) {
-  const { t } = useI18n()
-  const [pin, setPin] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const submit = async (event) => {
-    event.preventDefault(); setBusy(true); setError('')
-    try { await onLogin(pin); setPin('') } catch (nextError) { setError(nextError.message) } finally { setBusy(false) }
-  }
-  return <main className="login-page">
-    <div className="login-language"><ThemeToggle theme={theme} onToggle={onThemeToggle} /><LanguageToggle /></div>
-    <section className="login-card">
-      <div className="login-mark"><Croissant size={31} /></div>
-      <span className="eyebrow">Bakery POS</span>
-      <h1>{t('welcomeBack')}</h1>
-      <p>{t('loginDescription')}</p>
-      <form onSubmit={submit}>
-        <label htmlFor="staff-pin">{t('staffPin')}</label>
-        <div className="pin-input"><LockKeyhole size={19} /><input id="staff-pin" type="password" inputMode="numeric" autoComplete="current-password" autoFocus required value={pin} onChange={(event) => setPin(event.target.value)} placeholder="••••" /></div>
-        {error && <div className="inline-error"><AlertTriangle size={16} />{error}</div>}
-        <button className="button primary" disabled={busy}>{busy ? t('signingIn') : t('signIn')}<ArrowRight size={18} /></button>
-      </form>
-    </section>
-  </main>
+function LoginScreen({ auth,onLogin,onSetup,onPassword,theme,onThemeToggle }) {
+  const { t,language }=useI18n(),tx=(es,en)=>language==='es'?es:en
+  const [username,setUsername]=useState('admin'),[name,setName]=useState(''),[password,setPassword]=useState(''),[newPassword,setNewPassword]=useState(''),[confirm,setConfirm]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('')
+  const setup=auth?.setupRequired,change=auth?.user?.mustChangePassword
+  const submit=async e=>{e.preventDefault();setBusy(true);setError('');try{
+    if((setup||change)&&newPassword!==confirm)throw new Error(tx('Las contraseñas no coinciden.','Passwords do not match.'))
+    if(setup)await onSetup({username,name,password:newPassword})
+    else if(change)await onPassword({currentPassword:password,password:newPassword})
+    else await onLogin(username,password)
+    setPassword('');setNewPassword('');setConfirm('')
+  }catch(e){setError(e.message)}finally{setBusy(false)}}
+  return <main className="login-page"><div className="login-language"><ThemeToggle theme={theme} onToggle={onThemeToggle}/><LanguageToggle/></div><section className="login-card">
+    <div className="login-mark"><Croissant size={31}/></div><span className="eyebrow">Bakery POS</span><h1>{tx(setup?'Crear administrador':change?'Nueva contraseña':'Ingresar',setup?'Create administrator':change?'New password':'Sign in')}</h1>
+    <form onSubmit={submit}>
+      {setup&&<label className="field"><span>{tx('Nombre','Name')}</span><input required maxLength={80} value={name} onChange={e=>setName(e.target.value)}/></label>}
+      {!change&&<label className="field"><span>{tx('Usuario','Username')}</span><input required autoComplete="username" autoCapitalize="none" value={username} onChange={e=>setUsername(e.target.value.toLowerCase())}/></label>}
+      {change&&<p className="login-identity">{auth.user.name} · @{auth.user.username}</p>}
+      {!setup&&<label className="field"><span>{tx(change?'Contraseña actual o código inicial':'Contraseña',change?'Current password or initial code':'Password')}</span><input required type="password" autoComplete="current-password" maxLength={128} value={password} onChange={e=>setPassword(e.target.value)}/></label>}
+      {(setup||change)&&<><label className="field"><span>{tx('Nueva contraseña · mínimo 8 caracteres','New password · 8 characters minimum')}</span><input required type="password" minLength={8} maxLength={128} autoComplete="new-password" value={newPassword} onChange={e=>setNewPassword(e.target.value)}/></label><label className="field"><span>{tx('Repetir contraseña','Repeat password')}</span><input required type="password" minLength={8} maxLength={128} autoComplete="new-password" value={confirm} onChange={e=>setConfirm(e.target.value)}/></label></>}
+      {error&&<div className="inline-error" role="alert"><AlertTriangle size={16}/>{error}</div>}
+      <button className="button primary" disabled={busy}>{busy?t('saving'):tx(setup?'Crear administrador':change?'Guardar contraseña':'Ingresar',setup?'Create administrator':change?'Save password':'Sign in')}<ArrowRight size={18}/></button>
+    </form></section></main>
 }
 
 function RefundInventoryPrompt({ sale, refund, onResolve, busy }) {
@@ -295,6 +295,7 @@ export default function App() {
   const [movements, setMovements] = useState([])
   const [sales, setSales] = useState([])
   const [dailySummary, setDailySummary] = useState(null)
+  const [registerSession,setRegisterSession]=useState(null),[registerSessions,setRegisterSessions]=useState([])
   const [metricsData, setMetricsData] = useState(null)
   const metricsRange = route.metricsRange
   const setMetricsRange = range => router.navigate(sectionHref('metrics', { range }))
@@ -324,12 +325,13 @@ export default function App() {
     return () => document.removeEventListener('keydown', close)
   }, [mobileMenu])
   const pendingInventoryReview = useMemo(() => {
+    if(auth?.user?.role!=='admin')return null
     for (const sale of sales) {
       const refund = sale.refunds?.find((entry) => entry.status === 'processed' && entry.inventoryReviewStatus === 'pending')
       if (refund) return { sale, refund }
     }
     return null
-  }, [sales])
+  }, [sales,auth?.user?.role])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -346,7 +348,9 @@ export default function App() {
       const next = await api.bootstrap()
       if (sequence !== refreshSequence.current) return
       setAuth(next.auth); setSyncError(''); setLastSync(Date.now())
-      if (!next.auth.authenticated) return
+      if (!next.auth.authenticated || next.auth.user.mustChangePassword) return
+      setCheckoutUser(next.auth.user.id,next.auth.user.role==='admin');setWorkspaceUser(next.auth.user.id)
+      setRegisterSession(next.registerSession);setRegisterSessions(next.registerSessions||[])
       setItems(next.items); setMovements(next.movements); setSales(next.sales); setPosConfig(next.posConfig); setDailySummary(next.dailySummary)
     } catch (error) {
       if (sequence === refreshSequence.current) setSyncError(error.message)
@@ -388,17 +392,19 @@ export default function App() {
     return () => { window.removeEventListener('offline', offline); window.removeEventListener('online', online) }
   }, [refresh, t])
 
-  const handleLogin = async (pin) => {
-    const status = await api.login(pin)
+  const handleLogin = async (username,password) => {
+    const status = await api.login(username,password)
     setAuth(status); setLoading(true)
     try { await refresh() } finally { setLoading(false) }
   }
+  const handleSetup=async body=>{setAuth(await api.setupAdmin(body));await refresh()}
+  const handlePassword=async body=>{setAuth(await api.changePassword(body));await refresh()}
   const handleLogout = async () => {
     refreshSequence.current += 1
     metricsRequest.current?.abort()
     await api.logout()
     refreshSequence.current += 1
-    saveCartDraft([]); setIssue(null); setToastState(null)
+    saveCartDraft([]);setCheckoutUser(null);setWorkspaceUser(null);setRegisterSession(null);setRegisterSessions([]); setIssue(null); setToastState(null)
     setAuth({ ...auth, authenticated: false }); setItems([]); setSales([]); setMovements([]); setMetricsData(null); setDailySummary(null)
   }
   const toggleSidebar = () => {
@@ -453,14 +459,19 @@ export default function App() {
     } catch (error) { setToast({ type: 'error', message: error.message }) }
     finally { setExportingReport(false) }
   }
-  const nav = [
+  const allNav = [
     { id: 'dashboard', label: t('overview'), icon: LayoutDashboard },
     { id: 'pos', label: t('registerTitle'), icon: ShoppingBasket },
     { id: 'inventory', label: t('inventory'), icon: Boxes },
     { id: 'metrics', label: t('metricsNav'), icon: LineChart },
     { id: 'activity', label: t('activity'), icon: History },
     { id: 'settings', label: t('settings'), icon: Settings },
+    { id:'users',label:language==='es'?'Usuarios':'Users',icon:LockKeyhole },
   ]
+  const isAdmin=auth?.user?.role==='admin'
+  const nav=isAdmin?allNav:allNav.filter(n=>n.id==='pos')
+  const blockedPage=auth?.authenticated&&!isAdmin&&page!=='pos'
+  useEffect(()=>{if(blockedPage&&!auth?.user?.mustChangePassword)router.navigate('/caja',{replace:true})},[blockedPage,auth?.user?.mustChangePassword])
   const pageTitle = nav.find((entry) => entry.id === page)?.label || t('sectionNotFound')
   useEffect(() => { document.title = `${pageTitle} · Bakery POS` }, [pageTitle])
   const followSection = (event, href) => {
@@ -468,8 +479,10 @@ export default function App() {
   }
 
   if (!auth) return <main><LoadingSkeleton full />{syncError && <div className="startup-error" role="alert"><AlertTriangle size={18} /><p>{t('serverFailed')}</p><button className="button primary" disabled={syncing} onClick={() => refresh().catch(() => {})}>{t('serverRetry')}</button></div>}</main>
-  if (auth?.required && !auth.authenticated) return <LoginScreen onLogin={handleLogin} theme={theme} onThemeToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} />
+  if (auth?.required && (!auth.authenticated||auth.user?.mustChangePassword)) return <LoginScreen auth={auth} onSetup={handleSetup} onPassword={handlePassword} onLogin={handleLogin} theme={theme} onThemeToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} />
 
+  if(blockedPage)return <LoadingSkeleton/>
+  const closureSessionId=route.registerSessionId||(!isAdmin?(registerSession?.id||registerSessions[0]?.id||'none'):null)
   return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${page === 'pos' && route.registerView !== 'close' ? 'is-caja' : ''}`}>
     <aside className={`sidebar ${mobileMenu ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
       <div className="brand"><button ref={brandLogoRef} className="brand-logo" onClick={toggleSidebar} aria-expanded={!sidebarCollapsed} aria-label={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')} title={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')}><span className="brand-mark"><Croissant size={24} /></span></button><span className="brand-copy"><strong>Bakery POS</strong><span>{t('brandSubtitle')}</span></span><button className="sidebar-toggle" onClick={toggleSidebar} aria-label={t('collapseSidebar')} title={t('collapseSidebar')}><PanelLeftClose size={17} /></button></div>
@@ -478,24 +491,25 @@ export default function App() {
     </aside>
     {mobileMenu && <button className="menu-backdrop" onClick={() => setMobileMenu(false)} aria-label={t('close')} />}
     <main className="main-content">
-      <header className="topbar"><button className="icon-button menu-button" onClick={() => setMobileMenu(true)} aria-label={t('openMenu')}><Menu size={21} /></button><div className="topbar-context"><span>Bakery POS</span><strong>{pageTitle}</strong></div><span className="topbar-spacer" />
+      <header className="topbar"><button className="icon-button menu-button" onClick={() => setMobileMenu(true)} aria-label={t('openMenu')}><Menu size={21} /></button><div className="topbar-context"><span>{isAdmin?'Bakery POS':auth.user.name}</span><strong>{pageTitle}</strong></div><span className="topbar-spacer" />
         <button className={`server-chip ${syncError ? 'offline' : ''}`} onClick={() => refresh().catch(() => {})} disabled={syncing} aria-label={`${t('server')}: ${t(syncError ? 'serverOffline' : syncing ? 'serverSyncing' : 'serverReady')}`} title={`${t('server')} · ${lastSync ? t('syncAt', { time: formatTime(lastSync) }) : t('serverSyncing')}`}>{syncing ? <LoaderCircle size={17} className="spin" /> : syncError ? <CloudOff size={17} /> : <CloudCheck size={17} />}<span>{t(syncError ? 'serverOffline' : syncing ? 'serverSyncing' : 'serverReady')}</span></button>
         {page === 'pos' && <button className={`terminal-chip topbar-terminal ${pointStatus === 'ready' ? 'ready' : ''}`} onClick={checkPoint} disabled={!posConfig.configured || pointStatus === 'checking'} aria-label={`${t('pointStatus')}: ${t(pointStatus === 'ready' ? 'readyToCharge' : pointStatus === 'error' ? 'pointCheckFailed' : pointStatus === 'checking' ? 'pointChecking' : 'pointUnchecked')}`} title={posConfig.configured ? t('pointStatus') : t('pointOffline')}><Wifi size={15} /><span className="terminal-dot" /><span className="topbar-terminal-copy"><strong>{posConfig.mockMode ? t('pointDemoMode') : 'Point'}</strong><small>{t(!posConfig.configured ? 'pointOffline' : pointStatus === 'ready' ? 'readyToCharge' : pointStatus === 'error' ? 'pointCheckFailed' : pointStatus === 'checking' ? 'pointChecking' : 'pointUnchecked')}</small></span></button>}
-        <ThemeToggle theme={theme} onToggle={() => setTheme(current => current === 'dark' ? 'light' : 'dark')} /><div className="topbar-language"><LanguageToggle /></div>{['dashboard','inventory'].includes(page) && <button className="button primary mobile-add" onClick={() => setModal({ type: 'add' })}><Plus size={20} /><span>{t('add')}</span></button>}<div className="date-chip"><Clock3 size={17} /><span>{formatDate(new Date().toLocaleDateString('en-CA'))}</span></div></header>
+        <span className="signed-user">{auth.user.name}<small>{isAdmin?'Admin':language==='es'?'Cajero':'Cashier'}</small></span><button className="icon-button topbar-logout" onClick={handleLogout} aria-label={t('signOut')} title={t('signOut')}><LogOut size={17}/></button><ThemeToggle theme={theme} onToggle={() => setTheme(current => current === 'dark' ? 'light' : 'dark')} /><div className="topbar-language"><LanguageToggle /></div>{isAdmin&&['dashboard','inventory'].includes(page) && <button className="button primary mobile-add" onClick={() => setModal({ type: 'add' })}><Plus size={20} /><span>{t('add')}</span></button>}<div className="date-chip"><Clock3 size={17} /><span>{formatDate(new Date().toLocaleDateString('en-CA'))}</span></div></header>
       {syncError && <div className="connection-banner" role="alert"><CloudOff size={17} /><span>{t('serverFailed')}</span><button disabled={syncing} onClick={() => refresh().catch(() => {})}>{t('serverRetry')}</button></div>}
       {issue && <div className={`operation-banner ${issue.type}`} role="alert"><AlertTriangle size={17} /><span>{issue.message}</span><button onClick={() => setIssue(null)} aria-label={t('close')}><X size={18} /></button></div>}
       {loading ? <LoadingSkeleton /> : <Suspense fallback={<LoadingSkeleton />}>
         {page === 'dashboard' && <Dashboard items={items} movements={movements} dailySummary={dailySummary} onAdd={() => setModal({ type: 'add' })} onAdjust={(item) => setModal({ type: 'adjust', item })} onGoInventory={() => setPage('inventory')} onGoPos={() => setPage('pos')} />}
-        {page === 'pos' && route.registerView === 'close' && <CashClosurePage refreshToken={dailySummary} date={route.closureDate} onNavigate={href => router.navigate(href)} setToast={setToast} />}
-        {page === 'pos' && route.registerView !== 'close' && <SalesCounter serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refresh} setToast={setToast} onNavigate={href => router.navigate(href)} registerView={route.registerView} onRegisterViewChange={view => router.navigate(sectionHref('pos', { view }))} />}
+        {page === 'pos' && route.registerView === 'close' && <CashClosurePage user={auth.user} sessionId={closureSessionId} sessions={registerSessions} onSessionChange={id=>router.navigate(id?'/caja/cierre?sesion='+id:'/caja/cierre')} refreshToken={sales} date={route.closureDate} onClosed={refresh} onNavigate={href => router.navigate(href)} setToast={setToast} />}
+        {page === 'pos' && route.registerView !== 'close' && <SalesCounter user={auth.user} registerSession={registerSession} onOpenRegister={async amount=>{await api.openRegister(amount);await refresh()}} serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refresh} setToast={setToast} onNavigate={href => router.navigate(href)} registerView={route.registerView} onRegisterViewChange={view => router.navigate(sectionHref('pos', { view }))} />}
         {page === 'inventory' && <Inventory items={items} onBatch={() => setModal({ type: 'batch' })} onAdd={() => setModal({ type: 'add' })} onAdjust={(item) => setModal({ type: 'adjust', item })} onEdit={(item) => setModal({ type: 'edit', item })} />}
         {page === 'metrics' && <MetricsPage metrics={metricsData} range={metricsRange} onRangeChange={setMetricsRange} onRefresh={() => loadMetrics(metricsRange)} onExport={exportDailyReport} loading={metricsLoading} exporting={exportingReport} />}
         {page === 'activity' && <Activity movements={movements} />}
+        {page==='users'&&isAdmin&&<UserManagement currentUser={auth.user} setToast={setToast}/>}
         {page === 'settings' && <MercadoPagoSettings setToast={setToast} />}
         {page === 'not-found' && <section className="page empty-state"><h1>{t('sectionNotFound')}</h1><p>{t('sectionNotFoundDescription')}</p><a className="button primary" href={sectionHref('dashboard')} onClick={event => followSection(event, sectionHref('dashboard'))}>{t('backToOverview')}</a></section>}
       </Suspense>}
     </main>
-    <nav className="bottom-nav" aria-label={t('openMenu')}>{nav.slice(0,3).map(({ id, label, icon: Icon }) => <a key={id} href={sectionHref(id)} aria-current={page === id ? 'page' : undefined} className={page === id ? 'active' : ''} onClick={event => followSection(event, sectionHref(id))}><Icon size={21} /><span>{label}</span></a>)}<button className={nav.slice(3).some(n => n.id === page) || mobileMenu ? 'active' : ''} onClick={() => setMobileMenu(v => !v)} aria-expanded={mobileMenu}><Ellipsis size={23} /><span>{t('more')}</span></button></nav>
+    <nav className={`bottom-nav ${isAdmin?'':'cashier-nav'}`} aria-label={t('openMenu')}>{nav.slice(0,3).map(({ id, label, icon: Icon }) => <a key={id} href={sectionHref(id)} aria-current={page === id ? 'page' : undefined} className={page === id ? 'active' : ''} onClick={event => followSection(event, sectionHref(id))}><Icon size={21} /><span>{label}</span></a>)}{isAdmin&&<button className={nav.slice(3).some(n => n.id === page) || mobileMenu ? 'active' : ''} onClick={() => setMobileMenu(v => !v)} aria-expanded={mobileMenu}><Ellipsis size={23} /><span>{t('more')}</span></button>}{!isAdmin&&<button onClick={handleLogout}><LogOut size={20}/><span>{language==='es'?'Salir':'Sign out'}</span></button>}</nav>
     {modal?.type === 'batch' && <Modal title={t('batchInventory')} onClose={() => setModal(null)} wide><Suspense fallback={<LoadingSkeleton />}><InventoryBatch items={items} onClose={() => setModal(null)} onSaved={async () => { await refresh(); setModal(null); setToast({ type: 'success', message: t('batchSaved') }) }} /></Suspense></Modal>}
     {modal?.type === 'add' && <Modal title={t('addProduct')} eyebrow={t('inventorySetup')} onClose={() => setModal(null)}><ProductForm onSubmit={addItem} onClose={() => setModal(null)} busy={busy} theme={theme} /></Modal>}
     {modal?.type === 'edit' && <Modal title={modal.item.name} eyebrow={t('productDetails')} onClose={() => setModal(null)}><ProductForm item={modal.item} onSubmit={(form) => editItem(modal.item, form)} onDelete={() => deleteItem(modal.item)} onClose={() => setModal(null)} busy={busy} theme={theme} /></Modal>}

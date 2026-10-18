@@ -12,7 +12,8 @@ const html = await fs.readFile('dist/index.html', 'utf8')
 const assetNames = await fs.readdir('dist/assets')
 const entry = html.match(/src="(\/assets\/index-[^"]+\.js)"/)[1]
 const routes = ['/', entry, ...['react-vendor-', 'index-', 'berlines-192-'].map(prefix => '/assets/' + assetNames.find(name => name.startsWith(prefix) && (prefix !== 'index-' || name.endsWith('.css'))))]
-const headers = { 'X-Railway-Debug': '1' }
+// Railway's debug header bypasses its CDN; use it only for origin baselines.
+const headers = baseline ? { 'X-Railway-Debug': '1' } : {}
 async function read(route, options = {}) {
   const started = performance.now()
   const response = await fetch(base + route, { ...options, headers: { ...headers, ...options.headers }, signal: AbortSignal.timeout(20000) })

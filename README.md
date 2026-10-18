@@ -67,9 +67,9 @@ Use Railway's CDN in Auto HTML mode with HTML purging after successful deploymen
 
 Every `/api` response, including authentication, errors, and unknown routes, defaults to `private, no-store` with `Vary: Cookie`. Sales history permits private ETag revalidation while remaining excluded from shared caching. Missing assets return an uncached 404 instead of the HTML shell. Keep these boundaries when adding new endpoints.
 
-Production settings: `railway cdn update --service stock-app --html-caching auto --default-ttl 2h --swr --purge-on-deploy html`, followed by `railway cdn enable --service stock-app`. HTML purges preserve immutable assets at the edge. API requests continue to reach the server. CDN settings are service configuration, independent of Git deployments.
+Enable with `railway cdn enable --service stock-app`, then configure `railway cdn update --service stock-app --html-caching auto --default-ttl 2h --swr --purge-on-deploy html`. HTML purges preserve immutable assets at the edge. API requests continue to reach the server. CDN settings are service configuration, independent of Git deployments.
 
-`npm run verify:cdn` checks live edge cache hits, deployed asset hashes, API exclusions, and (when `STAFF_PIN` is supplied) authenticated bootstrap/history. It only reads data and opens a staff session. Use `-- --baseline` before enabling caching. Reports go to `output/cdn-before.json` or `output/cdn-after.json`, overridable with `CDN_OUTPUT`; `PRODUCTION_BASE_URL` selects a different host.
+`npm run verify:cdn` checks live edge cache hits, deployed asset hashes, API exclusions, and (when `STAFF_PIN` is supplied) authenticated bootstrap/history. It only reads data and opens a staff session. Use `-- --baseline` for an uncached origin measurement: it deliberately sends `X-Railway-Debug`, which bypasses the CDN. Regular verification omits this header. Reports go to `output/cdn-before.json` or `output/cdn-after.json`, overridable with `CDN_OUTPUT`; `PRODUCTION_BASE_URL` selects a different host.
 
 ## Deploy to Railway
 

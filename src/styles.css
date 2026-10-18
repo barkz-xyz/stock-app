@@ -1089,7 +1089,7 @@ html[data-theme='light'] .cash-close-card { background: linear-gradient(120deg,#
 .closure-section-summary > span { display: flex; align-items: center; gap: 8px; }.closure-section-summary small { color: var(--muted); font-size: 10px; font-weight: 500; }
 .closure-section-summary > svg, .closure-settlement > summary > svg { transition: transform .15s ease; }
 .closure-operations[open] > summary > svg, .closure-revisions[open] > summary > svg, .closure-settlement[open] > summary > svg { transform: rotate(180deg); }
-.closure-page summary::-webkit-details-marker { display: none; }
+.closure-section-summary::-webkit-details-marker, .closure-settlement > summary::-webkit-details-marker { display: none; }
 .closure-section-summary:focus-visible, .closure-settlement summary:focus-visible { outline: 2px solid var(--cocoa); outline-offset: -3px; border-radius: 8px; }
 .closure-operations .card-header { min-height: 0; padding: 0 16px 12px; }
 .closure-filters { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; }

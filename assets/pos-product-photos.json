@@ -1,0 +1,23 @@
+{
+  "description": "Original Atelier del Puerto photos. Crops use fractions of the EXIF-oriented source. Only matching products receive a photo; other products retain their category icon.",
+  "photos": [
+    { "id": "berlines", "source": "Imagenes/Berlines.jpg", "crop": [0, 0.34, 1, 1], "products": ["BERLINES"] },
+    { "id": "croissant", "source": "Imagenes/Croissant.jpg", "products": ["CROISSANT"] },
+    { "id": "croissant-dulce", "source": "Imagenes/Croissant Relleno.PNG", "crop": [0.04, 0.24, 0.96, 0.69], "products": ["CROISSANT DULCE"] },
+    { "id": "daneses", "source": "Imagenes/Daneses.jpg", "products": ["DANESES"] },
+    { "id": "empanadas", "source": "Imagenes/Empanadas.jpg", "crop": [0.12, 0.17, 1, 0.94], "products": ["EMPANADA JAMON/QUESO MASA DE HOJA", "EMPANADA CHAMPIÑON/QUESO", "EMPANADA PINO (CARNE PICADA)", "EMPANADA QUESO MASA DE HOJA", "EMPANADA POLLO/QUESO"] },
+    { "id": "jumbos", "source": "Imagenes/Jumbo.jpg", "crop": [0, 0.12, 1, 0.89], "products": ["JUMBOS"] },
+    { "id": "pan-milagrito", "source": "Imagenes/Milagrito.jpg", "crop": [0.05, 0.22, 0.95, 0.78], "products": ["PAN MILAGRITO"] },
+    { "id": "napoleon", "source": "Imagenes/Napoleón.jpg", "products": ["NAPOLEON"] },
+    { "id": "palmeritas", "source": "Imagenes/Palmerita.jpg", "crop": [0.05, 0.21, 0.96, 0.66], "products": ["PALMERITAS"] },
+    { "id": "pie-limon", "source": "Imagenes/Pie limón.jpg", "crop": [0.18, 0.03, 0.88, 0.96], "products": ["PIE DE LIMON", "PIE LIMON ENTERO"] },
+    { "id": "pizza", "source": "Imagenes/Pizza.jpg", "crop": [0.08, 0.2, 0.98, 0.9], "products": ["PIZZA MEDIANA", "PIZZAS TROZO"] },
+    { "id": "rolls-frosting", "source": "Imagenes/Rollo de canela con glaseado.jpg", "products": ["ROLLS CANELA C/FROSTING"] },
+    { "id": "rolls-canela", "source": "Imagenes/Rollos Canela sin glaseado.jpg", "crop": [0, 0.34, 1, 0.72], "products": ["ROLLS CANELA"] },
+    { "id": "trenzas", "source": "Imagenes/Trenza.jpg", "crop": [0.03, 0.13, 0.99, 0.94], "products": ["TRENZAS"] },
+    { "id": "kuchen-manzana", "source": "Imagenes/kuchen manzana.PNG", "crop": [0.1, 0.43, 0.94, 0.79], "products": ["KUCHEN MANZANA"] },
+    { "id": "tartaleta-frutas", "source": "Imagenes/variado (1).jpg", "crop": [0.06, 0.58, 0.98, 0.96], "products": ["TARTALETA DE FRUTAS"] },
+    { "id": "cesta-frutas", "source": "Imagenes/Cesta de frutas.jpg", "origin": "https://drive.google.com/file/d/11An2GDWCsBV4VcZzDg03AOj_bcj3Z_ln/view", "products": ["CESTA DE FRUTAS"] },
+    { "id": "selva-negra", "source": "Imagenes/Selva negra.jpg", "origin": "https://drive.google.com/file/d/1dr1Yoh8NDN6bDrYMijnL0lUe_nhDbKkC/view", "crop": [0.04, 0.32, 0.98, 0.82], "products": ["BISCOCHO SELVA NEGRA"] }
+  ]
+}

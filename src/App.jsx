@@ -10,6 +10,7 @@ import {
 import { api } from './api.js'
 import { dateOnly, parseCalendarDate } from './dates.js'
 import { useI18n } from './i18n.js'
+import { getProductPhoto } from './productPhotos.js'
 
 const categories = ['Bread', 'Pastries', 'Cakes', 'Ingredients', 'Packaging', 'Drinks', 'Other']
 const units = ['pieces', 'loaves', 'cakes', 'kg', 'g', 'litres', 'bottles', 'boxes', 'packs']
@@ -25,6 +26,16 @@ function categoryClass(category = '') {
 function CategoryIcon({ category, size = 20, className = '' }) {
   const Icon = categoryIcons[category] || Sparkles
   return <Icon className={className} size={size} aria-hidden="true" />
+}
+
+function ProductArtwork({ item }) {
+  const photo = getProductPhoto(item.name)
+  const [failedSource, setFailedSource] = useState(null)
+  if (!photo || failedSource === photo.src) return <CategoryIcon category={item.category} size={82} className="sale-product-art" />
+  return <img className="sale-product-photo" src={photo.src} srcSet={photo.srcSet}
+    sizes="(max-width: 480px) calc((100vw - 48px) / 2), 180px"
+    width={photo.width} height={photo.height} alt="" aria-hidden="true"
+    loading="lazy" decoding="async" onError={() => setFailedSource(photo.src)} />
 }
 
 function formatQuantity(value) {
@@ -744,7 +755,7 @@ function SalesCounter({ items, sales, posConfig, onRefresh, setToast }) {
         {sellable.length === 0 ? <div className="card pos-empty"><div className="empty-art"><ReceiptText size={31} /></div><h3>{t('configureProductsForSale')}</h3><p>{t('configureProductsDescription')}</p></div> : products.length ? <div className="product-grid">{products.map((item) => {
           const inCart = cart.find((line) => line.itemId === item.id)?.quantity || 0
           return <button key={item.id} className={`sale-product category-${categoryClass(item.category)} ${item.quantity <= 0 ? 'is-unavailable' : ''}`} disabled={item.quantity <= 0 || inCart >= item.quantity} onClick={() => changeQuantity(item, 1)}>
-            <CategoryIcon category={item.category} size={82} className="sale-product-art" />
+            <ProductArtwork item={item} />
             {inCart > 0 && <span className="cart-badge">{formatQuantity(inCart)}</span>}
             <strong className="sale-product-name">{item.name}</strong>
             <div className="sale-product-footer"><span className="sale-product-price">{formatCurrency(item.price)}</span>{item.quantity > 0 && <span className="sale-product-stock"><b>{formatQuantity(item.quantity)}</b><small>{unitLabel(item.unit)}</small></span>}</div>

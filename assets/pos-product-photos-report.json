@@ -1,0 +1,483 @@
+{
+  "photoCount": 18,
+  "matchedProducts": 24,
+  "catalogProducts": 49,
+  "sourceBytes": 43519234,
+  "webpBytesBothSizes": 377514,
+  "photos": [
+    {
+      "id": "berlines",
+      "source": "Imagenes/Berlines.jpg",
+      "sourceBytes": 3128895,
+      "products": [
+        "BERLINES"
+      ],
+      "variants": [
+        {
+          "file": "berlines-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 5738,
+          "quality": 78,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "berlines-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16326,
+          "quality": 62,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "croissant",
+      "source": "Imagenes/Croissant.jpg",
+      "sourceBytes": 3039661,
+      "products": [
+        "CROISSANT"
+      ],
+      "variants": [
+        {
+          "file": "croissant-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 6080,
+          "quality": 67,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "croissant-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16318,
+          "quality": 49,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "croissant-dulce",
+      "source": "Imagenes/Croissant Relleno.PNG",
+      "sourceBytes": 2744816,
+      "products": [
+        "CROISSANT DULCE"
+      ],
+      "variants": [
+        {
+          "file": "croissant-dulce-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 5382,
+          "quality": 78,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "croissant-dulce-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16376,
+          "quality": 71,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "daneses",
+      "source": "Imagenes/Daneses.jpg",
+      "sourceBytes": 620017,
+      "products": [
+        "DANESES"
+      ],
+      "variants": [
+        {
+          "file": "daneses-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 6108,
+          "quality": 77,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "daneses-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16070,
+          "quality": 75,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "empanadas",
+      "source": "Imagenes/Empanadas.jpg",
+      "sourceBytes": 588426,
+      "products": [
+        "EMPANADA JAMON/QUESO MASA DE HOJA",
+        "EMPANADA CHAMPIÑON/QUESO",
+        "EMPANADA PINO (CARNE PICADA)",
+        "EMPANADA QUESO MASA DE HOJA",
+        "EMPANADA POLLO/QUESO"
+      ],
+      "variants": [
+        {
+          "file": "empanadas-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 5368,
+          "quality": 78,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "empanadas-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16328,
+          "quality": 77,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "jumbos",
+      "source": "Imagenes/Jumbo.jpg",
+      "sourceBytes": 2880024,
+      "products": [
+        "JUMBOS"
+      ],
+      "variants": [
+        {
+          "file": "jumbos-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 6060,
+          "quality": 65,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "jumbos-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16196,
+          "quality": 50,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "pan-milagrito",
+      "source": "Imagenes/Milagrito.jpg",
+      "sourceBytes": 3540935,
+      "products": [
+        "PAN MILAGRITO"
+      ],
+      "variants": [
+        {
+          "file": "pan-milagrito-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 5392,
+          "quality": 78,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "pan-milagrito-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16238,
+          "quality": 68,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "napoleon",
+      "source": "Imagenes/Napoleón.jpg",
+      "sourceBytes": 54668,
+      "products": [
+        "NAPOLEON"
+      ],
+      "variants": [
+        {
+          "file": "napoleon-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 5804,
+          "quality": 78,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "napoleon-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 13684,
+          "quality": 78,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "palmeritas",
+      "source": "Imagenes/Palmerita.jpg",
+      "sourceBytes": 3408413,
+      "products": [
+        "PALMERITAS"
+      ],
+      "variants": [
+        {
+          "file": "palmeritas-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 6046,
+          "quality": 77,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "palmeritas-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16064,
+          "quality": 70,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "pie-limon",
+      "source": "Imagenes/Pie limón.jpg",
+      "sourceBytes": 1144763,
+      "products": [
+        "PIE DE LIMON",
+        "PIE LIMON ENTERO"
+      ],
+      "variants": [
+        {
+          "file": "pie-limon-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 6116,
+          "quality": 59,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "pie-limon-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16298,
+          "quality": 48,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "pizza",
+      "source": "Imagenes/Pizza.jpg",
+      "sourceBytes": 6241471,
+      "products": [
+        "PIZZA MEDIANA",
+        "PIZZAS TROZO"
+      ],
+      "variants": [
+        {
+          "file": "pizza-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 5940,
+          "quality": 75,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "pizza-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16028,
+          "quality": 53,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "rolls-frosting",
+      "source": "Imagenes/Rollo de canela con glaseado.jpg",
+      "sourceBytes": 1986515,
+      "products": [
+        "ROLLS CANELA C/FROSTING"
+      ],
+      "variants": [
+        {
+          "file": "rolls-frosting-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 5942,
+          "quality": 78,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "rolls-frosting-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16104,
+          "quality": 77,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "rolls-canela",
+      "source": "Imagenes/Rollos Canela sin glaseado.jpg",
+      "sourceBytes": 2665788,
+      "products": [
+        "ROLLS CANELA"
+      ],
+      "variants": [
+        {
+          "file": "rolls-canela-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 6114,
+          "quality": 76,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "rolls-canela-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16336,
+          "quality": 59,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "trenzas",
+      "source": "Imagenes/Trenza.jpg",
+      "sourceBytes": 2465943,
+      "products": [
+        "TRENZAS"
+      ],
+      "variants": [
+        {
+          "file": "trenzas-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 3954,
+          "quality": 78,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "trenzas-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 11206,
+          "quality": 78,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "kuchen-manzana",
+      "source": "Imagenes/kuchen manzana.PNG",
+      "sourceBytes": 2170978,
+      "products": [
+        "KUCHEN MANZANA"
+      ],
+      "variants": [
+        {
+          "file": "kuchen-manzana-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 6056,
+          "quality": 62,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "kuchen-manzana-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 16356,
+          "quality": 42,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "tartaleta-frutas",
+      "source": "Imagenes/variado (1).jpg",
+      "sourceBytes": 2748059,
+      "products": [
+        "TARTALETA DE FRUTAS"
+      ],
+      "variants": [
+        {
+          "file": "tartaleta-frutas-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 4540,
+          "quality": 78,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "tartaleta-frutas-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 11274,
+          "quality": 78,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "cesta-frutas",
+      "source": "Imagenes/Cesta de frutas.jpg",
+      "sourceBytes": 2367690,
+      "products": [
+        "CESTA DE FRUTAS"
+      ],
+      "variants": [
+        {
+          "file": "cesta-frutas-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 5168,
+          "quality": 78,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "cesta-frutas-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 15798,
+          "quality": 78,
+          "budgetBytes": 16384
+        }
+      ]
+    },
+    {
+      "id": "selva-negra",
+      "source": "Imagenes/Selva negra.jpg",
+      "sourceBytes": 1722172,
+      "products": [
+        "BISCOCHO SELVA NEGRA"
+      ],
+      "variants": [
+        {
+          "file": "selva-negra-192.webp",
+          "width": 192,
+          "height": 128,
+          "bytes": 4974,
+          "quality": 78,
+          "budgetBytes": 6144
+        },
+        {
+          "file": "selva-negra-384.webp",
+          "width": 384,
+          "height": 256,
+          "bytes": 13732,
+          "quality": 78,
+          "budgetBytes": 16384
+        }
+      ]
+    }
+  ]
+}

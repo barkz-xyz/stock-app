@@ -34,6 +34,12 @@ npm start
 
 Open `http://localhost:3000`. Without `DATABASE_URL`, data is stored in `data/inventory.json`.
 
+### Product card photos
+
+CAJA uses small WebP backgrounds for matching bakery products. The name-based mapping and crop areas are in `assets/pos-product-photos.json`; unmatched or failed images fall back to category icons. Product names, prices, and stock remain independent of the photos.
+
+To regenerate after changing the source photos or mapping, run `python scripts/build-pos-product-photos.py` with Pillow installed, then `npm run build`. Commit the generated files in `src/assets/product-photos/`, `src/productPhotos.js`, and `assets/pos-product-photos-report.json`. The optimizer removes metadata, crops and resizes to 192×128 and 384×256, and selects WebP quality within 6 KiB and 16 KiB budgets. The browser chooses one size, lazy-loads the images, and reuses shared photos. Vite fingerprints them for immutable caching. The full-size `Imagenes/` originals are excluded from Railway deployments.
+
 For a local Point simulation, set:
 
 ```text

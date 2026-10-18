@@ -45,6 +45,25 @@ test('HTTP authentication rejects malformed sessions and validates product calen
   })
   const base = `http://127.0.0.1:${port}`
   const request = (route, options = {}) => fetch(`${base}${route}`, options)
+  const assertPrivate = (response) => {
+    assert.match(response.headers.get('cache-control'), /private/)
+    assert.match(response.headers.get('vary'), /Cookie/i)
+  }
+  for (const route of ['/api/health', '/api/auth/status', '/api/items', '/api/bootstrap']) {
+    const response = await request(route)
+    assertPrivate(response)
+    assert.match(response.headers.get('cache-control'), /no-store/)
+    await response.arrayBuffer()
+  }
+  const malformedJson = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' })
+  assert.equal(malformedJson.status, 400)
+  assertPrivate(malformedJson)
+  await malformedJson.arrayBuffer()
+  const missingAsset = await request('/assets/does-not-exist.js')
+  assert.equal(missingAsset.status, 404)
+  assert.equal(missingAsset.headers.get('cache-control'), 'private, no-store')
+  assert.match(missingAsset.headers.get('content-type'), /application\/json/)
+  await missingAsset.arrayBuffer()
   const unauthenticatedBootstrap = await request('/api/bootstrap')
   assert.equal(unauthenticatedBootstrap.headers.get('cache-control'), 'private, no-store')
   const locked = await unauthenticatedBootstrap.json()
@@ -57,7 +76,27 @@ test('HTTP authentication rejects malformed sessions and validates product calen
   assert.equal((await request('/api/items', { headers: { Cookie: signedCookie('1') } })).status, 401)
   const login = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '7351' }) })
   assert.equal(login.status, 200)
+  assertPrivate(login)
   const cookie = login.headers.get('set-cookie').split(';')[0]
+  const builtHtml = await fs.readFile(path.join('dist', 'index.html'), 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null })
+  await t.test('built HTML shell is shared safely while versioned assets remain immutable', { skip: !builtHtml }, async () => {
+    for (const route of ['/', '/index.html']) {
+      const anonymous = await request(route)
+      const authenticated = await request(route, { headers: { Cookie: cookie } })
+      assert.equal(anonymous.status, 200)
+      assert.equal(anonymous.headers.get('cache-control'), 'public, max-age=0, s-maxage=60, stale-while-revalidate=300')
+      assert.doesNotMatch(anonymous.headers.get('vary') || '', /Cookie/i)
+      assert.equal(anonymous.headers.get('set-cookie'), null)
+      assert.equal(await anonymous.text(), builtHtml)
+      assert.equal(await authenticated.text(), builtHtml)
+    }
+    const asset = builtHtml.match(/src="(\/assets\/index-[^"]+\.js)"/)[1]
+    const response = await request(asset)
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('cache-control'), 'public, max-age=31536000, immutable')
+    assert.match(response.headers.get('content-type'), /javascript/)
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), await fs.readFile(path.join('dist', asset)))
+  })
   const bootstrap = await request('/api/bootstrap', { headers: { Cookie: cookie } })
   const initial = await bootstrap.json()
   assert.equal(initial.auth.authenticated, true)
@@ -70,9 +109,11 @@ test('HTTP authentication rejects malformed sessions and validates product calen
   const etag = history.headers.get('etag')
   assert.ok(etag)
   assert.equal(history.headers.get('cache-control'), 'private, no-cache')
+  assertPrivate(history)
   await history.arrayBuffer()
   const unchanged = await request('/api/sales?limit=50', { cache: 'no-cache', headers: { Cookie: cookie, 'If-None-Match': etag } })
   assert.equal(unchanged.status, 304)
+  assertPrivate(unchanged)
   assert.equal((await unchanged.arrayBuffer()).byteLength, 0)
   const pending = await request(`/api/sales/${pendingId}?refresh=true`, { headers: { Cookie: cookie } })
   assert.equal(pending.status, 200)

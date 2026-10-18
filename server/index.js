@@ -23,10 +23,17 @@ import { createDailyReport } from './report.js'
 const app = express()
 const port = Number(process.env.PORT || 3000)
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
+const htmlCacheControl = 'public, max-age=0, s-maxage=60, stale-while-revalidate=300'
 
 app.disable('x-powered-by')
 app.set('trust proxy', process.env.RAILWAY_ENVIRONMENT_ID ? 1 : false)
 app.use(compression())
+app.use('/api', (_req, res, next) => {
+  // Cookie-authenticated data and errors must never enter a shared edge cache.
+  res.setHeader('Cache-Control', 'private, no-store')
+  res.vary('Cookie')
+  next()
+})
 app.use(express.json({ limit: '200kb' }))
 
 function badRequest(message) {
@@ -655,14 +662,22 @@ app.use(express.static(distPath, {
   maxAge: '1h',
   setHeaders: (res, filePath) => {
     if (filePath.includes(`${path.sep}assets${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    else if (filePath.endsWith('.html')) res.setHeader('Cache-Control', htmlCacheControl)
   },
 }))
+app.use('/assets', (_req, res) => {
+  // Never return/cache the SPA shell as a missing JavaScript, CSS, or image file.
+  res.setHeader('Cache-Control', 'private, no-store')
+  res.status(404).json({ error: 'Asset not found.' })
+})
 app.get('/{*splat}', (_req, res) => res.sendFile(path.join(distPath, 'index.html'), {
-  headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
+  // This shell contains no user data; bootstrap always checks the live session.
+  headers: { 'Cache-Control': htmlCacheControl },
 }))
 
 app.use((error, _req, res, _next) => {
   console.error(error)
+  res.setHeader('Cache-Control', 'private, no-store')
   const status = error.status || 500
   res.status(status).json({
     error: status < 500 || error.status ? error.message : 'Something went wrong. Please try again.',

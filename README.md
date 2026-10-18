@@ -61,6 +61,16 @@ Run `npm run measure:load` against a running local compiled app. Set `PRODUCTION
 
 `npm run audit:performance:db` accepts `DATABASE_PUBLIC_URL` or `DATABASE_URL` and runs SELECT/EXPLAIN queries inside a read-only transaction. It reports query plans and timings without changing stock or history.
 
+### Railway CDN
+
+Use Railway's CDN in Auto HTML mode with HTML purging after successful deployments. The shared app shell uses `public, max-age=0, s-maxage=60, stale-while-revalidate=300`: browsers revalidate, while edge locations can cache the shell briefly. The shell has no session or business data. `/index.html` has the same policy as `/`. Fingerprinted JavaScript, CSS, and WebP files use a one-year immutable cache and new URLs when their contents change.
+
+Every `/api` response, including authentication, errors, and unknown routes, defaults to `private, no-store` with `Vary: Cookie`. Sales history permits private ETag revalidation while remaining excluded from shared caching. Missing assets return an uncached 404 instead of the HTML shell. Keep these boundaries when adding new endpoints.
+
+Production settings: `railway cdn update --service stock-app --html-caching auto --default-ttl 2h --swr --purge-on-deploy html`, followed by `railway cdn enable --service stock-app`. HTML purges preserve immutable assets at the edge. API requests continue to reach the server. CDN settings are service configuration, independent of Git deployments.
+
+`npm run verify:cdn` checks live edge cache hits, deployed asset hashes, API exclusions, and (when `STAFF_PIN` is supplied) authenticated bootstrap/history. It only reads data and opens a staff session. Use `-- --baseline` before enabling caching. Reports go to `output/cdn-before.json` or `output/cdn-after.json`, overridable with `CDN_OUTPUT`; `PRODUCTION_BASE_URL` selects a different host.
+
 ## Deploy to Railway
 
 1. Deploy this GitHub repository as a Railway service.

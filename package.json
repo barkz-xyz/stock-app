@@ -20,6 +20,7 @@
     "smoke:production": "node scripts/smoke-production.js",
     "measure:load": "node scripts/measure-load.js",
     "audit:performance:db": "node scripts/audit-performance-db.js",
+    "verify:cdn": "node scripts/verify-cdn.js",
     "import:catalog": "node scripts/import-sheet-catalog.js",
     "verify:postgres": "node scripts/verify-postgres-sale-batch.js",
     "test": "node --test --test-concurrency=1 server/*.test.js"

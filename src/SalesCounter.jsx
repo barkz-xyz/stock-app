@@ -47,7 +47,7 @@ function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelS
   const progressDescription = checkout.stage === 'connecting'
     ? t('connectingPointDescription')
     : pointHasTerminal ? t('customerUseTerminal') : t('waitingForPointDescription')
-  return <Modal title={checkout.stage === 'method' ? t(cashMode ? 'cash' : 'choosePaymentMethod') : sale ? `#${sale.shortId}` : t('cardPayment')} eyebrow={t('checkout')} onClose={onClose} closeable={!pending}>
+  return <Modal title={checkout.stage === 'method' ? t(cashMode ? 'cash' : 'choosePaymentMethod') : sale ? `#${sale.shortId}` : t('cardPayment')} onClose={onClose} closeable={!pending}>
     {checkout.stage === 'method' && !cashMode && <div className="checkout-body">
       <div className="checkout-total"><span>{t('totalToPay')}</span><strong>{formatCurrency(checkout.total)}</strong></div>
       <div className="payment-options">
@@ -495,7 +495,7 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
         <button type="button" id="caja-history-tab" role="tab" aria-selected={registerView === 'history'} aria-controls="caja-history-panel" tabIndex={registerView === 'history' ? 0 : -1} onClick={() => setRegisterView('history')}><History size={16} />{t('registerHistory')}</button>
       </div>
     </section>
-    {registerView==='cart'&&!registerSession&&!attempt&&<form className="card open-register" onSubmit={async e=>{e.preventDefault();setOpening(true);setOpenError('');try{await onOpenRegister(Number(openingCash));setOpeningCash('')}catch(e){setOpenError(e.message)}finally{setOpening(false)}}}><Banknote size={26}/><h2>{tx('Abrir sesión de caja','Open register session')}</h2><label className="field"><span>{tx('Fondo inicial · CLP','Opening cash · CLP')}</span><div className="money-input"><span>$</span><input type="number" inputMode="numeric" min="0" max="100000000000" step="1" required value={openingCash} onChange={e=>setOpeningCash(e.target.value)}/></div></label>{openError&&<div className="inline-error" role="alert">{openError}</div>}<button className="button primary" disabled={opening||!serverAvailable}>{opening?t('saving'):tx('Abrir caja','Open register')}<ArrowRight size={18}/></button></form>}
+    {registerView==='cart'&&!registerSession&&!attempt&&<form className="card open-register" aria-label={tx('Abrir caja','Open register')} onSubmit={async e=>{e.preventDefault();setOpening(true);setOpenError('');try{await onOpenRegister(Number(openingCash));setOpeningCash('')}catch(e){setOpenError(e.message)}finally{setOpening(false)}}}><Banknote size={26}/><label className="field"><span>{tx('Fondo inicial · CLP','Opening cash · CLP')}</span><div className="money-input"><span>$</span><input type="number" inputMode="numeric" min="0" max="100000000000" step="1" required value={openingCash} onChange={e=>setOpeningCash(e.target.value)}/></div></label>{openError&&<div className="inline-error" role="alert">{openError}</div>}<button className="button primary" disabled={opening||!serverAvailable}>{opening?t('saving'):tx('Abrir caja','Open register')}<ArrowRight size={18}/></button></form>}
     {registerView === 'cart' ? <section className={`pos-layout ${!registerSession&&!attempt?'session-locked':''}`} id="caja-cart-panel" role="tabpanel" aria-labelledby="caja-cart-tab">
       <div className="catalog-panel">
         <div className="toolbar pos-toolbar">

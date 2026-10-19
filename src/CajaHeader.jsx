@@ -5,7 +5,6 @@ import { isPlainNavigation, sectionHref } from './routes.js'
 export default function CajaHeader({ active = 'counter', onNavigate }) {
   const { language, t } = useI18n()
   return <section className="page-heading pos-heading caja-heading">
-    <h1 className="eyebrow caja-title">{t('registerTitle')}</h1>
     <nav className="caja-sections" aria-label={language === 'es' ? 'Secciones de caja' : 'Register sections'}>
       {[["counter", 'cart', ShoppingBasket, t('registerTitle')], ['close', 'close', Calculator, language === 'es' ? 'Cierre de caja' : 'Cash close']].map(([id, view, Icon, label]) => {
         const href = sectionHref('pos', { view })

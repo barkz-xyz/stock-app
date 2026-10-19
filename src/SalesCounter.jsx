@@ -57,11 +57,11 @@ function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelS
       {!posConfig.configured && <div className="setup-hint"><AlertTriangle size={17} /><span>{t('pointSetupHint')}</span></div>}
     </div>}
     {checkout.stage === 'method' && cashMode && <form className="checkout-body cash-tender" onSubmit={e => { e.preventDefault(); if (tender.valid && !busy) onCash(Number(received)) }}>
-      <div className="checkout-total"><span>{t('totalToPay')}</span><strong>{formatCurrency(checkout.total)}</strong></div>
-      <label className="field"><span>{t('receivedCash')}</span><div className="money-input"><span>$</span><input autoFocus required type="number" inputMode="numeric" min={checkout.total} max="999999999999" step="1" value={received} disabled={busy} onChange={e => setReceived(e.target.value)} aria-invalid={received !== '' && !tender.valid} /></div></label>
-      <div className="cash-shortcuts"><button type="button" disabled={busy} onClick={() => setReceived(String(checkout.total))}>{t('exactAmount')}</button>{[1000,2000,5000,10000,20000].filter(n => n > checkout.total).slice(0,4).map(n => <button key={n} type="button" disabled={busy} onClick={() => setReceived(String(n))}>{formatCurrency(n)}</button>)}</div>
-      <div className="tender-change" aria-live="polite"><span>{t('cashChange')}</span><strong>{tender.valid ? formatCurrency(tender.change) : '—'}</strong></div>
-      {received !== '' && !tender.valid && <p className="inline-error">{t('cashInsufficient')}</p>}
+      <div className="cash-total"><span>{t('totalToPay')}</span><strong>{formatCurrency(checkout.total)}</strong></div>
+      <label className="field cash-received"><span>{t('receivedCash')}</span><div className="money-input"><span aria-hidden="true">$</span><input autoFocus required type="number" inputMode="numeric" min={checkout.total} max="999999999999" step="1" value={received} disabled={busy} onChange={e => setReceived(e.target.value)} aria-invalid={received !== '' && !tender.valid} aria-describedby={received !== '' && !tender.valid ? 'cash-tender-error' : undefined} /></div></label>
+      <div className="cash-shortcuts"><button type="button" disabled={busy} aria-pressed={received === String(checkout.total)} onClick={() => setReceived(String(checkout.total))}>{t('exactAmount')}</button>{[1000,2000,5000,10000,20000].filter(n => n > checkout.total).slice(0,4).map(n => <button key={n} type="button" disabled={busy} aria-pressed={received === String(n)} onClick={() => setReceived(String(n))}>{formatCurrency(n)}</button>)}</div>
+      <div className={`tender-change ${tender.valid ? 'is-ready' : ''}`} aria-live="polite"><span>{t('cashChange')}</span><strong>{tender.valid ? formatCurrency(tender.change) : '—'}</strong></div>
+      {received !== '' && !tender.valid && <p className="inline-error" id="cash-tender-error" role="alert">{t('cashInsufficient')}</p>}
       <div className="tender-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => setCashMode(false)}>{t('back')}</button><button className="button primary" disabled={busy || !tender.valid}>{busy ? t('saving') : t('confirmCash')}<Check size={18} /></button></div>
     </form>}
     {(checkout.stage === 'connecting' || checkout.stage === 'processing') && <div className="payment-progress">

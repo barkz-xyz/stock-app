@@ -8,6 +8,7 @@
   --muted: #6f665f;
   --faint: #9b9189;
   --line: #ddcfc2;
+  --activity-line: #eee8e1;
   --canvas: #f2ece5;
   --surface: #fffaf5;
   --surface-strong: #ffffff;
@@ -162,8 +163,8 @@ h1, h2, h3, p { margin-top: 0; }
 @keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 .muted { padding: 24px; color: var(--muted); font-size: 12px; }
 .activity-list { display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; padding: 8px 18px 14px; }
-.activity-item { display: grid; min-height: 67px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 8px 4px; border-bottom: 1px solid #eee8e1; }
-.activity-item:nth-last-child(-n+2) { border-bottom-color: transparent; }
+.activity-item { display: grid; min-height: 67px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 8px 4px; border-bottom: 1px solid var(--activity-line); }
+.activity-item:last-child, .activity-list > .activity-item:nth-last-child(2) { border-bottom-color: transparent; }
 .movement-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 11px; }
 .movement-icon.stock_in { color: var(--sage); background: var(--sage-soft); }
 .movement-icon.stock_out { color: var(--rose); background: var(--rose-soft); }
@@ -667,7 +668,7 @@ body:has(.is-caja) { height: 100dvh; min-height: 0; overflow: hidden; padding-bo
   .all-good { height: 180px; }
   .category-bars { padding: 20px 17px; }
   .activity-list { grid-template-columns: 1fr; padding-inline: 13px; }
-  .activity-item:nth-last-child(2) { border-bottom-color: #eee8e1; }
+  .activity-list > .activity-item:nth-last-child(2) { border-bottom-color: var(--activity-line); }
   .toolbar { display: block; margin-bottom: 13px; }
   .search-box { width: 100%; margin-bottom: 10px; }
   .toolbar > .stock-only-toggle { margin-bottom: 10px; }
@@ -1153,6 +1154,7 @@ html[data-theme='dark'] {
   --muted: #b1aaa3;
   --faint: #817b76;
   --line: #444240;
+  --activity-line: var(--line);
   --canvas: #242527;
   --surface: #2d2e30;
   --surface-strong: #353638;

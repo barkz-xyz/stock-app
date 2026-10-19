@@ -489,7 +489,6 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
 
   return <div className="page pos-page enter">
     <CajaHeader onNavigate={onNavigate} />
-    {registerSession&&<div className="register-session-strip"><span><strong>{registerSession.operator}</strong> · #{registerSession.id.replaceAll('-','').slice(0,8).toUpperCase()} · {tx('Fondo','Opening')} {formatCurrency(registerSession.openingCash)}</span><button className="text-button" onClick={()=>onNavigate('/caja/cierre?sesion='+registerSession.id)}>{tx('Cerrar caja','Close register')}<ChevronRight size={15}/></button></div>}
     <section className="register-subnav">
       <div className="register-tabs" role="tablist" aria-label={t('registerSections')} onKeyDown={handleRegisterTabKey}>
         <button type="button" id="caja-cart-tab" role="tab" aria-selected={registerView === 'cart'} aria-controls="caja-cart-panel" tabIndex={registerView === 'cart' ? 0 : -1} onClick={() => setRegisterView('cart')}><ShoppingBasket size={16} />{t('cart')}</button>

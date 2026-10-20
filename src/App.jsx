@@ -15,7 +15,7 @@ const AstryxDeleteDialog = lazy(() => import('./AstryxDeleteDialog.jsx'))
 const SalesCounter = lazy(() => import('./SalesCounter.jsx'))
 const MetricsPage = lazy(() => import('./MetricsPage.jsx'))
 const CashClosurePage = lazy(() => import('./CashClosurePage.jsx'))
-const MercadoPagoSettings = lazy(() => import('./MercadoPagoSettings.jsx'))
+const SettingsPage = lazy(() => import('./SettingsPage.jsx'))
 const InventoryBatch = lazy(() => import('./InventoryBatch.jsx'))
 const UserManagement = lazy(() => import('./UserManagement.jsx'))
 const noop = () => {}
@@ -507,7 +507,7 @@ export default function App() {
         {page === 'metrics' && <MetricsPage metrics={metricsData} range={metricsRange} onRangeChange={setMetricsRange} onRefresh={() => loadMetrics(metricsRange)} onExport={exportDailyReport} loading={metricsLoading} exporting={exportingReport} />}
         {page === 'activity' && <Activity movements={movements} />}
         {page==='users'&&isAdmin&&<UserManagement currentUser={auth.user} setToast={setToast}/>}
-        {page === 'settings' && <MercadoPagoSettings setToast={setToast} />}
+        {page === 'settings' && <SettingsPage tab={route.settingsTab} onNavigate={href => router.navigate(href)} setToast={setToast} />}
         {page === 'not-found' && <section className="page empty-state"><h1>{t('sectionNotFound')}</h1><p>{t('sectionNotFoundDescription')}</p><a className="button primary" href={sectionHref('dashboard')} onClick={event => followSection(event, sectionHref('dashboard'))}>{t('backToOverview')}</a></section>}
       </Suspense>}
     </main>

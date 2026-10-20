@@ -7,6 +7,7 @@ import { publishChange } from './changes.js'
 import { cleanInventoryBatch, inventoryBatchChanges } from './inventory-batch.js'
 import { cleanHistoryQuery, historyMatches } from './sales-history.js'
 import { publicUser, cleanUser, hashPassword, userError } from './user-security.js'
+import { createIntegrationStore } from './integration-store.js'
 import { closurePeriod, buildClosureSummary, cleanClosureInput, createClosure, closureError, businessDateAt } from './cash-closure.js'
 
 const { Pool } = pg
@@ -526,6 +527,20 @@ export async function listItems() {
   }
   const data = await readFileData()
   return data.items.sort((a, b) => a.name.localeCompare(b.name)).map(normalizeItem)
+}
+
+export function getInventoryIntegrationStore() {
+  return createIntegrationStore({ pool, dataPath, readInventory: async itemId => {
+    if (pool) {
+      const fields = 'id,sku,name,category,unit,quantity,price,sellable,expiry_date,updated_at'
+      const { rows } = await pool.query(itemId
+        ? `SELECT ${fields} FROM items WHERE id=$1 ORDER BY id`
+        : `SELECT ${fields} FROM items ORDER BY id`, itemId ? [itemId] : [])
+      return rows
+    }
+    const data = await readFileData()
+    return itemId ? data.items.filter(item => item.id.toLowerCase() === itemId.toLowerCase()) : data.items
+  } })
 }
 
 export async function getBootstrapData(now = new Date()) {

@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import compression from 'compression'
 import express from 'express'
+import { createInventoryRouter, createIntegrationAdminRouter, inventoryApiConfiguration } from './inventory-api.js'
 import { parseCalendarDate } from '../src/dates.js'
 import { authStatus, login, logout, setupAdmin, changePassword, pointAccessIsProtected, requireAuth, requireAdmin, cashierBoundary } from './auth.js'
 import {
@@ -14,7 +15,7 @@ import {
 import {
   adjustItem, saveInventoryBatch, searchSales, attachPointOrder, closeStore, completeRefund,
   claimPointOrder, createItem, createSale, deleteItem, failRefund, getSale,
-  getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales,
+  getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales, getInventoryIntegrationStore,
   markCardSaleFailed, prepareRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
   updateItem, updateSaleFromPoint, updateSalePaymentDetails,
   listUsers, createUser, updateUser, listRegisterSessions, getActiveRegisterSession, openRegisterSession, getRegisterClosure, saveRegisterClosure, getRegisterClosureRevision,
@@ -27,6 +28,8 @@ const app = express()
 const port = Number(process.env.PORT || 3000)
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const htmlCacheControl = 'public, max-age=0, s-maxage=60, stale-while-revalidate=300'
+const inventoryApiConfig = inventoryApiConfiguration()
+let inventoryIntegrations
 
 app.disable('x-powered-by')
 app.set('trust proxy', process.env.RAILWAY_ENVIRONMENT_ID ? 1 : false)
@@ -37,6 +40,7 @@ app.use('/api', (_req, res, next) => {
   res.vary('Cookie')
   next()
 })
+app.use('/api/integrations/v1', createInventoryRouter({ getStore: () => inventoryIntegrations, config: inventoryApiConfig }))
 app.use(express.json({ limit: '200kb' }))
 
 function badRequest(message) {
@@ -310,6 +314,7 @@ app.get('/api/bootstrap', async (req, res, next) => {
   } catch (error) { next(error) }
 })
 app.use('/api', requireAuth, cashierBoundary)
+app.use('/api/integration-clients', requireAdmin, createIntegrationAdminRouter({ getStore: () => inventoryIntegrations, config: inventoryApiConfig }))
 app.use('/api',async(req,res,next)=>{
   if(req.user.role!=='cashier')return next()
   const match=/^\/sales\/([0-9a-f-]{36})(?:\/|$)/i.exec(req.path)
@@ -759,6 +764,9 @@ app.use((error, _req, res, _next) => {
 })
 
 await initializeStore()
+inventoryIntegrations = getInventoryIntegrationStore()
+if (inventoryApiConfig.enabled && inventoryApiConfig.production && !inventoryIntegrations.persistent) throw new Error('The production inventory API requires PostgreSQL.')
+await inventoryIntegrations.initialize()
 await listenForDatabaseChanges(process.env.DATABASE_URL)
 const pointSecurity = pointConfiguration()
 console.info(JSON.stringify({

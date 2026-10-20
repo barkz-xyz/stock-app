@@ -1,0 +1,678 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Bakery POS API de consulta de inventario",
+    "version": "1.0.0",
+    "description": "Primera entrega implementada en el repositorio. API privada entre servidores, activada con INVENTORY_API_ENABLED=true y credenciales propias. Exporta todos los productos vigentes, incluidos agotados y no vendibles. No habilita pedidos, cobros, reservas ni modificaciones de stock. Los ejemplos son ilustrativos. Ver inventory-api.md para uso y activación."
+  },
+  "x-status": "proposal-not-implemented",
+  "x-prepared-at": "2026-10-20",
+  "x-inventory-semantics": "stockQuantity es items.quantity: saldo operativo ya neto de ventas y reservas Point aplicadas; no es un conteo físico ni una promesa de disponibilidad para una compra.",
+  "servers": [
+    {
+      "url": "/",
+      "description": "Origen futuro del backend. Estas rutas todavía no existen."
+    }
+  ],
+  "security": [
+    {
+      "IntegrationToken": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Inventory",
+      "description": "Sólo lectura; permiso inventory:read verificado en cada solicitud."
+    }
+  ],
+  "paths": {
+    "/api/integrations/v1/inventory": {
+      "get": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "getInventorySnapshot",
+        "summary": "Consultar todo el inventario vigente",
+        "description": "Snapshot completo de una única lectura consistente, ordenado por UUID. Incluye stock cero, sellable=false y SKU faltante. No admite filtros ni páginas en esta primera entrega. count se obtiene de los mismos items enviados. Un fallo de base de datos es un error, no un array vacío. El cliente debe ignorar campos adicionales futuros. Evaluar If-None-Match sólo después de autenticar y autorizar; la representación no contiene timestamps generados por petición.",
+        "x-required-scopes": [
+          "inventory:read"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Snapshot completo. complete=true también cuando el inventario está realmente vacío.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/InventoryETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventorySnapshot"
+                },
+                "example": {
+                  "apiVersion": "1",
+                  "inventoryPoolId": "global",
+                  "complete": true,
+                  "count": 1,
+                  "items": [
+                    {
+                      "id": "8f39e7d9-73fd-43aa-8dd1-24a97a3fdc88",
+                      "sku": "PP-002",
+                      "name": "ALIADO AMASADO JAMON/QUESO",
+                      "category": "Bread",
+                      "unit": "pieces",
+                      "stockQuantity": "12.00",
+                      "price": {
+                        "amount": 1200,
+                        "currency": "CLP"
+                      },
+                      "sellable": true,
+                      "expiryDate": null,
+                      "updatedAt": "2026-10-20T17:00:00Z"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "description": "Sólo se admite GET. Incluye Allow: GET.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/integrations/v1/inventory/{itemId}": {
+      "get": {
+        "tags": [
+          "Inventory"
+        ],
+        "operationId": "getInventoryItem",
+        "summary": "Consultar un producto por UUID",
+        "description": "Identidad estable por UUID, no por nombre o SKU. Sólo lectura. El ETag corresponde a este recurso y se evalúa tras verificar credencial y permiso.",
+        "x-required-scopes": [
+          "inventory:read"
+        ],
+        "parameters": [
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "description": "UUID del producto.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Producto vigente del inventario autorizado.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/InventoryETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryItem"
+                },
+                "example": {
+                  "id": "8f39e7d9-73fd-43aa-8dd1-24a97a3fdc88",
+                  "sku": "PP-002",
+                  "name": "ALIADO AMASADO JAMON/QUESO",
+                  "category": "Bread",
+                  "unit": "pieces",
+                  "stockQuantity": "12.00",
+                  "price": {
+                    "amount": 1200,
+                    "currency": "CLP"
+                  },
+                  "sellable": true,
+                  "expiryDate": null,
+                  "updatedAt": "2026-10-20T17:00:00Z"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "description": "Sólo se admite GET. Incluye Allow: GET.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "IntegrationToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "Opaque integration token",
+        "description": "Credencial técnica de alta entropía, con inventory:read, vigencia y revocación; independiente de cookies del personal. Sólo en Authorization, nunca en la URL ni en el frontend de la tienda. No se genera ninguna credencial en esta propuesta."
+      }
+    },
+    "parameters": {
+      "IfNoneMatch": {
+        "name": "If-None-Match",
+        "in": "header",
+        "required": false,
+        "description": "Validador HTTP obtenido de una respuesta previa. El consumidor servidor puede conservar explícitamente el ETag junto con su snapshot importado; no se habilita caché HTTP compartida. Soportar la semántica HTTP del header y verificar la autorización antes de devolver 304.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "W/\"inventory-canonical-content-hash\""
+      }
+    },
+    "headers": {
+      "PrivateNoStore": {
+        "description": "La respuesta no se almacena en cachés HTTP.",
+        "schema": {
+          "type": "string",
+          "const": "private, no-store"
+        }
+      },
+      "VaryAuthorization": {
+        "description": "Incluye Authorization y los otros valores requeridos por middleware, por ejemplo Accept-Encoding.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "Authorization, Accept-Encoding"
+      },
+      "RequestId": {
+        "description": "Identificador seguro generado/validado por el servidor para diagnóstico.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "InventoryETag": {
+        "description": "ETag débil de la representación canónica de este recurso. Cambia cuando cambia alguno de los datos exportados, sin depender de la hora de cada solicitud.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "W/\"inventory-canonical-content-hash\""
+      },
+      "RetryAfter": {
+        "description": "Segundos de espera o fecha HTTP según la respuesta.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "30"
+      },
+      "AuthChallenge": {
+        "description": "Desafío de autenticación Bearer.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "Bearer realm=\"bakery-integrations\""
+      }
+    },
+    "responses": {
+      "NotModified": {
+        "description": "Credencial válida y recurso sin cambios. No contiene body. Una clave revocada/expirada no puede obtener 304.",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/PrivateNoStore"
+          },
+          "Vary": {
+            "$ref": "#/components/headers/VaryAuthorization"
+          },
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "ETag": {
+            "$ref": "#/components/headers/InventoryETag"
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "La solicitud o el identificador no son válidos.",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/PrivateNoStore"
+          },
+          "Vary": {
+            "$ref": "#/components/headers/VaryAuthorization"
+          },
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "INVALID_REQUEST",
+                "message": "La solicitud o el identificador no son válidos.",
+                "requestId": "a02e66c7-c1b1-43d5-9649-d947031fa40e"
+              }
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Falta una credencial válida de integración.",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/PrivateNoStore"
+          },
+          "Vary": {
+            "$ref": "#/components/headers/VaryAuthorization"
+          },
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "WWW-Authenticate": {
+            "$ref": "#/components/headers/AuthChallenge"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "UNAUTHORIZED",
+                "message": "Falta una credencial válida de integración.",
+                "requestId": "a02e66c7-c1b1-43d5-9649-d947031fa40e"
+              }
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "La integración no tiene el permiso inventory:read.",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/PrivateNoStore"
+          },
+          "Vary": {
+            "$ref": "#/components/headers/VaryAuthorization"
+          },
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "FORBIDDEN",
+                "message": "La integración no tiene el permiso inventory:read.",
+                "requestId": "a02e66c7-c1b1-43d5-9649-d947031fa40e"
+              }
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Producto no encontrado en el inventario autorizado.",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/PrivateNoStore"
+          },
+          "Vary": {
+            "$ref": "#/components/headers/VaryAuthorization"
+          },
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "ITEM_NOT_FOUND",
+                "message": "Producto no encontrado en el inventario autorizado.",
+                "requestId": "a02e66c7-c1b1-43d5-9649-d947031fa40e"
+              }
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Se excedió el límite de solicitudes.",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/PrivateNoStore"
+          },
+          "Vary": {
+            "$ref": "#/components/headers/VaryAuthorization"
+          },
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "RATE_LIMITED",
+                "message": "Se excedió el límite de solicitudes.",
+                "requestId": "a02e66c7-c1b1-43d5-9649-d947031fa40e"
+              }
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "No se pudo completar la consulta.",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/PrivateNoStore"
+          },
+          "Vary": {
+            "$ref": "#/components/headers/VaryAuthorization"
+          },
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "INTERNAL_ERROR",
+                "message": "No se pudo completar la consulta.",
+                "requestId": "a02e66c7-c1b1-43d5-9649-d947031fa40e"
+              }
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "La integración está desactivada o el inventario no está disponible temporalmente.",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/PrivateNoStore"
+          },
+          "Vary": {
+            "$ref": "#/components/headers/VaryAuthorization"
+          },
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": {
+                "code": "INVENTORY_UNAVAILABLE",
+                "message": "La integración está desactivada o el inventario no está disponible temporalmente.",
+                "requestId": "a02e66c7-c1b1-43d5-9649-d947031fa40e"
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "DecimalQuantity": {
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]{0,9})\\.[0-9]{2}$",
+        "description": "Cantidad no negativa exacta, escala 2, punto decimal, sin miles; capacidad compatible con NUMERIC(12,2).",
+        "example": "12.00"
+      },
+      "MoneyCLP": {
+        "type": "object",
+        "required": [
+          "amount",
+          "currency"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 999999999999,
+            "description": "Precio en pesos enteros CLP, sin escalar a centavos."
+          },
+          "currency": {
+            "type": "string",
+            "const": "CLP"
+          }
+        }
+      },
+      "InventoryItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "sku",
+          "name",
+          "category",
+          "unit",
+          "stockQuantity",
+          "price",
+          "sellable",
+          "expiryDate",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Identidad local estable; no sustituirla por SKU o nombre."
+          },
+          "sku": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "SKU actual; null cuando no está configurado. Su unicidad no está garantizada por el esquema actual."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "category": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Categoría actual, independiente de las traducciones de la interfaz."
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unidad actual; por ejemplo pieces o kg. No normalizar por nombre del producto ni usarla para inferir incrementos de venta."
+          },
+          "stockQuantity": {
+            "$ref": "#/components/schemas/DecimalQuantity"
+          },
+          "price": {
+            "$ref": "#/components/schemas/MoneyCLP"
+          },
+          "sellable": {
+            "type": "boolean",
+            "description": "Configuración del mostrador. No indica publicación online ni una reserva confirmada."
+          },
+          "expiryDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Fecha de calendario del producto, sin conversión a instante UTC."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Instante de actualización, serializado en UTC."
+          }
+        }
+      },
+      "InventorySnapshot": {
+        "type": "object",
+        "required": [
+          "apiVersion",
+          "inventoryPoolId",
+          "complete",
+          "count",
+          "items"
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "const": "1"
+          },
+          "inventoryPoolId": {
+            "type": "string",
+            "const": "global",
+            "description": "Un único saldo global; no representa almacenes por sucursal."
+          },
+          "complete": {
+            "type": "boolean",
+            "const": true,
+            "description": "Lista completa del inventario vigente. No se trunca ni filtra implícitamente."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Debe coincidir exactamente con items.length."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InventoryItem"
+            }
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "requestId"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

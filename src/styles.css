@@ -89,6 +89,38 @@ h1, h2, h3, p { margin-top: 0; }
 .language-toggle button { min-width: 31px; min-height: 30px; padding: 0 6px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 800; }
 .language-toggle button.active { background: var(--cocoa); color: var(--on-accent); box-shadow: 0 2px 6px rgba(109, 69, 53, .18); }
 .page { width: min(1460px, 100%); margin: 0 auto; padding: 24px 38px 40px; }
+.settings-workspace > .page { padding: 0; }
+.settings-tabs { display: flex; gap: 4px; width: fit-content; max-width: 100%; padding: 4px; margin-bottom: 18px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
+.settings-tabs a { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 0 15px; border-radius: 9px; color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 700; }
+.settings-tabs a.active { color: var(--cocoa-dark); background: var(--cocoa-soft); }
+.inventory-api-settings { display: grid; gap: 16px; }
+.inventory-api-settings .page-actions { margin: 0; }
+.integration-summary { padding: 20px; display: grid; gap: 12px; }
+.integration-summary > div:first-child { display: flex; align-items: center; gap: 10px; }
+.integration-summary > div:first-child > svg { color: var(--sage); }
+.integration-summary > small,.integration-summary > p,.integration-client small,.integration-key small,.integration-secret > small { color: var(--muted); font-size: 12px; }
+.integration-summary > p { margin: 0; }
+.integration-endpoint { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 12px; border-radius: 10px; background: var(--canvas); }
+.integration-endpoint code { min-width: 0; overflow-wrap: anywhere; font-size: 12px; flex: 1; }
+.integration-endpoint .icon-button { flex-shrink: 0; }
+.integration-empty { display: flex; align-items: center; flex-direction: column; gap: 10px; padding: 38px 20px; color: var(--muted); font-size: 13px; }
+.integration-empty strong { color: var(--ink); }
+.integration-client h2 { margin: 0 0 3px; }
+.integration-client .card-header { flex-wrap: wrap; gap: 12px; }
+.integration-keys { padding: 0 20px; }
+.integration-key { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 16px 0; }
+.integration-key + .integration-key { border-top: 1px solid var(--separator); }
+.integration-key > svg { flex-shrink: 0; color: var(--muted); }
+.integration-key > div { display: grid; gap: 5px; flex: 1; min-width: 0; }
+.integration-key code { font-size: 12px; overflow-wrap: anywhere; }
+.integration-secret > p { margin: 0; color: var(--muted); }
+.integration-secret textarea { width: 100%; resize: none; padding: 12px; border: 1px solid var(--control-line); border-radius: 10px; background: var(--canvas); color: var(--ink); font-family: monospace; font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .integration-summary { padding: 16px; }
+  .integration-key { gap: 8px; flex-wrap: wrap; }
+  .integration-key > div { min-width: 160px; }
+  .integration-keys { padding: 0 16px; }
+}
 .page-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; margin-bottom: 16px; }
 .enter { animation: page-in .36s cubic-bezier(.2, .8, .2, 1) both; }
 @keyframes page-in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }

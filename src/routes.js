@@ -19,6 +19,7 @@ export function parseRoute(href) {
   return { page, registerView: path === '/caja/cierre' ? 'close' : path === '/caja/historial' ? 'history' : 'cart',
     closureDate: url.searchParams.get('fecha') || '', registerSessionId:url.searchParams.get('sesion')||'',
     metricsRange: ['7d', '30d'].includes(range) ? range : 'today',
+    settingsTab: url.searchParams.get('tab') === 'inventory-api' ? 'inventory-api' : 'point',
     canonical: path === '/' ? sectionPaths.dashboard : null }
 }
 

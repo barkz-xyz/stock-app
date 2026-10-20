@@ -2,6 +2,8 @@
 
 A responsive, touch-friendly bakery inventory and point-of-sale application. Spanish is the default language and English is available from the `ES / EN` control.
 
+The private, read-only inventory integration API is documented in [docs/inventory-api.md](docs/inventory-api.md), with its [OpenAPI contract](docs/stock-api.openapi.json). It is disabled by default. Administrators manage integration keys in Settings → Inventory API; online checkout remains a separate application.
+
 ## Features
 
 - Add and edit products, prices, sale availability, low-stock thresholds, SKUs, and expiry dates.

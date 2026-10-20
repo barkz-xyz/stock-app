@@ -15,6 +15,8 @@ test('every section and register tab can be restored from its URL', () => {
   for (const range of ['today', '7d', '30d']) assert.equal(parseRoute(sectionHref('metrics', { range })).metricsRange, range)
   assert.equal(parseRoute('/metricas?periodo=invalid').metricsRange, 'today')
   assert.equal(parseRoute('/something-unknown').page, 'not-found')
+  assert.equal(parseRoute('/configuracion?tab=inventory-api').settingsTab, 'inventory-api')
+  assert.equal(parseRoute('/configuracion').settingsTab, 'point')
 })
 
 test('navigation supports refresh, back/forward and root replacement without duplicate entries', () => {

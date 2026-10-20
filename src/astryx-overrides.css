@@ -13,8 +13,8 @@
   --color-text-secondary: #6f665f;
   --color-text-accent: #5e382b;
   --color-icon-accent: #754a3a;
-  --color-border: #ddcfc2;
-  --color-border-emphasized: #cbb8a8;
+  --color-border: var(--line);
+  --color-border-emphasized: color-mix(in srgb, var(--cocoa) 18%, var(--line));
   --color-overlay: #2f231bcc;
   --radius-element: 0.75rem;
   --radius-container: 1rem;

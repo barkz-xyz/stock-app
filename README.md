@@ -243,3 +243,7 @@ Catalog source assets live in `Imagenes/`; the Python catalog/sign scripts use P
 ## Production note
 
 Keep staff authentication enabled on any public Railway deployment. Individual admin/cashier accounts and register-session closes are supported. Automatic tax issuance is a separate integration.
+
+## Online stock reservations
+
+The separate checkout reserves through the same PostgreSQL product locks used by Caja. Reserving deducts available stock once; confirmation never deducts again; release/expiry restores once. Pending provider payments never expire automatically. Enable per server and per integration; see [the reservation contract and operational guide](docs/stock-reservations.md) and [OpenAPI 1.1](docs/stock-api.openapi.json). Online buyers, orders and payments remain in the checkout repository.

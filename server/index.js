@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import compression from 'compression'
 import express from 'express'
 import { createInventoryRouter, createIntegrationAdminRouter, inventoryApiConfiguration } from './inventory-api.js'
+import { createReservationRouter, createReservationAdminRouter } from './reservation-api.js'
 import { parseCalendarDate } from '../src/dates.js'
 import { authStatus, login, logout, setupAdmin, changePassword, pointAccessIsProtected, requireAuth, requireAdmin, cashierBoundary } from './auth.js'
 import {
@@ -15,7 +16,7 @@ import {
 import {
   adjustItem, saveInventoryBatch, searchSales, attachPointOrder, closeStore, completeRefund,
   claimPointOrder, createItem, createSale, deleteItem, failRefund, getSale,
-  getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales, getInventoryIntegrationStore,
+  getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales, getInventoryIntegrationStore, getStockReservationStore,
   markCardSaleFailed, prepareRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
   updateItem, updateSaleFromPoint, updateSalePaymentDetails,
   listUsers, createUser, updateUser, listRegisterSessions, getActiveRegisterSession, openRegisterSession, getRegisterClosure, saveRegisterClosure, getRegisterClosureRevision,
@@ -30,6 +31,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const htmlCacheControl = 'public, max-age=0, s-maxage=60, stale-while-revalidate=300'
 const inventoryApiConfig = inventoryApiConfiguration()
 let inventoryIntegrations
+let stockReservations, reservationCleanup
 
 app.disable('x-powered-by')
 app.set('trust proxy', process.env.RAILWAY_ENVIRONMENT_ID ? 1 : false)
@@ -40,6 +42,7 @@ app.use('/api', (_req, res, next) => {
   res.vary('Cookie')
   next()
 })
+app.use('/api/integrations/v1/reservations', createReservationRouter({ getIntegrations: () => inventoryIntegrations, getReservations: () => stockReservations, config: inventoryApiConfig }))
 app.use('/api/integrations/v1', createInventoryRouter({ getStore: () => inventoryIntegrations, config: inventoryApiConfig }))
 app.use(express.json({ limit: '200kb' }))
 
@@ -314,7 +317,8 @@ app.get('/api/bootstrap', async (req, res, next) => {
   } catch (error) { next(error) }
 })
 app.use('/api', requireAuth, cashierBoundary)
-app.use('/api/integration-clients', requireAdmin, createIntegrationAdminRouter({ getStore: () => inventoryIntegrations, config: inventoryApiConfig }))
+app.use('/api/integration-clients', requireAdmin, createIntegrationAdminRouter({ getStore: () => inventoryIntegrations, getReservations: () => stockReservations, config: inventoryApiConfig }))
+app.use('/api/stock-reservations', requireAdmin, createReservationAdminRouter({ getReservations: () => stockReservations, config: inventoryApiConfig }))
 app.use('/api',async(req,res,next)=>{
   if(req.user.role!=='cashier')return next()
   const match=/^\/sales\/([0-9a-f-]{36})(?:\/|$)/i.exec(req.path)
@@ -750,6 +754,11 @@ app.get('/{*splat}', (_req, res) => res.sendFile(path.join(distPath, 'index.html
 }))
 
 app.use((error, _req, res, _next) => {
+  if (error.constraint === 'active_online_reservations' || error.constraint === 'online_stock_capacity') {
+    error.status = 409
+    error.code = 'ACTIVE_RESERVATIONS'
+    error.message = 'Hay reservas online pendientes. Revisa el saldo y las reservas antes de continuar.'
+  }
   console.error(error)
   res.setHeader('Cache-Control', 'private, no-store')
   const status = error.status || 500
@@ -767,6 +776,14 @@ await initializeStore()
 inventoryIntegrations = getInventoryIntegrationStore()
 if (inventoryApiConfig.enabled && inventoryApiConfig.production && !inventoryIntegrations.persistent) throw new Error('The production inventory API requires PostgreSQL.')
 await inventoryIntegrations.initialize()
+stockReservations = getStockReservationStore({ ttlSeconds: inventoryApiConfig.reservationTtlSeconds })
+if (inventoryApiConfig.reservationsEnabled && (!inventoryApiConfig.enabled || !stockReservations.persistent)) throw new Error('Stock reservations require the inventory API and PostgreSQL.')
+if (stockReservations.persistent) {
+  const cleanup = () => stockReservations.expire().catch(() => console.error(JSON.stringify({ event: 'stock_reservation_expiry_failed' })))
+  await cleanup()
+  reservationCleanup = setInterval(cleanup, 10000)
+  reservationCleanup.unref()
+}
 await listenForDatabaseChanges(process.env.DATABASE_URL)
 const pointSecurity = pointConfiguration()
 console.info(JSON.stringify({
@@ -784,6 +801,7 @@ console.info(JSON.stringify({
 const server = app.listen(port, '0.0.0.0', () => console.log(`Bakery POS listening on port ${server.address().port}`))
 
 async function shutdown() {
+  clearInterval(reservationCleanup)
   for (const stream of eventStreams) stream.end()
   await closeChangeListener()
   server.close(async () => {

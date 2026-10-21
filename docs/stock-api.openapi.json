@@ -1,17 +1,17 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Bakery POS API de consulta de inventario",
-    "version": "1.0.0",
-    "description": "Primera entrega implementada en el repositorio. API privada entre servidores, activada con INVENTORY_API_ENABLED=true y credenciales propias. Exporta todos los productos vigentes, incluidos agotados y no vendibles. No habilita pedidos, cobros, reservas ni modificaciones de stock. Los ejemplos son ilustrativos. Ver inventory-api.md para uso y activación."
+    "title": "Bakery POS API de inventario y reservas",
+    "version": "1.1.0",
+    "description": "API privada entre servidores. Lectura con inventory:read; reservas con inventory:reserve, PostgreSQL e INVENTORY_RESERVATIONS_ENABLED=true. El checkout separado conserva pedidos, compradores y pagos. Ver inventory-api.md y stock-reservations.md."
   },
-  "x-status": "proposal-not-implemented",
+  "x-status": "implemented",
   "x-prepared-at": "2026-10-20",
-  "x-inventory-semantics": "stockQuantity es items.quantity: saldo operativo ya neto de ventas y reservas Point aplicadas; no es un conteo físico ni una promesa de disponibilidad para una compra.",
+  "x-inventory-semantics": "stockQuantity es items.quantity: saldo neto disponible, con ventas y reservas Point/online ya descontadas. Confirmar una reserva no descuenta otra vez. Liberar o vencer restituye una sola vez.",
   "servers": [
     {
       "url": "/",
-      "description": "Origen futuro del backend. Estas rutas todavía no existen."
+      "description": "Origen del backend Bakery POS."
     }
   ],
   "security": [
@@ -23,6 +23,10 @@
     {
       "name": "Inventory",
       "description": "Sólo lectura; permiso inventory:read verificado en cada solicitud."
+    },
+    {
+      "name": "Reservations",
+      "description": "Permiso inventory:reserve. Apartado inicial de 900 s; payment_pending no vence automáticamente. Reconciliar pagos en el checkout antes de liberar."
     }
   ],
   "paths": {
@@ -226,6 +230,630 @@
           }
         }
       }
+    },
+    "/api/integrations/v1/reservations": {
+      "post": {
+        "tags": [
+          "Reservations"
+        ],
+        "operationId": "reserveStock",
+        "summary": "Reservar todas las líneas del carrito con una referencia externa única por integración",
+        "x-required-scopes": [
+          "inventory:reserve"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReservationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reserva existente recuperada por idempotencia.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockReservation"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Stock apartado atómicamente en todas las líneas.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockReservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "description": "Sólo GET y POST. Allow: GET, POST.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/ReservationConflict"
+          },
+          "413": {
+            "description": "JSON mayor a 16 KiB.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/integrations/v1/reservations/{id}": {
+      "get": {
+        "tags": [
+          "Reservations"
+        ],
+        "operationId": "getStockReservation",
+        "summary": "Consultar una reserva propia sin modificar su plazo",
+        "x-required-scopes": [
+          "inventory:reserve"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReservationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Estado actual de la reserva.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockReservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "description": "Sólo GET y POST. Allow: GET, POST.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/ReservationConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/integrations/v1/reservations/{id}/payment-pending": {
+      "post": {
+        "tags": [
+          "Reservations"
+        ],
+        "operationId": "startReservationPayment",
+        "summary": "Retener la reserva antes de contactar al proveedor de pagos",
+        "x-required-scopes": [
+          "inventory:reserve"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReservationId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReservationPaymentStart"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Estado actual de la reserva.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockReservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "description": "Sólo GET y POST. Allow: GET, POST.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/ReservationConflict"
+          },
+          "413": {
+            "description": "JSON mayor a 16 KiB.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/integrations/v1/reservations/{id}/confirm": {
+      "post": {
+        "tags": [
+          "Reservations"
+        ],
+        "operationId": "confirmStockReservation",
+        "summary": "Confirmar un pago verificado sin volver a descontar stock",
+        "x-required-scopes": [
+          "inventory:reserve"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReservationId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReservationConfirmation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Estado actual de la reserva.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockReservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "description": "Sólo GET y POST. Allow: GET, POST.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/ReservationConflict"
+          },
+          "413": {
+            "description": "JSON mayor a 16 KiB.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/integrations/v1/reservations/{id}/release": {
+      "post": {
+        "tags": [
+          "Reservations"
+        ],
+        "operationId": "releaseStockReservation",
+        "summary": "Restituir stock tras cancelación o resultado de pago verificado",
+        "x-required-scopes": [
+          "inventory:reserve"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReservationId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReservationRelease"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Estado actual de la reserva.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockReservation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "description": "Sólo GET y POST. Allow: GET, POST.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/ReservationConflict"
+          },
+          "413": {
+            "description": "JSON mayor a 16 KiB.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/PrivateNoStore"
+              },
+              "Vary": {
+                "$ref": "#/components/headers/VaryAuthorization"
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -234,7 +862,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "Opaque integration token",
-        "description": "Credencial técnica de alta entropía, con inventory:read, vigencia y revocación; independiente de cookies del personal. Sólo en Authorization, nunca en la URL ni en el frontend de la tienda. No se genera ninguna credencial en esta propuesta."
+        "description": "Token privado del backend consumidor, con vigencia, revocación y permisos por integración. Nunca en URLs o frontend. inventory:read para consultas; inventory:reserve para el ciclo de reservas."
       }
     },
     "parameters": {
@@ -247,6 +875,25 @@
           "type": "string"
         },
         "example": "W/\"inventory-canonical-content-hash\""
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "UUID persistido antes de enviar la operación. Misma clave y cuerpo recuperan su resultado; cambiar cuerpo/acción devuelve 409. Los reintentos no extienden el plazo."
+      },
+      "ReservationId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
       }
     },
     "headers": {
@@ -370,7 +1017,7 @@
         }
       },
       "Forbidden": {
-        "description": "La integración no tiene el permiso inventory:read.",
+        "description": "Falta el permiso exigido por la operación.",
         "headers": {
           "Cache-Control": {
             "$ref": "#/components/headers/PrivateNoStore"
@@ -390,7 +1037,7 @@
             "example": {
               "error": {
                 "code": "FORBIDDEN",
-                "message": "La integración no tiene el permiso inventory:read.",
+                "message": "Required integration permission missing.",
                 "requestId": "a02e66c7-c1b1-43d5-9649-d947031fa40e"
               }
             }
@@ -511,6 +1158,27 @@
                 "message": "La integración está desactivada o el inventario no está disponible temporalmente.",
                 "requestId": "a02e66c7-c1b1-43d5-9649-d947031fa40e"
               }
+            }
+          }
+        }
+      },
+      "ReservationConflict": {
+        "description": "Stock agotado, cotización modificada, idempotencia/referencia en conflicto o transición de pago/reserva no válida. Revisar error.code documentado en stock-reservations.md.",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/PrivateNoStore"
+          },
+          "Vary": {
+            "$ref": "#/components/headers/VaryAuthorization"
+          },
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
             }
           }
         }
@@ -670,6 +1338,287 @@
                 "type": "string"
               }
             }
+          }
+        }
+      },
+      "ReservationLineInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "itemId",
+          "quantity",
+          "unit",
+          "unitPrice"
+        ],
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quantity": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,4})\\.[0-9]{2}$",
+            "description": "Entre 0.01 y 10000.00, dos decimales obligatorios."
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "unitPrice": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 999999999999
+          }
+        }
+      },
+      "ReservationInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "externalReference",
+          "currency",
+          "expectedTotal",
+          "items"
+        ],
+        "properties": {
+          "externalReference": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$",
+            "maxLength": 120
+          },
+          "currency": {
+            "const": "CLP"
+          },
+          "expectedTotal": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 999999999999
+          },
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/ReservationLineInput"
+            },
+            "description": "UUID únicos. Precios y unidades deben coincidir con el catálogo actual; el servidor recalcula el total."
+          }
+        }
+      },
+      "ReservationPaymentStart": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "paymentAttemptId"
+        ],
+        "properties": {
+          "paymentAttemptId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ReservationConfirmation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "paymentAttemptId",
+          "paymentReference",
+          "amount",
+          "currency"
+        ],
+        "properties": {
+          "paymentAttemptId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentReference": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$",
+            "maxLength": 120
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 999999999999
+          },
+          "currency": {
+            "const": "CLP"
+          }
+        }
+      },
+      "ReservationRelease": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "enum": [
+              "checkout_cancelled",
+              "payment_rejected",
+              "payment_cancelled",
+              "payment_not_created"
+            ]
+          },
+          "paymentAttemptId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "outcomeVerified": {
+            "type": "boolean"
+          }
+        },
+        "description": "payment_pending exige paymentAttemptId coincidente, outcomeVerified=true y una razón de pago (no checkout_cancelled). El backend consumidor debe verificar primero el resultado con el proveedor."
+      },
+      "StockReservation": {
+        "type": "object",
+        "required": [
+          "id",
+          "externalReference",
+          "status",
+          "total",
+          "inventoryApplied",
+          "expiresAt",
+          "createdAt",
+          "updatedAt",
+          "paymentAttemptId",
+          "paymentReference",
+          "releaseReason",
+          "paymentStartedAt",
+          "confirmedAt",
+          "releasedAt",
+          "items"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "externalReference": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$",
+            "maxLength": 120
+          },
+          "status": {
+            "enum": [
+              "held",
+              "payment_pending",
+              "confirmed",
+              "released",
+              "expired"
+            ]
+          },
+          "total": {
+            "$ref": "#/components/schemas/MoneyCLP"
+          },
+          "inventoryApplied": {
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "paymentAttemptId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "paymentReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "releaseReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paymentStartedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "confirmedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "releasedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "itemId",
+                "name",
+                "unit",
+                "quantity",
+                "unitPrice",
+                "lineTotal"
+              ],
+              "properties": {
+                "itemId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "unit": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "quantity": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,4})\\.[0-9]{2}$",
+                  "description": "Entre 0.01 y 10000.00, dos decimales obligatorios."
+                },
+                "unitPrice": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 999999999999
+                },
+                "lineTotal": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 999999999999
+                }
+              }
+            }
+          },
+          "replayed": {
+            "type": "boolean",
+            "description": "Presente en escrituras; indica reintento con la misma clave. La respuesta devuelve el estado actual."
           }
         }
       }

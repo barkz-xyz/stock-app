@@ -124,6 +124,28 @@ h1, h2, h3, p { margin-top: 0; }
 .integration-secret-tools > .integration-copy-success { color: var(--sage); font-weight: 700; }
 .integration-confirmation > p { margin: 0; color: var(--muted); line-height: 1.5; }
 .integration-confirmation > code { font-size: 12px; overflow-wrap: anywhere; }
+.integration-client .integration-actions { flex-wrap: wrap; }
+.reservation-panel h2 .status-pill { margin-left: 5px; vertical-align: middle; }
+.reservation-panel .status-pill.warning { color: var(--amber); background: var(--amber-soft); }
+.reservation-empty { margin: 0; padding: 20px; color: var(--muted); font-size: 13px; }
+.reservation-list { padding: 0 20px; }
+.reservation-list > article { display: flex; align-items: center; gap: 14px; padding: 16px 0; }
+.reservation-list > article + article { border-top: 1px solid var(--separator); }
+@media (max-width: 600px) {
+  .reservation-list > article { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+  .reservation-list .reservation-copy { grid-column: 1 / -1; }
+  .reservation-list .reservation-amount { display: flex; align-items: center; gap: 10px; }
+  .reservation-panel .card-header { gap: 8px; flex-wrap: wrap; }
+}
+.reservation-copy { display: grid; flex: 1; gap: 5px; min-width: 0; }
+.reservation-copy > strong { font-size: 13px; }
+.reservation-copy code { font-size: 12px; overflow-wrap: anywhere; }
+.reservation-copy small,.reservation-copy summary { color: var(--muted); font-size: 12px; }
+.reservation-copy details > small { display: block; padding-top: 5px; }
+.reservation-amount { display: grid; justify-items: end; gap: 7px; flex-shrink: 0; }
+.reservation-amount > strong { font-size: 15px; }
+.reservation-checkbox { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.reservation-checkbox input { width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--cocoa); }
 @media (max-width: 600px) {
   .integration-summary { padding: 16px; }
   .integration-key { gap: 8px; flex-wrap: wrap; }

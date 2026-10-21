@@ -8,6 +8,7 @@ import { cleanInventoryBatch, inventoryBatchChanges } from './inventory-batch.js
 import { cleanHistoryQuery, historyMatches } from './sales-history.js'
 import { publicUser, cleanUser, hashPassword, userError } from './user-security.js'
 import { createIntegrationStore } from './integration-store.js'
+import { initializeStockReservations, createStockReservationStore, assertNoStockHolds } from './stock-reservations.js'
 import { closurePeriod, buildClosureSummary, cleanClosureInput, createClosure, closureError, businessDateAt } from './cash-closure.js'
 
 const { Pool } = pg
@@ -61,6 +62,7 @@ function normalizeMovement(row) {
     itemId: row.item_id ?? row.itemId,
     itemName: row.item_name ?? row.itemName,
     saleId: row.sale_id ?? row.saleId ?? null,
+    reservationId: row.reservation_id ?? row.reservationId ?? null,
     type: row.type,
     quantity: Number(row.quantity),
     balanceAfter: Number(row.balance_after ?? row.balanceAfter),
@@ -450,6 +452,7 @@ export async function initializeStore() {
         END LOOP;
       END $$;
     `)
+    await initializeStockReservations(pool)
     await seedInitialAdmin()
     return
   }
@@ -541,6 +544,10 @@ export function getInventoryIntegrationStore() {
     const data = await readFileData()
     return itemId ? data.items.filter(item => item.id.toLowerCase() === itemId.toLowerCase()) : data.items
   } })
+}
+
+export function getStockReservationStore(options = {}) {
+  return createStockReservationStore({ pool, ...options })
 }
 
 export async function getBootstrapData(now = new Date()) {
@@ -636,6 +643,7 @@ export async function deleteItem(id) {
     if (pendingResult.rows[0]) {
       throw Object.assign(new Error('This product is reserved by a pending card sale and cannot be deleted yet.'), { status: 409 })
     }
+    await assertNoStockHolds(client, [id])
     await client.query('DELETE FROM items WHERE id=$1', [id])
     await client.query('COMMIT')
     return normalizeItem(itemResult.rows[0])
@@ -673,6 +681,7 @@ export async function saveInventoryBatch(input, key) {
     const previous = await client.query('SELECT fingerprint,result FROM stock_batches WHERE id=$1', [batch.key])
     if (previous.rows[0]) { const result = replay(previous.rows[0]); await client.query('COMMIT'); return result }
     const current = await client.query('SELECT * FROM items WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE', [batch.items.map(l => l.itemId)])
+    if (batch.type === 'adjustment') await assertNoStockHolds(client, batch.items.map(l => l.itemId))
     const changes = inventoryBatchChanges(current.rows.map(normalizeItem), batch)
     const updated = await client.query(`UPDATE items i SET quantity=b.quantity, updated_at=NOW()
       FROM UNNEST($1::uuid[],$2::numeric[]) AS b(id,quantity) WHERE i.id=b.id RETURNING i.*`, [changes.map(c => c.item.id), changes.map(c => c.next)])
@@ -717,6 +726,7 @@ export async function adjustItem(id, input) {
       return null
     }
     const current = Number(currentResult.rows[0].quantity)
+    if (input.type === 'adjustment') await assertNoStockHolds(client, [id])
     const amount = Number(input.quantity)
     const next = input.type === 'stock_in' ? current + amount
       : input.type === 'stock_out' ? current - amount : amount

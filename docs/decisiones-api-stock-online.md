@@ -1,5 +1,8 @@
 # Recomendaciones para la API de stock y las ventas online
 
+> Actualización de implementación: la lectura y las reservas transaccionales ya están implementadas en Bakery POS. El contrato vigente es [stock-reservations.md](stock-reservations.md) y OpenAPI 1.1. La retención inicial es de 15 minutos; un pago en curso no vence automáticamente. No se aplica un buffer sin una decisión comercial. Los apartados de este análisis sobre pagos, publicación y entrega siguen siendo propuestas del checkout separado.
+
+
 Propuesta del 20 de octubre de 2026 para resolver las cinco decisiones pendientes del [plan de integración](api-stock-ventas-online.md). Arquitectura acordada: Bakery POS y la futura tienda usarán repos y despliegues separados. Se implementa primero la [API de inventario de sólo lectura](inventory-api.md); pagos y pedidos online quedan en el checkout. Las reglas comerciales siguientes siguen propuestas.
 
 ## Opciones recomendadas

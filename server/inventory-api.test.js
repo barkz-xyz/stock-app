@@ -34,7 +34,7 @@ test('inventory contract preserves decimals, CLP, all products and stable canoni
 })
 
 test('inventory API is opt-in and environment credentials are separate', () => {
-  assert.deepEqual(inventoryApiConfiguration({}), { enabled: false, environment: 'test', production: false })
+  assert.deepEqual(inventoryApiConfiguration({}), { enabled: false, environment: 'test', production: false, reservationsEnabled: false, reservationTtlSeconds: 900 })
   assert.equal(inventoryApiConfiguration({ NODE_ENV: 'production', INVENTORY_API_ENABLED: 'true' }).environment, 'production')
   assert.equal(inventoryApiConfiguration({ NODE_ENV: 'production', INVENTORY_API_ENVIRONMENT: 'test' }).environment, 'test')
   assert.throws(() => inventoryApiConfiguration({ INVENTORY_API_ENVIRONMENT: 'invalid' }))

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
+import { assertClientHasNoStockHolds } from './stock-reservations.js'
 
 export function integrationError(message, status = 400, code = 'INVALID_REQUEST') {
   return Object.assign(new Error(message), { status, code })
@@ -98,8 +99,8 @@ export function createIntegrationStore({ pool, dataPath, readInventory }) {
         WHERE c.environment=$1 GROUP BY c.id ORDER BY c.created_at DESC,c.id`, [environment])
       return rows.map(publicClient)
     },
-    async createClient({ name, environment, expiresInDays, createdBy }) {
-      const client = { id: crypto.randomUUID(), name, environment, scopes: ['inventory:read'], createdAt: new Date().toISOString() }
+    async createClient({ name, environment, expiresInDays, createdBy, reservationsEnabled = false }) {
+      const client = { id: crypto.randomUUID(), name, environment, scopes: reservationsEnabled ? ['inventory:read', 'inventory:reserve'] : ['inventory:read'], createdAt: new Date().toISOString() }
       const { token, key } = newKey(client.id, environment, expiresInDays)
       if (pool) await transaction(async connection => {
         await connection.query(`INSERT INTO integration_clients (id,name,environment,scopes,created_at,created_by)
@@ -108,6 +109,21 @@ export function createIntegrationStore({ pool, dataPath, readInventory }) {
       })
       else await mutate(data => { data.clients.unshift(client); data.keys.push(key) })
       return { client: publicClient({ ...client, keys: [key] }), key: publicKey(key), token }
+    },
+    async setReservationAccess(clientId, environment, enabled) {
+      const scopes = enabled ? ['inventory:read', 'inventory:reserve'] : ['inventory:read']
+      if (pool) await transaction(async connection => {
+        const found = await connection.query('SELECT id FROM integration_clients WHERE id=$1 AND environment=$2 FOR UPDATE', [clientId, environment])
+        if (!found.rowCount) throw integrationError('Integración no encontrada.', 404, 'NOT_FOUND')
+        if (!enabled) await assertClientHasNoStockHolds(connection, clientId)
+        await connection.query('UPDATE integration_clients SET scopes=$2 WHERE id=$1', [clientId, scopes])
+      })
+      else await mutate(data => {
+        const client = data.clients.find(client => client.id === clientId && client.environment === environment)
+        if (!client) throw integrationError('Integración no encontrada.', 404, 'NOT_FOUND')
+        client.scopes = scopes
+      })
+      return { reservationsEnabled: enabled }
     },
     async rotateKey(clientId, environment, expiresInDays) {
       const { token, key } = newKey(clientId, environment, expiresInDays)
@@ -158,6 +174,7 @@ export function createIntegrationStore({ pool, dataPath, readInventory }) {
       if (pool) await transaction(async connection => {
         const client = await connection.query('SELECT id FROM integration_clients WHERE id=$1 AND environment=$2 FOR UPDATE', [clientId, environment])
         if (!client.rowCount) throw integrationError('Integración no encontrada.', 404, 'NOT_FOUND')
+        await assertClientHasNoStockHolds(connection, clientId)
         await connection.query('DELETE FROM integration_keys WHERE client_id=$1', [clientId])
         await connection.query('DELETE FROM integration_rate_limits WHERE bucket LIKE $1', [`client:${clientId}:%`])
         await connection.query('DELETE FROM integration_clients WHERE id=$1', [clientId])

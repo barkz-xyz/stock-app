@@ -1,6 +1,6 @@
 # API de inventario
 
-Primera entrega de la integración entre Bakery POS y una futura tienda en otro repositorio. Implementada en código, con activación por servidor. Contrato externo: [stock-api.openapi.json](stock-api.openapi.json).
+Integración entre Bakery POS y la tienda en otro repositorio. Consulta de inventario y [reservas transaccionales](stock-reservations.md), con activación y permisos separados. Contrato externo: [stock-api.openapi.json](stock-api.openapi.json).
 
 ## Alcance
 
@@ -9,9 +9,9 @@ Primera entrega de la integración entre Bakery POS y una futura tienda en otro 
 | `GET /api/integrations/v1/inventory` | Todo el catálogo vigente, también agotados y productos no vendibles |
 | `GET /api/integrations/v1/inventory/{itemId}` | Un producto por UUID |
 
-La respuesta proviene de una única lectura coherente, ordenada por UUID y con `count` igual a `items.length`. No admite filtros ni paginación. El saldo operativo ya descuenta ventas y reservas Point aplicadas; no es un conteo físico. La consulta no modifica existencias, movimientos, ventas o cierres.
+La respuesta proviene de una única lectura coherente, ordenada por UUID y con `count` igual a `items.length`. No admite filtros ni paginación. El saldo operativo ya descuenta ventas, reservas Point y reservas online aplicadas; no es un conteo físico. La consulta no modifica existencias, movimientos, ventas o cierres.
 
-Bakery POS conserva la autoridad del inventario. La tienda separada gestionará carrito, compradores, pedidos y pagos online. Esta entrega no reserva stock ni garantiza disponibilidad al cobrar; las reservas y confirmaciones son una fase posterior necesaria para vender existencias compartidas.
+Bakery POS conserva la autoridad del inventario. La tienda separada gestiona carrito, compradores, pedidos y pagos online. La consulta por sí sola no garantiza disponibilidad al cobrar: el checkout debe usar el flujo de reserva, inicio de pago y confirmación documentado en [reservas](stock-reservations.md) antes de habilitar cobros.
 
 ## Activación
 
@@ -42,7 +42,7 @@ La ruta administrativa admite vigencias de 1 a 365 días y usa 90 por defecto. S
 
 La ventana de la nueva clave sólo se cierra con **Ya la guardé**. **Copiar clave** confirma la copia dentro de la ventana. Si el navegador bloquea el portapapeles, se intenta la copia del texto seleccionado y queda disponible **Seleccionar texto** para copiar manualmente. La clave no se guarda en el navegador.
 
-El único permiso emitido es `inventory:read`. El cajero no puede ver ni gestionar claves. Las cookies del personal no autorizan la API externa y los tokens externos no autorizan rutas del personal.
+El permiso inicial es `inventory:read`. Sólo un administrador puede añadir `inventory:reserve` a una integración mediante **Permitir reservas**, sin modificar las demás. El cajero no puede ver ni gestionar claves o reservas. Las cookies del personal no autorizan la API externa y los tokens externos no autorizan rutas del personal.
 
 Estas rutas administrativas requieren sesión de administrador y no pertenecen al contrato del consumidor:
 
@@ -54,6 +54,9 @@ Estas rutas administrativas requieren sesión de administrador y no pertenecen a
 | `POST /api/integration-clients/{clientId}/keys/{keyId}/revoke` | Revocar, sin repetir efectos |
 | `DELETE /api/integration-clients/{clientId}/keys/{keyId}` | Borrar una clave y retirar su acceso |
 | `DELETE /api/integration-clients/{clientId}` | Borrar la integración, sus claves y contadores asociados |
+| `PATCH /api/integration-clients/{clientId}` | Habilitar o deshabilitar `reservationsEnabled` |
+| `GET /api/stock-reservations` | Revisar reservas e historial como administrador |
+| `POST /api/stock-reservations/{id}/release` | Liberar como administrador, con idempotencia y reconciliación de pagos pendientes |
 
 ## Consumir desde otro backend
 
@@ -99,4 +102,4 @@ Los errores contienen `{ "error": { "code": "…", "message": "…", "requestId"
 
 Las pruebas cubren contrato, decimales, campos permitidos, separación de identidades, persistencia y rotación de claves, revocación antes de 304, errores y cuotas. La prueba PostgreSQL usa un esquema temporal y dos pools independientes para verificar cuotas y rotaciones concurrentes sin modificar filas de negocio. El gate conserva build y todas las pruebas, con PostgreSQL obligatorio y cero skips.
 
-Para conectar el futuro repo, usar el OpenAPI versionado y añadir pruebas de compatibilidad en el consumidor. Los cambios de precio, SKU o unidad no deben recrear UUID de productos. Las reservas futuras deben usar la misma autoridad transaccional que Caja.
+Para conectar el checkout separado, usar el OpenAPI versionado y añadir pruebas de compatibilidad en el consumidor. Los cambios de precio, SKU o unidad no deben recrear UUID de productos. Las reservas implementadas usan los mismos bloqueos de productos que Caja; su ciclo completo se documenta en [stock-reservations.md](stock-reservations.md).

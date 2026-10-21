@@ -7,7 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-test('staff and inventory identities stay isolated; only administrators can issue and revoke keys', async t => {
+test('staff and inventory identities stay isolated; only administrators can manage integration credentials', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'bakery-inventory-access-'))
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(DATABASE_|DATA_PATH$|PORT$|STAFF_PIN$|APP_|SESSION_SECRET$|MERCADOPAGO_|POINT_|RAILWAY_|INVENTORY_API_)/.test(key)))
   Object.assign(env, { PORT: '0', NODE_ENV: 'test', DATA_PATH: path.join(directory, 'inventory.json'),
@@ -65,6 +65,13 @@ test('staff and inventory identities stay isolated; only administrators can issu
   cashierCookie = cashierChanged.headers.get('set-cookie').split(';')[0]
   assert.equal((await request('/api/integration-clients', { cookie: cashierCookie })).status, 403)
   assert.equal((await request('/api/integration-clients', { cookie: cashierCookie, body: { name: 'Denied' } })).status, 403)
+  for (const route of [`/api/integration-clients/${issued.client.id}`, `/api/integration-clients/${issued.client.id}/keys/${issued.key.id}`]) {
+    assert.equal((await request(route, { method: 'DELETE' })).status, 401)
+    assert.equal((await request(route, { cookie: cashierCookie, method: 'DELETE' })).status, 403)
+    assert.equal((await request(route, { token: issued.token, method: 'DELETE' })).status, 401)
+  }
+  assert.equal((await request('/api/integration-clients/not-uuid', { cookie: adminCookie, method: 'DELETE' })).status, 400)
+  assert.equal((await request(`/api/integration-clients/${issued.client.id}/keys/${crypto.randomUUID()}`, { cookie: adminCookie, method: 'DELETE' })).status, 404)
   const metadata = await (await request('/api/integration-clients', { cookie: adminCookie })).json()
   assert.equal(metadata.clients.length, 1)
   assert.doesNotMatch(JSON.stringify(metadata), /token_hash|tokenHash/)
@@ -75,5 +82,17 @@ test('staff and inventory identities stay isolated; only administrators can issu
   const revoke = await request(`/api/integration-clients/${issued.client.id}/keys/${issued.key.id}/revoke`, { cookie: adminCookie, body: {} })
   assert.equal(revoke.status, 200)
   assert.equal((await request('/api/integrations/v1/inventory', { token: issued.token })).status, 401)
+  const beforeCredentialChanges = await fs.readFile(env.DATA_PATH, 'utf8')
+  const rotatedResponse = await request(`/api/integration-clients/${issued.client.id}/keys`, { cookie: adminCookie, body: { expiresInDays: 90 } })
+  assert.equal(rotatedResponse.status, 201)
+  const rotated = await rotatedResponse.json()
+  assert.match(rotated.token, /^bpos_test_[A-Za-z0-9_-]{43}$/, 'Renewal returns a complete secret exactly when it is generated')
+  const deleteKey = await request(`/api/integration-clients/${issued.client.id}/keys/${rotated.key.id}`, { cookie: adminCookie, method: 'DELETE' })
+  assert.equal(deleteKey.status, 200)
+  assert.equal((await request('/api/integrations/v1/inventory', { token: rotated.token })).status, 401)
+  const deleteClient = await request(`/api/integration-clients/${issued.client.id}`, { cookie: adminCookie, method: 'DELETE' })
+  assert.equal(deleteClient.status, 200)
+  assert.deepEqual((await (await request('/api/integration-clients', { cookie: adminCookie })).json()).clients, [])
+  assert.equal(await fs.readFile(env.DATA_PATH, 'utf8'), beforeCredentialChanges, 'Credential deletion never modifies inventory or sales data')
   assert.ok(!logs.includes(issued.token), 'Request logs never contain the secret')
 })

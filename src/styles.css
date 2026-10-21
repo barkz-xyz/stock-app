@@ -107,18 +107,28 @@ h1, h2, h3, p { margin-top: 0; }
 .integration-empty strong { color: var(--ink); }
 .integration-client h2 { margin: 0 0 3px; }
 .integration-client .card-header { flex-wrap: wrap; gap: 12px; }
+.integration-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.integration-no-keys { margin: 0; padding: 16px 0; color: var(--muted); font-size: 12px; }
 .integration-keys { padding: 0 20px; }
 .integration-key { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 16px 0; }
 .integration-key + .integration-key { border-top: 1px solid var(--separator); }
 .integration-key > svg { flex-shrink: 0; color: var(--muted); }
-.integration-key > div { display: grid; gap: 5px; flex: 1; min-width: 0; }
+.integration-key > div:not(.integration-actions) { display: grid; gap: 5px; flex: 1; min-width: 0; }
+.integration-actions .icon-button.danger:hover:not(:disabled) { color: var(--danger); background: var(--rose-soft); }
 .integration-key code { font-size: 12px; overflow-wrap: anywhere; }
+.integration-secret,.integration-confirmation { display: grid; gap: 12px; }
 .integration-secret > p { margin: 0; color: var(--muted); }
 .integration-secret textarea { width: 100%; resize: none; padding: 12px; border: 1px solid var(--control-line); border-radius: 10px; background: var(--canvas); color: var(--ink); font-family: monospace; font-size: 13px; overflow-wrap: anywhere; }
+.integration-secret-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.integration-secret-tools > span { color: var(--muted); font-size: 12px; }
+.integration-secret-tools > .integration-copy-success { color: var(--sage); font-weight: 700; }
+.integration-confirmation > p { margin: 0; color: var(--muted); line-height: 1.5; }
+.integration-confirmation > code { font-size: 12px; overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   .integration-summary { padding: 16px; }
   .integration-key { gap: 8px; flex-wrap: wrap; }
-  .integration-key > div { min-width: 160px; }
+  .integration-key > div:not(.integration-actions) { min-width: 160px; }
+  .integration-key .integration-actions { margin-left: auto; }
   .integration-keys { padding: 0 16px; }
 }
 .page-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; margin-bottom: 16px; }

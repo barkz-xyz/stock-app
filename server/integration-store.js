@@ -140,6 +140,36 @@ export function createIntegrationStore({ pool, dataPath, readInventory }) {
       })
       return { revoked: true }
     },
+    async deleteKey(clientId, keyId, environment) {
+      if (pool) await transaction(async connection => {
+        const client = await connection.query('SELECT id FROM integration_clients WHERE id=$1 AND environment=$2 FOR UPDATE', [clientId, environment])
+        if (!client.rowCount) throw integrationError('Clave no encontrada.', 404, 'NOT_FOUND')
+        const removed = await connection.query('DELETE FROM integration_keys WHERE id=$1 AND client_id=$2 RETURNING id', [keyId, clientId])
+        if (!removed.rowCount) throw integrationError('Clave no encontrada.', 404, 'NOT_FOUND')
+      })
+      else await mutate(data => {
+        if (!data.clients.some(client => client.id === clientId && client.environment === environment) ||
+            !data.keys.some(key => key.id === keyId && key.clientId === clientId)) throw integrationError('Clave no encontrada.', 404, 'NOT_FOUND')
+        data.keys = data.keys.filter(key => key.id !== keyId)
+      })
+      return { deleted: true }
+    },
+    async deleteClient(clientId, environment) {
+      if (pool) await transaction(async connection => {
+        const client = await connection.query('SELECT id FROM integration_clients WHERE id=$1 AND environment=$2 FOR UPDATE', [clientId, environment])
+        if (!client.rowCount) throw integrationError('Integración no encontrada.', 404, 'NOT_FOUND')
+        await connection.query('DELETE FROM integration_keys WHERE client_id=$1', [clientId])
+        await connection.query('DELETE FROM integration_rate_limits WHERE bucket LIKE $1', [`client:${clientId}:%`])
+        await connection.query('DELETE FROM integration_clients WHERE id=$1', [clientId])
+      })
+      else await mutate(data => {
+        if (!data.clients.some(client => client.id === clientId && client.environment === environment)) throw integrationError('Integración no encontrada.', 404, 'NOT_FOUND')
+        data.clients = data.clients.filter(client => client.id !== clientId)
+        data.keys = data.keys.filter(key => key.clientId !== clientId)
+        for (const bucket of Object.keys(data.limits)) if (bucket.startsWith(`client:${clientId}:`)) delete data.limits[bucket]
+      })
+      return { deleted: true }
+    },
     async authenticate(digest, environment) {
       if (pool) {
         const { rows } = await pool.query(`SELECT c.id,c.scopes,k.id AS key_id FROM integration_keys k

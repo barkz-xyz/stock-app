@@ -34,10 +34,13 @@ Entrar como administrador en **Configuración → API de stock**, también dispo
 
 1. Crear una integración con nombre y vigencia de 7, 30, 90 o 365 días.
 2. Copiar la clave que se muestra una sola vez y guardarla en el backend consumidor.
-3. Usar **Rotar clave** para emitir una nueva con 90 días de vigencia. La anterior conserva como máximo 24 horas para actualizar al consumidor.
+3. Usar **Renovar clave** para emitir una nueva con 90 días de vigencia. La anterior conserva como máximo 24 horas para actualizar al consumidor. Si no quedan claves vigentes, el botón dice **Generar clave**.
 4. Revocar una clave cuando deje de usarse. La siguiente solicitud, incluso condicional, ya no estará autorizada.
+5. Usar la papelera de una clave para borrarla definitivamente, o la de la cabecera para eliminar toda la integración con sus claves. El borrado requiere confirmación en la interfaz y sólo está disponible para administradores.
 
-La ruta administrativa admite vigencias de 1 a 365 días y usa 90 por defecto. Se permiten como máximo dos claves vigentes por integración; revocar la anterior antes de otra rotación. Se conserva el historial, sin posibilidad de recuperar el secreto.
+La ruta administrativa admite vigencias de 1 a 365 días y usa 90 por defecto. Se permiten como máximo dos claves vigentes por integración; revocar o eliminar la anterior antes de otra renovación. Revocar conserva el registro; eliminar lo borra de la base activa. Las copias de seguridad anteriores mantienen su política de retención. El secreto completo no se puede recuperar: sólo se almacena su hash.
+
+La ventana de la nueva clave sólo se cierra con **Ya la guardé**. **Copiar clave** confirma la copia dentro de la ventana. Si el navegador bloquea el portapapeles, se intenta la copia del texto seleccionado y queda disponible **Seleccionar texto** para copiar manualmente. La clave no se guarda en el navegador.
 
 El único permiso emitido es `inventory:read`. El cajero no puede ver ni gestionar claves. Las cookies del personal no autorizan la API externa y los tokens externos no autorizan rutas del personal.
 
@@ -49,6 +52,8 @@ Estas rutas administrativas requieren sesión de administrador y no pertenecen a
 | `POST /api/integration-clients` | Crear con `{ "name": "Tienda online", "expiresInDays": 90 }` |
 | `POST /api/integration-clients/{clientId}/keys` | Rotar con `{ "expiresInDays": 90 }` |
 | `POST /api/integration-clients/{clientId}/keys/{keyId}/revoke` | Revocar, sin repetir efectos |
+| `DELETE /api/integration-clients/{clientId}/keys/{keyId}` | Borrar una clave y retirar su acceso |
+| `DELETE /api/integration-clients/{clientId}` | Borrar la integración, sus claves y contadores asociados |
 
 ## Consumir desde otro backend
 

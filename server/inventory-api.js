@@ -124,5 +124,13 @@ export function createIntegrationAdminRouter({ getStore, config }) {
     if (!isUuid(req.params.clientId) || !isUuid(req.params.keyId)) throw integrationError('Identificador inválido.')
     res.json(await getStore().revokeKey(req.params.clientId, req.params.keyId, config.environment))
   })
+  router.delete('/:clientId/keys/:keyId', async (req, res) => {
+    if (!isUuid(req.params.clientId) || !isUuid(req.params.keyId)) throw integrationError('Identificador inválido.')
+    res.json(await getStore().deleteKey(req.params.clientId, req.params.keyId, config.environment))
+  })
+  router.delete('/:clientId', async (req, res) => {
+    if (!isUuid(req.params.clientId)) throw integrationError('Identificador inválido.')
+    res.json(await getStore().deleteClient(req.params.clientId, config.environment))
+  })
   return router
 }

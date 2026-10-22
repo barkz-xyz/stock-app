@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { watchUpdates } from '../src/liveUpdates.js'
+import { createRefreshCoordinator, watchUpdates } from '../src/liveUpdates.js'
 
 test('live updates refresh stock, coalesce bursts, recover missed updates, and stop when hidden or signed out', async () => {
   const sources = []
@@ -40,11 +40,60 @@ test('live updates refresh stock, coalesce bursts, recover missed updates, and s
     doc.visibilityState = 'visible'; doc.dispatchEvent(new Event('visibilitychange'))
     await delay(0)
     assert.equal(sources.length, 2)
+    sources[0].dispatchEvent(new Event('ready'))
+    sources[0].dispatchEvent(new Event('unauthorized'))
+    assert.equal(expire, 0, 'Events from a closed connection do not affect the new one')
+    assert.equal(reads, before, 'Visibility waits for ready instead of making a duplicate HTTP request')
+    sources[1].dispatchEvent(new Event('ready'))
+    await delay(0)
     assert.equal(reads, before + 1)
     sources[1].dispatchEvent(new Event('unauthorized'))
     assert.equal(expire, 1)
     assert.equal(sources[1].closed, true)
   } finally { stop() }
+})
+
+test('refresh coordinator shares initial/manual reads and queues one post-change reconciliation', async () => {
+  const reads = []
+  const refresh = createRefreshCoordinator(() => new Promise((resolve, reject) => reads.push({ resolve, reject })))
+  const first = refresh(), manual = refresh()
+  assert.equal(first, manual)
+  assert.equal(reads.length, 1)
+  for (let i = 0; i < 8; i++) assert.equal(refresh({ fresh: true }), first)
+  reads[0].resolve()
+  await delay(0)
+  assert.equal(reads.length, 2)
+  reads[1].resolve()
+  await first
+  const failed = refresh()
+  reads[2].reject(Object.assign(new Error('Session expired'), { status: 401 }))
+  await assert.rejects(failed, { status: 401 })
+  const retry = refresh(); reads[3].resolve(); await retry
+  assert.equal(reads.length, 4)
+})
+
+test('invalidating a refresh detaches old work and prevents its queued read after logout', async () => {
+  const reads = []
+  const refresh = createRefreshCoordinator(() => new Promise(resolve => reads.push(resolve)))
+  const old = refresh(); refresh({ fresh: true }); refresh.invalidate()
+  const current = refresh()
+  reads[0](); await old
+  assert.equal(reads.length, 2)
+  assert.equal(refresh(), current)
+  reads[1](); await current
+})
+
+test('SSE refresh errors retain polling recovery; 401 stops it', async () => {
+  const doc = new EventTarget(); doc.visibilityState = 'visible'
+  const timers = { setTimeout(callback, ms) { this.next = { callback, ms }; return 0 }, clearTimeout() {} }
+  let reads = 0, unauthorized = 0
+  const stop = watchUpdates({ document: doc, EventSource: null, timers, refresh: async () => {
+    reads++; throw Object.assign(new Error('Unavailable'), { status: reads === 1 ? 503 : 401 })
+  }, onUnauthorized: () => unauthorized++ })
+  await timers.next.callback(); assert.equal(reads, 1); assert.equal(timers.next.ms, 15000)
+  await timers.next.callback(); assert.equal(unauthorized, 1)
+  await timers.next.callback(); assert.equal(reads, 2)
+  stop()
 })
 
 test('checkout attempts retain their key and frozen cart through a reload', async (t) => {

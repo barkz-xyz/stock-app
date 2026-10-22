@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, Check, ChevronRight, ChevronUp, ChevronDown, CreditCard, FileCheck2, History, LayoutDashboard, Minus, PackageOpen, Plus, ReceiptText, RotateCw, Search, ShoppingBasket, Monitor, Star, Trash2, Undo2, Wifi, X } from 'lucide-react'
 import { api } from './api.js'
 import { beginCheckout, clearCheckout, pendingCheckout } from './checkoutAttempts.js'
@@ -18,6 +18,19 @@ function ProductArtwork({ item }) {
     width={photo.width} height={photo.height} alt="" aria-hidden="true"
     loading="lazy" decoding="async" onError={() => setFailedSource(photo.src)} />
 }
+
+
+const ProductTile = memo(function ProductTile({ item, inCart, favorite, locked, onQuantity, onFavorite }) {
+  const { t, formatCurrency, unitLabel } = useI18n()
+  const label = productLabel(item.name)
+  return <div className="product-tile"><button className={`sale-product category-${categoryClass(item.category)} ${item.quantity <= 0 ? 'is-unavailable' : ''}`} aria-label={`${item.name} · ${formatCurrency(item.price)}`} title={item.name} disabled={locked || item.quantity <= 0 || inCart >= item.quantity} onClick={() => onQuantity(item, 1)}>
+            <ProductArtwork item={item} />
+            {inCart > 0 && <span className="cart-badge">{formatQuantity(inCart)}</span>}
+            <span className="sale-product-label"><strong>{label.title}</strong>{label.variant && <small>{label.variant}</small>}</span>
+            <div className="sale-product-footer"><span className="sale-product-price">{formatCurrency(item.price)}</span>{item.quantity > 0 && <span className="sale-product-stock"><b>{formatQuantity(item.quantity)}</b><small>{unitLabel(item.unit)}</small></span>}</div>
+            {item.quantity <= 0 ? <i>{t('outOfStock')}</i> : <Plus className="sale-product-add" size={16} />}
+          </button><button type="button" className={`favorite-button ${favorite ? 'active' : ''}`} aria-label={`${t(favorite ? 'removeFavorite' : 'addFavorite')}: ${item.name}`} aria-pressed={favorite} onClick={() => onFavorite(item.id)}><Star size={15} fill={favorite ? 'currentColor' : 'none'} /></button></div>
+})
 
 function saleState(status, t) {
   const states = {
@@ -258,7 +271,7 @@ function SalesHistory({ refreshToken, onResume, onSelect, showOperator }) {
   </section>
 }
 
-export default function SalesCounter({ items, sales, posConfig, onRefresh, setToast, onNavigate, registerView = 'cart', onRegisterViewChange, serverAvailable = true, user, registerSession, onOpenRegister }) {
+const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRefresh, setToast, onNavigate, registerView = 'cart', historyRevision, onRegisterViewChange, serverAvailable = true, user, registerSession, onOpenRegister }) {
   const { t, categoryLabel, unitLabel, formatCurrency, language } = useI18n()
   const tx=(es,en)=>language==='es'?es:en
   const [openingCash,setOpeningCash]=useState(''),[opening,setOpening]=useState(false),[openError,setOpenError]=useState('')
@@ -277,8 +290,9 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
   const sellable = useMemo(() => items.filter((item) => item.sellable && item.price > 0), [items])
   const catalogItems = useMemo(() => inStockOnly ? sellable.filter((item) => item.quantity > 0) : sellable, [inStockOnly, sellable])
   const presentCategories = useMemo(() => categories.filter((category) => catalogItems.some((item) => item.category === category)), [catalogItems])
-  const products = catalogItems.filter((item) => (filter === 'All' || filter === 'Favorites' && favorites.includes(item.id) || item.category === filter) && searchText(`${item.name} ${item.sku}`).includes(searchText(search))).sort((a,b) => Number(favorites.includes(b.id)) - Number(favorites.includes(a.id)) || a.name.localeCompare(b.name, 'es'))
-  const cartLines = cart.map((line) => ({ ...line, item: items.find((item) => item.id === line.itemId) || { id: line.itemId, name: t('unavailableProduct'), price: 0, quantity: 0, unit: 'pieces', missing: true } }))
+  const products = useMemo(() => catalogItems.filter((item) => (filter === 'All' || filter === 'Favorites' && favorites.includes(item.id) || item.category === filter) && searchText(`${item.name} ${item.sku}`).includes(searchText(search))).sort((a,b) => Number(favorites.includes(b.id)) - Number(favorites.includes(a.id)) || a.name.localeCompare(b.name, 'es')), [catalogItems, filter, favorites, search])
+  const itemsById = useMemo(() => new Map(items.map(item => [item.id, item])), [items])
+  const cartLines = useMemo(() => cart.map((line) => ({ ...line, item: itemsById.get(line.itemId) || { id: line.itemId, name: t('unavailableProduct'), price: 0, quantity: 0, unit: 'pieces', missing: true } })), [cart, itemsById, t])
   const cartInvalid = cartLines.some(l => l.item.missing || !l.item.sellable || l.item.price <= 0 || l.quantity > l.item.quantity)
   useEffect(() => { saveCartDraft(cart) }, [cart])
   useEffect(() => { saveFavorites(favorites) }, [favorites])
@@ -296,7 +310,8 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
     event.currentTarget.querySelector(`#caja-${next}-tab`)?.focus()
   }
 
-  const changeQuantity = (item, delta) => {
+  const toggleFavorite = useCallback(id => setFavorites(current => current.includes(id) ? current.filter(value => value !== id) : [...current, id]), [])
+  const changeQuantity = useCallback((item, delta) => {
     if (attempt) return
     setCart((current) => {
     const existing = current.find((line) => line.itemId === item.id)
@@ -305,7 +320,7 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
     if (next === 0) return current.filter((line) => line.itemId !== item.id)
     return current.map((line) => line.itemId === item.id ? { ...line, quantity: next } : line)
     })
-  }
+  }, [attempt])
   const payload = () => cartLines.map((line) => ({ itemId: line.itemId, quantity: line.quantity }))
   const finish = async (sale) => {
     const pending = pendingCheckout()
@@ -512,17 +527,7 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
             <span className="catalog-result-count" role="status">{t('productsCount', { count: products.length })}</span>
           </div>
         </div>
-        {sellable.length === 0 ? <div className="card pos-empty"><div className="empty-art"><ReceiptText size={31} /></div><h3>{t('configureProductsForSale')}</h3><p>{t('configureProductsDescription')}</p></div> : products.length ? <div className="product-grid">{products.map((item) => {
-          const inCart = cart.find((line) => line.itemId === item.id)?.quantity || 0
-          const label = productLabel(item.name), favorite = favorites.includes(item.id)
-          return <div key={item.id} className="product-tile"><button className={`sale-product category-${categoryClass(item.category)} ${item.quantity <= 0 ? 'is-unavailable' : ''}`} aria-label={`${item.name} · ${formatCurrency(item.price)}`} title={item.name} disabled={Boolean(attempt) || item.quantity <= 0 || inCart >= item.quantity} onClick={() => changeQuantity(item, 1)}>
-            <ProductArtwork item={item} />
-            {inCart > 0 && <span className="cart-badge">{formatQuantity(inCart)}</span>}
-            <span className="sale-product-label"><strong>{label.title}</strong>{label.variant && <small>{label.variant}</small>}</span>
-            <div className="sale-product-footer"><span className="sale-product-price">{formatCurrency(item.price)}</span>{item.quantity > 0 && <span className="sale-product-stock"><b>{formatQuantity(item.quantity)}</b><small>{unitLabel(item.unit)}</small></span>}</div>
-            {item.quantity <= 0 ? <i>{t('outOfStock')}</i> : <Plus className="sale-product-add" size={16} />}
-          </button><button type="button" className={`favorite-button ${favorite ? 'active' : ''}`} aria-label={`${t(favorite ? 'removeFavorite' : 'addFavorite')}: ${item.name}`} aria-pressed={favorite} onClick={() => setFavorites(v => favorite ? v.filter(id => id !== item.id) : [...v, item.id])}><Star size={15} fill={favorite ? 'currentColor' : 'none'} /></button></div>
-        })}</div> : <div className="pos-empty compact"><Search size={27} /><h3>{t('noProductsFound')}</h3></div>}
+        {sellable.length === 0 ? <div className="card pos-empty"><div className="empty-art"><ReceiptText size={31} /></div><h3>{t('configureProductsForSale')}</h3><p>{t('configureProductsDescription')}</p></div> : products.length ? <div className="product-grid">{products.map(item => <ProductTile key={item.id} item={item} inCart={cart.find(line => line.itemId === item.id)?.quantity || 0} favorite={favorites.includes(item.id)} locked={Boolean(attempt)} onQuantity={changeQuantity} onFavorite={toggleFavorite} />)}</div> : <div className="pos-empty compact"><Search size={27} /><h3>{t('noProductsFound')}</h3></div>}
       </div>
       <aside className={`cart-panel ${cartLines.length ? 'has-items' : ''} ${cartExpanded ? 'is-expanded' : ''}`}>
         <header><div><ShoppingBasket size={20} /><h2>{t('cart')}</h2><span className="cart-count">{formatQuantity(count)}</span></div><div>{cartLines.length > 0 && <button disabled={Boolean(attempt)} onClick={() => setCart([])}><Trash2 size={14} />{t('clear')}</button>}<button className="cart-collapse" onClick={() => setCartExpanded(false)} aria-label={t('hideCart')}><ChevronDown size={19} /></button></div></header>
@@ -532,8 +537,10 @@ export default function SalesCounter({ items, sales, posConfig, onRefresh, setTo
         </div>
         <footer><button type="button" className="cart-summary-toggle" onClick={() => setCartExpanded(v => !v)} aria-expanded={cartExpanded} aria-controls="cart-detail" aria-label={t(cartExpanded ? 'hideCart' : 'cartDetails')}><span>{t('productsCount', { count: formatQuantity(count) })}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong>{cartExpanded ? <ChevronDown size={17} /> : <ChevronUp size={17} />}</button><div className="cart-summary"><div><span>{t('total')}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong></div></div><button className="button primary pay-button" disabled={busy || !serverAvailable || (!attempt && (!registerSession || !cartLines.length || cartInvalid))} onClick={() => attempt ? recoverCheckout() : setCheckout({ stage: 'method', total })}>{t(!serverAvailable ? 'serverOffline' : attempt ? 'reviewPendingCheckout' : 'charge')}<ArrowRight size={19} /></button></footer>
       </aside>
-    </section> : <SalesHistory showOperator={user?.role==='admin'} refreshToken={sales} onResume={resumeSale} onSelect={setSelectedSale} />}
+    </section> : <SalesHistory showOperator={user?.role==='admin'} refreshToken={historyRevision} onResume={resumeSale} onSelect={setSelectedSale} />}
     {checkout && <CheckoutModal checkout={checkout} posConfig={posConfig} onCash={payCash} onCard={payCard} onRetry={retry} onCancelSale={cancelSale} onClose={() => setCheckout(null)} busy={busy || !serverAvailable} />}
     {selectedSale && <SaleDetailsModal canManage={user?.role==='admin'} sale={selectedSale} onClose={() => setSelectedSale(null)} onRefund={refundSale} onRetryRefund={retryRefund} onPrintRefundCopy={printRefundCopy} onCreditNote={recordCreditNote} onReconcilePoint={reconcilePointSale} onResolveInventory={resolveRefundInventory} busy={busy} />}
   </div>
-}
+})
+
+export default SalesCounter

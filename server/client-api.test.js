@@ -77,3 +77,38 @@ test('checkout retries carry a stable key and never retry a write automatically'
   assert.ok(calls.every(call => call.options.headers.get('Idempotency-Key') === 'key'))
   assert.equal(calls[0].options.body, calls[1].options.body)
 })
+
+test('bootstrap retains equal branches and rows through 304, new ETags, and a mutation', async t => {
+  const snapshot = { auth: { authenticated: true, user: { id: 'admin', role: 'admin' } },
+    items: [{ id: 'a', quantity: 1.25 }, { id: 'b', quantity: 3 }], sales: [], registerSessions: [{ id: 'session' }] }
+  const changed = { ...snapshot, items: [{ ...snapshot.items[0], quantity: 1 }, snapshot.items[1]] }
+  const responses = [json(snapshot, '"one"'), new Response(null, { status: 304 }), json(snapshot, '"different-encoding"'), json({ ok: true }), json(changed, '"two"')]
+  const requests = []
+  const api = await client(t, async (_url, options) => { requests.push(options); return responses.shift() })
+  const first = await api.bootstrap()
+  assert.equal(await api.bootstrap(), first)
+  assert.equal(await api.bootstrap(), first, 'Equivalent data with a different HTTP representation still shares state')
+  await api.adjustItem('a', {})
+  const next = await api.bootstrap()
+  assert.notEqual(next, first); assert.notEqual(next.items, first.items)
+  assert.notEqual(next.items[0], first.items[0]); assert.equal(next.items[1], first.items[1])
+  assert.equal(next.auth, first.auth); assert.equal(next.sales, first.sales); assert.equal(next.registerSessions, first.registerSessions)
+  assert.equal(requests[1].headers.get('If-None-Match'), '"one"')
+  assert.equal(requests[4].headers.has('If-None-Match'), false, 'A write invalidates HTTP validators')
+})
+
+test('bootstrap forgets validators and retained staff data on session expiry and identity changes', async t => {
+  const snapshot = { auth: { authenticated: true, user: { id: 'one' } }, items: [{ id: 'a' }] }
+  const requests = []
+  const responses = [json(snapshot, '"v1"'), new Response('{"error":"Expired"}', { status: 401 }), json(snapshot, '"v1"'), json({ authenticated: true }), json(snapshot, '"v1"')]
+  const api = await client(t, async (_url, options) => { requests.push(options); return responses.shift() })
+  const first = await api.bootstrap()
+  await assert.rejects(api.bootstrap(), { status: 401 })
+  const recovered = await api.bootstrap()
+  assert.notEqual(recovered.items, first.items)
+  await api.login('other', 'test-password')
+  const other = await api.bootstrap()
+  assert.notEqual(other.items, recovered.items)
+  assert.equal(requests[2].headers.has('If-None-Match'), false)
+  assert.equal(requests[4].headers.has('If-None-Match'), false)
+})

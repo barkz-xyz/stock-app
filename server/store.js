@@ -1132,6 +1132,19 @@ export async function updateSaleFromPoint(order) {
   return sale
 }
 
+// Lock the complete product set in UUID order before any item UPDATE can lock
+// inventory_read_revision. Lock products before child lines too (DELETE SET NULL).
+// The caller holds the parent sale, serializing its refund/reconciliation paths.
+async function lockPostgresSaleProducts(client, saleId) {
+  await client.query(`SELECT id FROM items WHERE id IN
+    (SELECT item_id FROM sale_items WHERE sale_id=$1) ORDER BY id FOR UPDATE`, [saleId])
+}
+
+async function lockPostgresRefundProducts(client, refundId) {
+  await client.query(`SELECT id FROM items WHERE id IN
+    (SELECT item_id FROM refund_items WHERE refund_id=$1) ORDER BY id FOR UPDATE`, [refundId])
+}
+
 async function updatePostgresSaleStatus(saleId, status, mpStatus, mpStatusDetail, mpPaymentId = null, mpOrderId = null, order = null) {
   const client = await pool.connect()
   try {
@@ -1139,7 +1152,9 @@ async function updatePostgresSaleStatus(saleId, status, mpStatus, mpStatusDetail
     const saleResult = await client.query('SELECT * FROM sales WHERE id=$1 FOR UPDATE', [saleId])
     const sale = saleResult.rows[0]
     if (!sale) { await client.query('ROLLBACK'); return null }
-    if (sale.inventory_applied && ['failed', 'cancelled', 'expired'].includes(status)) {
+    const restoreInventory = sale.inventory_applied && ['failed', 'cancelled', 'expired'].includes(status)
+    if (restoreInventory || processedPointRefunds(order).length) await lockPostgresSaleProducts(client, saleId)
+    if (restoreInventory) {
       const itemResult = await client.query('SELECT * FROM sale_items WHERE sale_id=$1 ORDER BY item_id', [saleId])
       for (const line of itemResult.rows) {
         const updated = await client.query('UPDATE items SET quantity=quantity+$2, updated_at=NOW() WHERE id=$1 RETURNING quantity', [line.item_id, line.quantity])
@@ -1391,8 +1406,10 @@ export async function prepareRefund(saleId, input) {
     await client.query('BEGIN')
     const saleResult = await client.query('SELECT * FROM sales WHERE id=$1 FOR UPDATE', [saleId])
     if (!saleResult.rows[0]) { await client.query('ROLLBACK'); return null }
-    const itemResult = await client.query('SELECT * FROM sale_items WHERE sale_id=$1 ORDER BY item_name', [saleId])
     const refundResult = await client.query('SELECT * FROM refunds WHERE sale_id=$1 ORDER BY created_at DESC FOR UPDATE', [saleId])
+    // Refund line inserts also take product FK locks; acquire the full set first.
+    await lockPostgresSaleProducts(client, saleId)
+    const itemResult = await client.query('SELECT * FROM sale_items WHERE sale_id=$1 ORDER BY item_name', [saleId])
     const refundItemResult = await client.query(`SELECT ri.* FROM refund_items ri JOIN refunds r ON r.id=ri.refund_id WHERE r.sale_id=$1`, [saleId])
     const creditNoteResult = await client.query('SELECT * FROM tax_documents WHERE sale_id=$1', [saleId])
     const itemsByRefund = new Map()
@@ -1489,13 +1506,18 @@ export async function completeRefund(refundId, order = null) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+    // Discover the immutable parent without locking the child first. All paths
+    // that lock both an existing sale and its refunds must acquire the sale first.
+    const parent = (await client.query('SELECT sale_id FROM refunds WHERE id=$1', [refundId])).rows[0]
+    if (!parent) { await client.query('ROLLBACK'); return null }
+    const saleResult = await client.query('SELECT * FROM sales WHERE id=$1 FOR UPDATE', [parent.sale_id])
     const refundResult = await client.query('SELECT * FROM refunds WHERE id=$1 FOR UPDATE', [refundId])
     const refund = refundResult.rows[0]
     if (!refund) { await client.query('ROLLBACK'); return null }
     if (refund.status === 'processed') { await client.query('COMMIT'); return getSale(refund.sale_id) }
     if (refund.status !== 'pending') throw refundConflict('This refund can no longer be completed.')
-    const saleResult = await client.query('SELECT * FROM sales WHERE id=$1 FOR UPDATE', [refund.sale_id])
     const sale = saleResult.rows[0]
+    if (refund.restock) await lockPostgresRefundProducts(client, refundId)
     const itemResult = await client.query('SELECT * FROM refund_items WHERE refund_id=$1 ORDER BY item_name FOR UPDATE', [refundId])
     if (refund.restock) {
       for (const line of itemResult.rows) {
@@ -1580,6 +1602,7 @@ export async function resolveRefundInventoryReview(saleId, refundId, restock) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+    await client.query('SELECT id FROM sales WHERE id=$1 FOR UPDATE', [saleId])
     const refundResult = await client.query(
       `SELECT * FROM refunds WHERE id=$1 AND sale_id=$2 FOR UPDATE`,
       [refundId, saleId],
@@ -1590,6 +1613,7 @@ export async function resolveRefundInventoryReview(saleId, refundId, restock) {
     if (refund.status !== 'processed' || refund.source !== 'point_terminal') {
       throw refundConflict('This refund does not have a pending inventory review.')
     }
+    if (restock) await lockPostgresRefundProducts(client, refundId)
     const itemResult = await client.query('SELECT * FROM refund_items WHERE refund_id=$1 ORDER BY item_name FOR UPDATE', [refundId])
     if (restock && !itemResult.rows.length) throw refundConflict('Select the returned products manually for a partial Point refund.')
     if (restock) {
@@ -1661,6 +1685,7 @@ export async function recordCreditNote(saleId, refundId, input) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+    await client.query('SELECT id FROM sales WHERE id=$1 FOR UPDATE', [saleId])
     const refundResult = await client.query('SELECT * FROM refunds WHERE id=$1 AND sale_id=$2 AND status=\'processed\' FOR UPDATE', [refundId, saleId])
     if (!refundResult.rows[0]) { await client.query('ROLLBACK'); return null }
     await client.query(

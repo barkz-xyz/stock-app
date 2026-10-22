@@ -8,6 +8,7 @@ import { cleanInventoryBatch, inventoryBatchChanges } from './inventory-batch.js
 import { cleanHistoryQuery, historyMatches } from './sales-history.js'
 import { publicUser, cleanUser, hashPassword, userError } from './user-security.js'
 import { createIntegrationStore } from './integration-store.js'
+import { initializeInventoryRevision, readInventorySnapshot } from './inventory-snapshot.js'
 import { initializeStockReservations, createStockReservationStore, assertNoStockHolds } from './stock-reservations.js'
 import { closurePeriod, buildClosureSummary, cleanClosureInput, createClosure, closureError, businessDateAt } from './cash-closure.js'
 
@@ -452,6 +453,7 @@ export async function initializeStore() {
         END LOOP;
       END $$;
     `)
+    await initializeInventoryRevision(pool)
     await initializeStockReservations(pool)
     await seedInitialAdmin()
     return
@@ -533,7 +535,9 @@ export async function listItems() {
 }
 
 export function getInventoryIntegrationStore() {
-  return createIntegrationStore({ pool, dataPath, readInventory: async itemId => {
+  return createIntegrationStore({ pool, dataPath,
+    readInventorySnapshot: pool ? (revision, itemId) => readInventorySnapshot(pool, revision, itemId) : undefined,
+    readInventory: async itemId => {
     if (pool) {
       const fields = 'id,sku,name,category,unit,quantity,price,sellable,expiry_date,updated_at'
       const { rows } = await pool.query(itemId

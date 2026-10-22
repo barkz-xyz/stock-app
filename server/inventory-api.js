@@ -91,6 +91,8 @@ export function createIntegrationAccessRouter({ getStore, config, scope = 'inven
 
 export function createInventoryRouter({ getStore, config }) {
   const router = express.Router()
+  // Bounded per-process representations; every use still validates against PostgreSQL.
+  const snapshots = new Map()
   router.use(createIntegrationAccessRouter({ getStore, config }))
   router.use((req, res, next) => {
     if (req.method !== 'GET') { res.set('Allow', 'GET'); return replyError(integrationError('Only GET is supported.', 405, 'METHOD_NOT_ALLOWED'), req, res) }
@@ -100,9 +102,30 @@ export function createInventoryRouter({ getStore, config }) {
     try {
       const itemId = single ? req.params.itemId : null
       if (single && !isUuid(itemId)) throw integrationError('Invalid product UUID.', 400, 'INVALID_REQUEST')
-      const rows = await getStore().readInventory(itemId)
-      if (single && !rows.length) throw integrationError('Product not found.', 404, 'NOT_FOUND')
-      const { body, etag } = inventoryRepresentation(rows, single)
+      const store = getStore()
+      const cacheKey = itemId?.toLowerCase() || 'catalog'
+      const previous = snapshots.get(cacheKey)
+      let representation
+      if (store.readInventorySnapshot) {
+        const cached = previous?.store === store ? previous : null
+        const snapshot = await store.readInventorySnapshot(cached?.revision, itemId)
+        if (snapshot.rows === null) {
+          if (!cached) throw new Error('Inventory snapshot unavailable')
+          representation = cached.representation
+        } else {
+          if (single && !snapshot.rows.length) throw integrationError('Product not found.', 404, 'NOT_FOUND')
+          representation = inventoryRepresentation(snapshot.rows, single)
+          snapshots.delete(cacheKey)
+          snapshots.set(cacheKey, { store, revision: snapshot.revision, representation })
+          if (snapshots.size > 32) snapshots.delete(snapshots.keys().next().value)
+        }
+      } else {
+        // JSON development mode has no durable transactional revision: read every time.
+        const rows = await store.readInventory(itemId)
+        if (single && !rows.length) throw integrationError('Product not found.', 404, 'NOT_FOUND')
+        representation = inventoryRepresentation(rows, single)
+      }
+      const { body, etag } = representation
       res.set('ETag', etag)
       if (matchesInventoryEtag(req.headers['if-none-match'], etag)) return res.status(304).end()
       res.type('json').send(body)

@@ -82,6 +82,10 @@ No enviar la clave en la URL ni desde el navegador del comprador. No se habilita
 
 Guardar explícitamente el último snapshot y su ETag en el backend consumidor. Enviar `If-None-Match` en la siguiente consulta; un `304` permite reutilizar ese snapshot. Primero se comprueban credencial, permiso y límites: una clave revocada no obtiene un `304` autorizado. La representación no contiene un timestamp volátil que invalide el ETag.
 
+En PostgreSQL, cada proceso conserva hasta 32 representaciones de lectura. Antes de reutilizarlas consulta `inventory_read_revision`: su UUID cambia mediante un trigger de `items` en la misma transacción que INSERT, UPDATE, DELETE o TRUNCATE. Una única sentencia MVCC consulta la revisión y, sólo si cambió, los productos. No se usan TTL ni NOTIFY para acreditar vigencia; una caída de la base devuelve `503`, aunque exista una copia en memoria. Al reiniciar se reconstruye la representación y se conserva el ETag basado en contenido. El modo JSON continúa leyendo el archivo en cada solicitud.
+
+Esta caché no interviene en ventas, Point ni reservas. Sus decisiones conservan las transacciones y bloqueos de PostgreSQL. El contrato OpenAPI 1.1.0, las cantidades decimales y las cabeceras de privacidad no cambian. Mediciones, costes y límites: [rendimiento del inventario](inventory-performance.md).
+
 Punto inicial recomendado: consultar cada 30 segundos y aumentar la espera ante fallos. Un error no significa stock cero. Se mantienen `Cache-Control: private, no-store` y `Vary: Authorization`; la CDN no decide disponibilidad.
 
 Límites: 60 solicitudes por minuto y 15 por ventana de 10 segundos, compartidas entre claves de una integración; además 300 por minuto por IP. Son ventanas fijas, no deslizantes. La IP se guarda como hash en los contadores. Respetar `Retry-After` en `429` y `503`.

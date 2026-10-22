@@ -1,11 +1,14 @@
+import { shareSnapshot } from './snapshot.js'
+
 const pendingReads = new Map()
-const validatedSales = new Map()
+const validatedReads = new Map()
+let bootstrapData = null
 let readGeneration = 0
 
 function invalidateReads() {
   readGeneration += 1
   pendingReads.clear()
-  validatedSales.clear()
+  validatedReads.clear()
 }
 
 function request(url, options = {}) {
@@ -13,9 +16,10 @@ function request(url, options = {}) {
   const deduplicate = read && !options.signal
   if (deduplicate && pendingReads.has(url)) return pendingReads.get(url)
   if (!read) invalidateReads()
+  if (!read && url.startsWith('/api/auth/')) bootstrapData = null
   const generation = readGeneration
-  const conditional = read && url.startsWith('/api/sales?')
-  const cached = conditional ? validatedSales.get(url) : null
+  const conditional = read && (url.startsWith('/api/sales?') || url === '/api/bootstrap')
+  const cached = conditional ? validatedReads.get(url) : null
   const execute = async () => {
     try {
       const headers = new Headers(options.headers)
@@ -28,15 +32,19 @@ function request(url, options = {}) {
       if (response.status === 304 && cached) return cached.data
       const data = await response.json().catch(() => ({}))
       if (!response.ok) {
-        if (response.status === 401) invalidateReads()
+        if (response.status === 401) { invalidateReads(); bootstrapData = null }
         const error = new Error(data.error || 'Something went wrong.')
         Object.assign(error, { status: response.status, ...data })
         throw error
       }
       const etag = response.headers.get('etag')
       // A browser may satisfy a successfully revalidated response from its HTTP cache.
-      const result = cached && cached.etag === etag ? cached.data : data
-      if (conditional && etag && generation === readGeneration) validatedSales.set(url, { etag, data: result })
+      let result = cached && cached.etag === etag ? cached.data : data
+      if (url === '/api/bootstrap' && generation === readGeneration) {
+        result = shareSnapshot(bootstrapData, result)
+        bootstrapData = result
+      }
+      if (conditional && etag && generation === readGeneration) validatedReads.set(url, { etag, data: result })
       return result
     } finally {
       // Reads started during a mutation must also be revalidated after it completes.

@@ -61,6 +61,8 @@ Concurrent GETs share one in-flight request. Explicit sales-history reads revali
 
 Run `npm run measure:load` against a running local compiled app. Set `PRODUCTION_BASE_URL` and `STAFF_PIN` for authenticated production measurements; the script only reads application data and opens a staff session. Add `-- --legacy` to measure the former five-request startup flow. Results go to `output/performance.json` or `PERFORMANCE_OUTPUT`. The report counts all initial JavaScript, including preloaded vendors; gzip byte counts are estimates and timings use warm HTTP connections, not total browser page-load time.
 
+Inventory refresh measurements, local-only fixtures, snapshot consistency and remaining limits are documented in [docs/inventory-performance.md](docs/inventory-performance.md). Run `npm run measure:inventory -- after` with a loopback `TEST_DATABASE_URL`; add `--ui` for isolated Chrome render/focus/cart/scroll checks. No production connection is accepted by that command.
+
 `npm run audit:performance:db` accepts `DATABASE_PUBLIC_URL` or `DATABASE_URL` and runs SELECT/EXPLAIN queries inside a read-only transaction. It reports query plans and timings without changing stock or history.
 
 ### Section URLs

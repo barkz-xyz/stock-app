@@ -27,7 +27,7 @@ function newKey(clientId, environment, expiresInDays) {
 
 // File persistence is only for local development/tests. PostgreSQL shares keys
 // and rate counters across every application replica.
-export function createIntegrationStore({ pool, dataPath, readInventory }) {
+export function createIntegrationStore({ pool, dataPath, readInventory, readInventorySnapshot }) {
   const filename = `${dataPath}.integrations.json`
   let queue = Promise.resolve()
   let nextCleanup = 0
@@ -66,6 +66,7 @@ export function createIntegrationStore({ pool, dataPath, readInventory }) {
   return {
     persistent: Boolean(pool),
     readInventory,
+    readInventorySnapshot,
     async initialize() {
       if (!pool) return
       await pool.query(`

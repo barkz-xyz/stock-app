@@ -1,7 +1,7 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, BarChart3, Boxes, CalendarClock, Check, ChevronRight, CirclePlus, Clock3, Croissant, History, LayoutDashboard, LineChart, LockKeyhole, LogOut, Menu, Minus, Moon, PanelLeftClose, PackageOpen, Pencil, Plus, ReceiptText, Search, ShoppingBasket, Settings, SlidersHorizontal, Sparkles, Sun, Trash2, Undo2, Wifi, X } from 'lucide-react'
 import { api } from './api.js'
-import { watchUpdates } from './liveUpdates.js'
+import { createRefreshCoordinator, watchUpdates } from './liveUpdates.js'
 import { createRouter, isPlainNavigation, parseRoute, sectionHref } from './routes.js'
 import { dateOnly, parseCalendarDate } from './dates.js'
 import { useI18n } from './i18n.js'
@@ -20,6 +20,10 @@ const InventoryBatch = lazy(() => import('./InventoryBatch.jsx'))
 const UserManagement = lazy(() => import('./UserManagement.jsx'))
 const noop = () => {}
 const router = createRouter(window)
+const navigate = href => router.navigate(href)
+const goInventory = () => router.navigate(sectionHref('inventory'))
+const goPos = () => router.navigate(sectionHref('pos'))
+const changeRegisterView = view => router.navigate(sectionHref('pos', { view }))
 
 function daysUntil(dateValue) {
   const target = parseCalendarDate(dateValue)
@@ -198,7 +202,7 @@ function EmptyState({ onAdd }) {
   return <div className="empty-state"><div className="empty-art"><PackageOpen size={32} /></div><h3>{t('emptyInventoryTitle')}</h3><button className="button primary" onClick={onAdd}><Plus size={18} /> {t('addFirstProduct')}</button></div>
 }
 
-function InventoryList({ items, onAdjust, onEdit }) {
+const InventoryList = memo(function InventoryList({ items, onAdjust, onEdit, dayKey }) {
   const { t, categoryLabel, unitLabel, formatDate, formatCurrency } = useI18n()
   return <div className="inventory-list">
     <div className="inventory-head"><span>{t('product')}</span><span>{t('available')}</span><span>{t('status')}</span><span>{t('expiry')}</span><span aria-hidden="true" /></div>
@@ -214,9 +218,9 @@ function InventoryList({ items, onAdjust, onEdit }) {
       </article>
     })}
   </div>
-}
+})
 
-function Dashboard({ items, movements, dailySummary, onAdd, onAdjust, onGoInventory, onGoPos }) {
+const Dashboard = memo(function Dashboard({ items, movements, dailySummary, onAdd, onAdjust, onGoInventory, onGoPos, dayKey }) {
   const { t, categoryLabel, unitLabel, formatCurrency } = useI18n()
   const lowItems = items.filter((item) => item.quantity <= item.lowStockThreshold)
   const expiring = items.filter((item) => { const days = daysUntil(item.expiryDate); return days !== null && days >= 0 && days <= 3 })
@@ -244,7 +248,7 @@ function Dashboard({ items, movements, dailySummary, onAdd, onAdjust, onGoInvent
       </div>
     </section>
   </div>
-}
+})
 
 function Movement({ movement }) {
   const { t, formatTime } = useI18n()
@@ -260,18 +264,18 @@ function Movement({ movement }) {
   return <div className="activity-item"><div className={`movement-icon ${movement.type}`}>{movement.type === 'stock_in' ? <ArrowUp size={17} /> : movement.type === 'stock_out' ? <ArrowDown size={17} /> : <SlidersHorizontal size={17} />}</div><div><strong>{movement.itemName}</strong><span>{note}</span></div><div className="movement-value"><strong className={positive ? 'positive' : 'negative'}>{positive ? '+' : ''}{formatQuantity(movement.quantity)}</strong><span>{formatTime(movement.createdAt)}</span></div></div>
 }
 
-function Inventory({ items, onAdd, onAdjust, onEdit, onBatch }) {
+const Inventory = memo(function Inventory({ items, onAdd, onAdjust, onEdit, onBatch, dayKey }) {
   const { t, categoryLabel } = useI18n()
   const [search, setSearch] = useState(''), [filter, setFilter] = useState('All'), [category, setCategory] = useState('All')
-  const filtered = items.filter(item => searchText(`${item.name} ${item.sku}`).includes(searchText(search)) &&
-    (category === 'All' || item.category === category) && (filter === 'All' || filter === 'Low' && item.quantity <= item.lowStockThreshold || filter === 'Out' && item.quantity === 0))
+  const filtered = useMemo(() => items.filter(item => searchText(`${item.name} ${item.sku}`).includes(searchText(search)) &&
+    (category === 'All' || item.category === category) && (filter === 'All' || filter === 'Low' && item.quantity <= item.lowStockThreshold || filter === 'Out' && item.quantity === 0)), [items, search, category, filter])
   return <div className="page enter"><div className="page-actions"><button className="button secondary" onClick={onBatch}><Boxes size={18} />{t('batchInventory')}</button><button className="button primary desktop-action" onClick={onAdd}><Plus size={19} />{t('addProduct')}</button></div>
     <div className="toolbar inventory-toolbar"><label className="search-box"><Search size={18} /><input aria-label={t('searchPlaceholder')} value={search} onChange={e => setSearch(e.target.value)} placeholder={t('searchPlaceholder')} />{search && <button onClick={() => setSearch('')} aria-label={t('clearSearch')}><X size={16} /></button>}</label><select value={category} onChange={e => setCategory(e.target.value)} aria-label={t('category')}><option value="All">{t('allCategories')}</option>{categories.filter(c => items.some(i => i.category === c)).map(c => <option key={c} value={c}>{categoryLabel(c)}</option>)}</select><div className="filter-scroll" role="group" aria-label={t('status')}>{[['All','all',items.length],['Low','lowMinimum',items.filter(i => i.quantity <= i.lowStockThreshold).length],['Out','soldOutFilter',items.filter(i => i.quantity === 0).length]].map(([key,label,count]) => <button key={key} className={filter === key ? 'active' : ''} aria-pressed={filter === key} onClick={() => setFilter(key)}>{t(label)}<span>{count}</span></button>)}</div></div>
-    <section className="card inventory-card">{items.length === 0 ? <EmptyState onAdd={onAdd} /> : filtered.length ? <InventoryList items={filtered} onAdjust={onAdjust} onEdit={onEdit} /> : <div className="empty-state compact"><Search size={27} /><h3>{t('noProductsFound')}</h3></div>}</section>
+    <section className="card inventory-card">{items.length === 0 ? <EmptyState onAdd={onAdd} /> : filtered.length ? <InventoryList items={filtered} onAdjust={onAdjust} onEdit={onEdit} dayKey={dayKey} /> : <div className="empty-state compact"><Search size={27} /><h3>{t('noProductsFound')}</h3></div>}</section>
   </div>
-}
+})
 
-function Activity({ movements }) {
+const Activity = memo(function Activity({ movements, dayKey }) {
   const { t, formatDate } = useI18n()
   const grouped = movements.reduce((acc, movement) => {
     const key = new Date(movement.createdAt).toDateString()
@@ -281,7 +285,7 @@ function Activity({ movements }) {
   return <div className="page enter activity-page">
     <section className="card history-card" aria-label={t('stockMovementHistory')}>{movements.length ? Object.entries(grouped).map(([day, entries]) => <div className="history-group" key={day}><h2>{new Date(day).toDateString() === new Date().toDateString() ? t('today') : formatDate(new Date(day))}</h2><div>{entries.map((movement) => <Movement movement={movement} key={movement.id} />)}</div></div>) : <div className="empty-state compact"><History size={30} /><h2>{t('noActivity')}</h2></div>}</section>
   </div>
-}
+})
 
 export default function App() {
   const { t, formatDate, formatTime, language } = useI18n()
@@ -308,6 +312,7 @@ export default function App() {
   const [toast, setToastState] = useState(null), [issue, setIssue] = useState(null)
   const setToast = useCallback(next => { if (next?.type === 'error' || next?.type === 'warning') setIssue(next); else setToastState(next) }, [])
   const [syncing, setSyncing] = useState(false), [syncError, setSyncError] = useState(''), [lastSync, setLastSync] = useState(null)
+  const [reconciled, setReconciled] = useState(0)
   const [pointStatus, setPointStatus] = useState('unchecked')
   const [mobileMenu, setMobileMenu] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem('bakery-sidebar') !== 'expanded')
@@ -315,6 +320,12 @@ export default function App() {
   const brandLogoRef = useRef(null)
   const refreshSequence = useRef(0)
   const metricsRequest = useRef(null)
+  const openAdd = useCallback(() => setModal({ type: 'add' }), [])
+  const openAdjust = useCallback(item => setModal({ type: 'adjust', item }), [])
+  const openEdit = useCallback(item => setModal({ type: 'edit', item }), [])
+  const openBatch = useCallback(() => setModal({ type: 'batch' }), [])
+  // Memoized stock/expiry views must still advance at local midnight.
+  const dayKey = new Date().toLocaleDateString('en-CA')
   useEffect(() => { if (route.canonical) router.navigate(route.canonical, { replace: true }) }, [route.canonical])
   useLayoutEffect(() => {
     if (auth?.authenticated && isCounterPage) window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
@@ -343,13 +354,13 @@ export default function App() {
     window.localStorage.setItem('bakery-sidebar', sidebarCollapsed ? 'collapsed' : 'expanded')
   }, [sidebarCollapsed])
 
-  const refresh = useCallback(async () => {
+  const refresh = useMemo(() => createRefreshCoordinator(async () => {
     const sequence = ++refreshSequence.current
     setSyncing(true)
     try {
       const next = await api.bootstrap()
       if (sequence !== refreshSequence.current) return
-      setAuth(next.auth); setSyncError(''); setLastSync(Date.now())
+      setAuth(next.auth); setSyncError(''); setLastSync(Date.now()); setReconciled(current => current + 1)
       if (!next.auth.authenticated || next.auth.user.mustChangePassword) return
       setCheckoutUser(next.auth.user.id,next.auth.user.role==='admin');setWorkspaceUser(next.auth.user.id)
       setRegisterSession(next.registerSession);setRegisterSessions(next.registerSessions||[])
@@ -358,7 +369,9 @@ export default function App() {
       if (sequence === refreshSequence.current) setSyncError(error.message)
       throw error
     } finally { if (sequence === refreshSequence.current) setSyncing(false) }
-  }, [])
+  }), [])
+  const refreshAfterChange = useCallback(() => refresh({ fresh: true }), [refresh])
+  const openRegister = useCallback(async amount => { await api.openRegister(amount); await refreshAfterChange() }, [refreshAfterChange])
   const loadMetrics = useCallback(async (range = metricsRange) => {
     metricsRequest.current?.abort()
     const controller = new AbortController()
@@ -376,7 +389,7 @@ export default function App() {
   useEffect(() => {
     let active = true
     refresh().catch(() => {}).finally(() => { if (active) setLoading(false) })
-    return () => { active = false; refreshSequence.current += 1 }
+    return () => { active = false; refreshSequence.current += 1; refresh.invalidate() }
   }, [refresh])
   useEffect(() => {
     if (!auth?.authenticated) return undefined
@@ -397,15 +410,17 @@ export default function App() {
   const handleLogin = async (username,password) => {
     const status = await api.login(username,password)
     setAuth(status); setLoading(true)
-    try { await refresh() } finally { setLoading(false) }
+    try { await refreshAfterChange() } finally { setLoading(false) }
   }
-  const handleSetup=async body=>{setAuth(await api.setupAdmin(body));await refresh()}
-  const handlePassword=async body=>{setAuth(await api.changePassword(body));await refresh()}
+  const handleSetup=async body=>{setAuth(await api.setupAdmin(body));await refreshAfterChange()}
+  const handlePassword=async body=>{setAuth(await api.changePassword(body));await refreshAfterChange()}
   const handleLogout = async () => {
     refreshSequence.current += 1
+    refresh.invalidate()
     metricsRequest.current?.abort()
     await api.logout()
     refreshSequence.current += 1
+    refresh.invalidate()
     saveCartDraft([]);setCheckoutUser(null);setWorkspaceUser(null);setRegisterSession(null);setRegisterSessions([]); setIssue(null); setToastState(null)
     setAuth({ ...auth, authenticated: false }); setItems([]); setSales([]); setMovements([]); setMetricsData(null); setDailySummary(null)
   }
@@ -419,7 +434,7 @@ export default function App() {
   }
   const perform = async (action, message) => {
     setBusy(true)
-    try { await action(); await refresh(); setModal(null); setToast({ type: 'success', message }) }
+    try { await action(); await refreshAfterChange(); setModal(null); setToast({ type: 'success', message }) }
     catch (error) {
       if (error.status === 401) setAuth((current) => ({ ...current, authenticated: false }))
       setToast({ type: 'error', message: error.message })
@@ -443,7 +458,7 @@ export default function App() {
     setBusy(true)
     try {
       await api.resolveRefundInventory(saleId, refundId, restock)
-      await refresh()
+      await refreshAfterChange()
       setToast({ type: 'success', message: restock ? t('inventoryRestocked') : t('inventoryNotRestocked') })
     } catch (error) {
       if (error.status === 401) setAuth((current) => ({ ...current, authenticated: false }))
@@ -500,19 +515,19 @@ export default function App() {
       {syncError && <div className="connection-banner" role="alert"><CloudOff size={17} /><span>{t('serverFailed')}</span><button disabled={syncing} onClick={() => refresh().catch(() => {})}>{t('serverRetry')}</button></div>}
       {issue && <div className={`operation-banner ${issue.type}`} role="alert"><AlertTriangle size={17} /><span>{issue.message}</span><button onClick={() => setIssue(null)} aria-label={t('close')}><X size={18} /></button></div>}
       {loading ? <LoadingSkeleton /> : <Suspense fallback={<LoadingSkeleton />}>
-        {page === 'dashboard' && <Dashboard items={items} movements={movements} dailySummary={dailySummary} onAdd={() => setModal({ type: 'add' })} onAdjust={(item) => setModal({ type: 'adjust', item })} onGoInventory={() => setPage('inventory')} onGoPos={() => setPage('pos')} />}
-        {page === 'pos' && route.registerView === 'close' && <CashClosurePage user={auth.user} sessionId={closureSessionId} sessions={registerSessions} onSessionChange={id=>router.navigate(id?'/caja/cierre?sesion='+id:'/caja/cierre')} refreshToken={sales} date={route.closureDate} onClosed={refresh} onNavigate={href => router.navigate(href)} setToast={setToast} />}
-        {page === 'pos' && route.registerView !== 'close' && <SalesCounter user={auth.user} registerSession={registerSession} onOpenRegister={async amount=>{await api.openRegister(amount);await refresh()}} serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refresh} setToast={setToast} onNavigate={href => router.navigate(href)} registerView={route.registerView} onRegisterViewChange={view => router.navigate(sectionHref('pos', { view }))} />}
-        {page === 'inventory' && <Inventory items={items} onBatch={() => setModal({ type: 'batch' })} onAdd={() => setModal({ type: 'add' })} onAdjust={(item) => setModal({ type: 'adjust', item })} onEdit={(item) => setModal({ type: 'edit', item })} />}
+        {page === 'dashboard' && <Dashboard items={items} movements={movements} dailySummary={dailySummary} onAdd={openAdd} onAdjust={openAdjust} onGoInventory={goInventory} onGoPos={goPos} dayKey={dayKey} />}
+        {page === 'pos' && route.registerView === 'close' && <CashClosurePage user={auth.user} sessionId={closureSessionId} sessions={registerSessions} onSessionChange={id=>router.navigate(id?'/caja/cierre?sesion='+id:'/caja/cierre')} refreshToken={reconciled} date={route.closureDate} onClosed={refreshAfterChange} onNavigate={href => router.navigate(href)} setToast={setToast} />}
+        {page === 'pos' && route.registerView !== 'close' && <SalesCounter user={auth.user} registerSession={registerSession} onOpenRegister={openRegister} serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refreshAfterChange} setToast={setToast} onNavigate={navigate} registerView={route.registerView} historyRevision={route.registerView === 'history' ? reconciled : 0} onRegisterViewChange={changeRegisterView} />}
+        {page === 'inventory' && <Inventory items={items} onBatch={openBatch} onAdd={openAdd} onAdjust={openAdjust} onEdit={openEdit} dayKey={dayKey} />}
         {page === 'metrics' && <MetricsPage metrics={metricsData} range={metricsRange} onRangeChange={setMetricsRange} onRefresh={() => loadMetrics(metricsRange)} onExport={exportDailyReport} loading={metricsLoading} exporting={exportingReport} />}
-        {page === 'activity' && <Activity movements={movements} />}
+        {page === 'activity' && <Activity movements={movements} dayKey={dayKey} />}
         {page==='users'&&isAdmin&&<UserManagement currentUser={auth.user} setToast={setToast}/>}
         {page === 'settings' && <SettingsPage tab={route.settingsTab} onNavigate={href => router.navigate(href)} setToast={setToast} />}
         {page === 'not-found' && <section className="page empty-state"><h1>{t('sectionNotFound')}</h1><p>{t('sectionNotFoundDescription')}</p><a className="button primary" href={sectionHref('dashboard')} onClick={event => followSection(event, sectionHref('dashboard'))}>{t('backToOverview')}</a></section>}
       </Suspense>}
     </main>
     <nav className={`bottom-nav ${isAdmin?'':'cashier-nav'}`} aria-label={t('openMenu')}>{nav.slice(0,3).map(({ id, label, icon: Icon }) => <a key={id} href={sectionHref(id)} aria-current={page === id ? 'page' : undefined} className={page === id ? 'active' : ''} onClick={event => followSection(event, sectionHref(id))}><Icon size={21} /><span>{label}</span></a>)}{isAdmin&&<button className={nav.slice(3).some(n => n.id === page) || mobileMenu ? 'active' : ''} onClick={() => setMobileMenu(v => !v)} aria-expanded={mobileMenu}><Ellipsis size={23} /><span>{t('more')}</span></button>}{!isAdmin&&<button onClick={handleLogout}><LogOut size={20}/><span>{language==='es'?'Salir':'Sign out'}</span></button>}</nav>
-    {modal?.type === 'batch' && <Modal title={t('batchInventory')} onClose={() => setModal(null)} wide><Suspense fallback={<LoadingSkeleton />}><InventoryBatch items={items} onClose={() => setModal(null)} onSaved={async () => { await refresh(); setModal(null); setToast({ type: 'success', message: t('batchSaved') }) }} /></Suspense></Modal>}
+    {modal?.type === 'batch' && <Modal title={t('batchInventory')} onClose={() => setModal(null)} wide><Suspense fallback={<LoadingSkeleton />}><InventoryBatch items={items} onClose={() => setModal(null)} onSaved={async () => { await refreshAfterChange(); setModal(null); setToast({ type: 'success', message: t('batchSaved') }) }} /></Suspense></Modal>}
     {modal?.type === 'add' && <Modal title={t('addProduct')} onClose={() => setModal(null)}><ProductForm onSubmit={addItem} onClose={() => setModal(null)} busy={busy} theme={theme} /></Modal>}
     {modal?.type === 'edit' && <Modal title={modal.item.name} eyebrow={t('productDetails')} onClose={() => setModal(null)}><ProductForm item={modal.item} onSubmit={(form) => editItem(modal.item, form)} onDelete={() => deleteItem(modal.item)} onClose={() => setModal(null)} busy={busy} theme={theme} /></Modal>}
     {modal?.type === 'adjust' && <Modal title={modal.item.name} eyebrow={t('updateStock')} onClose={() => setModal(null)}><AdjustForm item={modal.item} onSubmit={(form) => adjustItem(modal.item, form)} onClose={() => setModal(null)} busy={busy} /></Modal>}

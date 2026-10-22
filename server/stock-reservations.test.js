@@ -4,6 +4,9 @@ import test from 'node:test'
 import pg from 'pg'
 import express from 'express'
 import { once } from 'node:events'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { deploymentTestEnvironment } from '../scripts/test-deploy.js'
 import { createIntegrationStore } from './integration-store.js'
 import { createStockReservationStore, cleanReservation, cleanConfirmation } from './stock-reservations.js'
 import { createReservationRouter } from './reservation-api.js'
@@ -55,11 +58,12 @@ test('PostgreSQL reservations serialize with Caja, survive retries and never rel
     await t.test('the last unit can be allocated by only one channel, including pending Point sales', async () => {
       for (let round = 0; round < 5; round++) {
         const item = await product()
-        const race = await Promise.allSettled([reservations.create(actor, key(), cart([line(item)])), store.createSale([{ itemId: item.id, quantity: 1 }], 'cash', key())])
+        const race = await Promise.allSettled([reservations.create(actor, key(), cart([line(item)])), store.createSale([{ itemId: item.id, quantity: 1 }], 'cash', key()), store.createSale([{ itemId: item.id, quantity: 1 }], 'card', key())])
         assert.equal(race.filter(result => result.status === 'fulfilled').length, 1)
         assert.equal(race.find(result => result.status === 'rejected').reason.status, 409)
         assert.equal(await balance(item.id), 0)
         if (race[0].status === 'fulfilled') await release(race[0].value.reservation)
+        if (race[2].status === 'fulfilled') await store.markCardSaleFailed(race[2].value.id)
       }
       const item = await product(), point = await store.createSale([{ itemId: item.id, quantity: 1 }], 'card', key())
       await assert.rejects(newHold(item), { code: 'INSUFFICIENT_STOCK' })
@@ -154,6 +158,40 @@ test('PostgreSQL reservations serialize with Caja, survive retries and never rel
       await reservations.releaseAsAdmin('test', held.id, key(), { reason: 'payment_cancelled', paymentAttemptId: attempt, outcomeVerified: true })
       assert.equal(await balance(item.id), 1)
       await assert.rejects(reservations.confirm(actor, held.id, key(), paid(held, attempt)), { code: 'RESERVATION_NOT_PAYABLE' })
+    })
+
+    await t.test('a restarted process recovers lost responses and expires held stock only once, preserving uncertain payments', async () => {
+      const heldItem = await product(1), pendingItem = await product(1)
+      const expiredHold = await newHold(heldItem), pendingHold = await newHold(pendingItem)
+      const paymentAttemptId = await start(pendingHold)
+      await expire(expiredHold.id); await expire(pendingHold.id)
+      const releaseKey = key()
+      const restart = async releasePending => {
+        const program = `
+          import {initializeStore,closeStore,getStockReservationStore,listItems} from './server/store.js';
+          await initializeStore(); const reservations=getStockReservationStore();
+          const actor=${JSON.stringify(actor)};
+          await reservations.expire();
+          ${releasePending ? `await reservations.release(actor,${JSON.stringify(pendingHold.id)},${JSON.stringify(releaseKey)},${JSON.stringify({ reason: 'payment_not_created', paymentAttemptId, outcomeVerified: true })});` : ''}
+          const pending=await reservations.get(actor,${JSON.stringify(pendingHold.id)});
+          const expired=await reservations.get(actor,${JSON.stringify(expiredHold.id)});
+          const items=await listItems();
+          console.log(JSON.stringify({pending:pending.status,expired:expired.status,
+            heldBalance:items.find(i=>i.id===${JSON.stringify(heldItem.id)}).quantity,
+            pendingBalance:items.find(i=>i.id===${JSON.stringify(pendingItem.id)}).quantity}));
+          await closeStore();
+        `
+        const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', program], {
+          windowsHide: true, timeout: 15000,
+          env: { ...deploymentTestEnvironment({ ...process.env, TEST_DATABASE_URL: isolated.href }), DATABASE_URL: isolated.href },
+        })
+        return JSON.parse(stdout)
+      }
+      assert.deepEqual(await restart(false), { pending: 'payment_pending', expired: 'expired', heldBalance: 1, pendingBalance: 0 })
+      assert.deepEqual(await restart(false), { pending: 'payment_pending', expired: 'expired', heldBalance: 1, pendingBalance: 0 })
+      assert.deepEqual(await restart(true), { pending: 'released', expired: 'expired', heldBalance: 1, pendingBalance: 1 })
+      assert.deepEqual(await restart(true), { pending: 'released', expired: 'expired', heldBalance: 1, pendingBalance: 1 })
+      assert.equal((await otherPool.query('SELECT count(*)::int AS count FROM movements WHERE reservation_id=$1', [pendingHold.id])).rows[0].count, 2)
     })
 
     await t.test('HTTP enforces permissions, ownership, JSON limits, feature flag and revocation', async () => {

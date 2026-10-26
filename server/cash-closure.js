@@ -1,7 +1,8 @@
 import crypto from 'node:crypto'
+import { cashCountTotal, cleanCashCount } from '../src/cashCount.js'
+export { cashDenominations } from '../src/cashCount.js'
 
 export const closureTimeZone = process.env.BAKERY_TIME_ZONE || 'America/Santiago'
-export const cashDenominations = [20000, 10000, 5000, 2000, 1000, 500, 100, 50, 10]
 const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: closureTimeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
 export const closureError = (message, status = 400, code = 'INVALID_CLOSURE') => Object.assign(new Error(message), { status, code })
 export function businessDateAt(value = new Date()) {
@@ -90,27 +91,22 @@ export function cleanClosureInput(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw closureError('Envía un formulario de cierre válido.')
   const money = (key, signed = false) => {
     const value = body[key]
-    const label = { openingCash: 'el fondo inicial', cashIn: 'las entradas', cashOut: 'los retiros', countedCash: 'el efectivo contado', countedCard: 'el total declarado del terminal' }[key]
+    const label = { openingCash: 'el fondo inicial', cashIn: 'las entradas', cashOut: 'los retiros', countedCash: 'el efectivo contado' }[key]
     if (!['string','number'].includes(typeof value) || String(value).trim() === '') throw closureError(`Completa ${label} en pesos enteros.`)
     const amount = Number(value)
     if (!Number.isSafeInteger(amount) || Math.abs(amount) > 100000000000 || (!signed && amount < 0)) throw closureError(`Revisa ${label}. Usa montos en pesos enteros dentro del límite permitido.`)
     return amount
   }
   const input = { businessDate: validateClosureDate(body.businessDate), openingCash: money('openingCash'),
-    cashIn: money('cashIn'), cashOut: money('cashOut'), countedCash: money('countedCash'), countedCard: money('countedCard', true),
+    cashIn: money('cashIn'), cashOut: money('cashOut'), countedCash: money('countedCash'),
     operator: String(body.operator || '').trim(), terminalReference: String(body.terminalReference || '').trim(),
     note: String(body.note || '').trim(), expectedRevision: Number(body.expectedRevision), fingerprint: body.fingerprint,
     denominations: null }
   if (!input.operator || input.operator.length > 80 || input.terminalReference.length > 100 || input.note.length > 1000) throw closureError('Indica un responsable (hasta 80 caracteres) y una observación de hasta 1.000 caracteres.')
   if (!['string','number'].includes(typeof body.expectedRevision) || String(body.expectedRevision).trim() === '' || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 || !/^[a-f0-9]{64}$/.test(input.fingerprint || '')) throw closureError('Actualiza los datos del día antes de cerrar.', 409, 'CLOSURE_CHANGED')
   if (body.denominations != null) {
-    if (typeof body.denominations !== 'object' || Array.isArray(body.denominations) || Object.keys(body.denominations).some(k => !cashDenominations.map(String).includes(k))) throw closureError('Desglose de billetes y monedas inválido.')
-    input.denominations = Object.fromEntries(cashDenominations.map(value => {
-      const count = body.denominations[value] ?? 0
-      if (!Number.isSafeInteger(count) || count < 0 || count > 1000000) throw closureError('La cantidad de billetes y monedas debe ser un entero positivo o cero.')
-      return [value, count]
-    }))
-    if (cashDenominations.reduce((total, value) => total + value * input.denominations[value], 0) !== input.countedCash) throw closureError('El desglose de efectivo no coincide con el total contado.')
+    try { input.denominations = cleanCashCount(body.denominations) } catch (error) { throw closureError(error.message) }
+    if (cashCountTotal(input.denominations) !== input.countedCash) throw closureError('El desglose de efectivo no coincide con el total contado.')
   }
   return input
 }
@@ -120,14 +116,13 @@ export function createClosure(summary, input, existing) {
   const cashIn = summary.cashLedger?.cashIn ?? input.cashIn, cashOut = summary.cashLedger?.cashOut ?? input.cashOut
   const expectedCash = input.openingCash + summary.cash.net + cashIn - cashOut
   const difference = input.countedCash - expectedCash
-  const cardDifference = input.countedCard - summary.card.net
-  if ((difference !== 0 || cardDifference !== 0 || (!summary.cashLedger && (cashIn || cashOut)) || summary.pendingCount || existing) && !input.note) {
+  if ((difference !== 0 || (!summary.cashLedger && (cashIn || cashOut)) || summary.pendingCount || existing) && !input.note) {
     throw closureError('Agrega una observación para explicar diferencias, movimientos, pendientes o la corrección del cierre.')
   }
   return { id: existing?.id || crypto.randomUUID(), businessDate: input.businessDate, revision: (existing?.revision || 0) + 1,
     openingCash: input.openingCash, cashAdjustments: cashIn - cashOut, cashIn, cashOut,
-    countedCash: input.countedCash, countedCard: input.countedCard, operator: input.operator, terminalReference: input.terminalReference,
+    countedCash: input.countedCash, countedCard: summary.card.net, cardTotalSource: 'pos', operator: input.operator, terminalReference: input.terminalReference,
     denominations: input.denominations, cashSales: summary.cash.net, cardSales: summary.card.net, totalSales: summary.net,
-    expectedCash, difference, cardDifference, transactionCount: summary.transactions, note: input.note,
+    expectedCash, difference, cardDifference: null, transactionCount: summary.transactions, note: input.note,
     closedAt: new Date().toISOString(), snapshot: summary }
 }

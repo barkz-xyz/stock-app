@@ -94,6 +94,29 @@ for(const postgres of [false,true])test(`cash ledger, carry-over and POS shortfa
       const pdf=await createCashClosurePdf(nextClose)
       assert.ok(pdf.length<30000);assert.ok((await PDFDocument.load(pdf)).getPageCount()<=3)
     })
+    await t.test('returned denominations must match the excess and are persisted without duplicate cash entries',async()=>{
+      const {u,s}=await open(),w=(await issue(u,s,300)).withdrawal,operation=key()
+      await assert.rejects(cash.settle(u,w.id,operation,{...settlement(s,200),returnDenominations:{100:2}}),{code:'RETURN_COUNT_MISMATCH'})
+      assert.equal((await cash.workspace(u)).withdrawals.find(row=>row.id===w.id).status,'pending')
+      const body={...settlement(s,200),returnDenominations:{100:1}}
+      const result=await cash.settle(u,w.id,operation,body)
+      assert.equal(result.withdrawal.returnDenominations[100],1)
+      assert.equal((await cash.settle(u,w.id,operation,body)).replayed,true)
+      const workspace=await cash.workspace(u)
+      assert.equal(workspace.availableCash,800)
+      assert.equal(workspace.entries.filter(e=>e.kind==='return').length,1)
+      assert.equal(workspace.entries.find(e=>e.kind==='return').returnDenominations[100],1)
+    })
+    await t.test('staff stock edits retain the operator and batch retries keep the original movement',async()=>{
+      const {u}=await open(),other=await user(),item=await product(2.25,'kg')
+      await store.adjustItem(item.id,{type:'stock_in',quantity:.75,note:'Recepción'},u)
+      const operation=key(),body={type:'adjustment',note:'Conteo',items:[{itemId:item.id,quantity:2.5,expectedQuantity:3}]}
+      await store.saveInventoryBatch(body,operation,u)
+      assert.equal((await store.saveInventoryBatch(body,operation,other)).replayed,true)
+      const movements=(await store.listMovements()).filter(m=>m.itemId===item.id&&m.type==='adjustment')
+      assert.equal(movements.length,1);assert.ok(movements[0].note.includes('@'+u.username))
+      assert.equal((await store.listItems()).find(i=>i.id===item.id).quantity,2.5)
+    })
     await t.test('withdrawal and close share a mutex and the closure rejects stale cash movements',async()=>{
       const {u,s}=await open(),workspace=await store.getRegisterClosure(u,s.id)
       const race=await Promise.allSettled([issue(u,s,100),store.saveRegisterClosure(u,s.id,{openingCash:1000,cashIn:0,cashOut:0,countedCash:1000,countedCard:0,operator:u.name,note:'test',expectedRevision:0,fingerprint:workspace.live.fingerprint})])

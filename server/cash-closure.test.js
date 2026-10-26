@@ -19,7 +19,7 @@ const draft = live => ({ businessDate: live.businessDate, openingCash: 10000, ca
   countedCash: 10000 + live.cash.net + 300, countedCard: live.card.net, operator: 'Operador de prueba',
   note: 'Entrada y retiro de efectivo documentados.', expectedRevision: 0, fingerprint: live.fingerprint })
 
-test('cash close follows Chile calendar boundaries, DST, old refunds and terminal reconciliation', () => {
+test('cash close follows Chile calendar boundaries, DST, old refunds and automatic POS card totals', () => {
   const period = closurePeriod('2026-10-17')
   assert.equal(period.from.toISOString(), '2026-10-17T03:00:00.000Z')
   assert.equal(period.to.toISOString(), '2026-10-18T03:00:00.000Z')
@@ -46,7 +46,9 @@ test('cash close follows Chile calendar boundaries, DST, old refunds and termina
   const closure = createClosure(summary, cleanClosureInput({ ...draft(summary), countedCard: 5900 }), null)
   assert.equal(closure.expectedCash, 8300)
   assert.equal(closure.difference, 0)
-  assert.equal(closure.cardDifference, -100)
+  assert.equal(closure.countedCard,6000)
+  assert.equal(closure.cardTotalSource,'pos')
+  assert.equal(closure.cardDifference,null)
   for (const date of ['2026-02-30', 'invalid', '2100-01-01', null]) assert.throws(() => closurePeriod(date), { status: 400 })
 })
 
@@ -54,13 +56,13 @@ test('cash close validates actual declarations, denomination counts and explanat
   const summary = buildClosureSummary([], closurePeriod('2026-10-17'))
   const base = { ...draft(summary), cashIn: 0, cashOut: 0, countedCash: 10000, note: '' }
   for (const body of [null, undefined, [], 123]) assert.throws(() => cleanClosureInput(body), { status: 400 })
-  for (const patch of [{ countedCash: '' }, { countedCard: null }, { openingCash: -1 }, { cashIn: 1.5 }, { countedCash: true }, { operator: '' }, { countedCard: 1e15 }, { expectedRevision: -1 }]) {
+  for (const patch of [{ countedCash: '' }, { openingCash: -1 }, { cashIn: 1.5 }, { countedCash: true }, { operator: '' }, { expectedRevision: -1 }]) {
     assert.throws(() => cleanClosureInput({ ...base, ...patch }))
   }
   const cash = cleanClosureInput({ ...base, denominations: { 10000: 1 } })
   assert.equal(createClosure(summary, cash, null).difference, 0)
   assert.throws(() => cleanClosureInput({ ...base, denominations: { 10000: 2 } }), /desglose/)
-  assert.throws(() => createClosure(summary, cleanClosureInput({ ...base, countedCard: 50 }), null), /observación/)
+  for(const countedCard of [null,50,1e15,'forged'])assert.equal(createClosure(summary,cleanClosureInput({...base,countedCard}),null).countedCard,0)
   assert.throws(() => createClosure(summary, cleanClosureInput({ ...base, cashOut: 50 }), null), /observación/)
 })
 
@@ -111,6 +113,15 @@ function readPdfText(pdf) {
   }).join('\n')).join('\n')
 }
 
+test('previous manual terminal declarations remain readable in historical PDF snapshots',async()=>{
+  const summary=buildClosureSummary([sale('card',6000,'2026-10-17T12:00:00Z')],closurePeriod('2026-10-17'))
+  const latest=createClosure(summary,cleanClosureInput(draft(summary)),null)
+  const legacy={...latest,cardTotalSource:undefined,countedCard:5900,cardDifference:-100}
+  const text=readPdfText(await PDFDocument.load(await createCashClosurePdf(legacy)))
+  assert.match(text,/CONCILIACIÓN TARJETAS/);assert.match(text,/Total terminal/);assert.ok(text.includes('$-100'))
+  assert.equal(legacy.countedCard,5900)
+})
+
 test('cash close PDF fits a normal day on one page and preserves accounting totals', async () => {
   const sales = Array.from({ length: 10 }, (_, i) => sale(i % 2 ? 'cash' : 'card', 1500, '2026-10-17T12:00:00Z',
     i < 2 ? [refund(500, '2026-10-17T13:00:00Z')] : [], { shortId: String(i + 1).padStart(8, '0') }))
@@ -126,7 +137,9 @@ test('cash close PDF fits a normal day on one page and preserves accounting tota
   for (const amount of ['$15.000', '$14.000', '$17.300', '$7.000']) assert.ok(text.includes(amount), amount)
   assert.match(text, /MOVIMIENTOS \(12\)/)
   assert.match(text, /ARQUEO EFECTIVO/)
-  assert.match(text, /CONCILIACIÓN TARJETAS/)
+  assert.match(text, /03 \/ TARJETA/)
+  assert.match(text, /Total tarjeta POS/)
+  assert.doesNotMatch(text,/Total terminal|Esperado sin comisiones/)
   assert.doesNotMatch(text, /Fotografía de las operaciones|Estos datos pueden ser/)
   assert.equal(pdf.getCreationDate().toISOString(), new Date(closure.closedAt).toISOString().replace(/\.\d{3}Z$/, '.000Z'))
 })
@@ -158,5 +171,5 @@ test('cash close PDF retains long notes, negative card days and denomination tot
   assert.ok(text.includes('FIN DEL REGISTRO.'))
   assert.ok(text.includes('$-2.000'))
   assert.ok(text.includes('$10.000 x 1'))
-  assert.equal(closure.cardDifference, 0)
+  assert.equal(closure.cardDifference, null)
 })

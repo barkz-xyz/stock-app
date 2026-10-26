@@ -667,8 +667,10 @@ export async function deleteItem(id) {
   }
 }
 
-export async function saveInventoryBatch(input, key) {
+const stockOperationNote=(note,actor)=>actor?.id?`${note}${note?' · ':''}${actor.name} (@${actor.username})`:note
+export async function saveInventoryBatch(input, key, actor = null) {
   const batch = cleanInventoryBatch(input, key)
+  const movementNote=stockOperationNote(batch.note || (batch.type === 'stock_in' ? 'Producción por lote' : 'Conteo por lote'),actor)
   const replay = existing => {
     if (existing.fingerprint !== batch.fingerprint) throw Object.assign(new Error('Esta referencia ya se usó para otro lote.'), { status: 409, code: 'BATCH_CONFLICT' })
     return { ...existing.result, replayed: true }
@@ -680,7 +682,7 @@ export async function saveInventoryBatch(input, key) {
     for (const { item, next, delta } of changes) {
       item.quantity = next; item.updatedAt = now
       data.movements.unshift({ id: crypto.randomUUID(), itemId: item.id, itemName: item.name, saleId: null,
-        type: batch.type, quantity: delta, balanceAfter: next, note: batch.note || (batch.type === 'stock_in' ? 'Producción por lote' : 'Conteo por lote'), createdAt: now })
+        type: batch.type, quantity: delta, balanceAfter: next, note: movementNote, createdAt: now })
     }
     const result = { id: batch.key, items: changes.map(c => normalizeItem(c.item)), count: changes.length }
     data.stockBatches.push({ key: batch.key, fingerprint: batch.fingerprint, result })
@@ -700,7 +702,7 @@ export async function saveInventoryBatch(input, key) {
     await client.query(`INSERT INTO movements (id,item_id,item_name,type,quantity,balance_after,note)
       SELECT * FROM UNNEST($1::uuid[],$2::uuid[],$3::text[],$4::text[],$5::numeric[],$6::numeric[],$7::text[])`,
     [changes.map(() => crypto.randomUUID()), changes.map(c => c.item.id), changes.map(c => c.item.name), changes.map(() => batch.type),
-      changes.map(c => c.delta), changes.map(c => c.next), changes.map(() => batch.note || (batch.type === 'stock_in' ? 'Producción por lote' : 'Conteo por lote'))])
+      changes.map(c => c.delta), changes.map(c => c.next), changes.map(() => movementNote)])
     const result = { id: batch.key, items: updated.rows.map(normalizeItem), count: changes.length }
     await client.query('INSERT INTO stock_batches (id,fingerprint,result) VALUES ($1,$2,$3)', [batch.key, batch.fingerprint, JSON.stringify(result)])
     await client.query('COMMIT')
@@ -709,7 +711,8 @@ export async function saveInventoryBatch(input, key) {
   finally { client.release() }
 }
 
-export async function adjustItem(id, input) {
+export async function adjustItem(id, input, actor = null) {
+  input={...input,note:stockOperationNote(input.note||'',actor)}
   if (!pool) {
     return mutateFileData((data) => {
       const item = data.items.find((entry) => entry.id === id)

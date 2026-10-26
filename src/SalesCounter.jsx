@@ -23,12 +23,12 @@ function ProductArtwork({ item }) {
 const ProductTile = memo(function ProductTile({ item, inCart, favorite, locked, onQuantity, onFavorite }) {
   const { t, formatCurrency, unitLabel } = useI18n()
   const label = productLabel(item.name)
-  return <div className="product-tile"><button className={`sale-product category-${categoryClass(item.category)} ${item.quantity <= 0 ? 'is-unavailable' : ''}`} aria-label={`${item.name} · ${formatCurrency(item.price)}`} title={item.name} disabled={locked || item.quantity <= 0 || inCart >= item.quantity} onClick={() => onQuantity(item, 1)}>
+  return <div className="product-tile"><button className={`sale-product category-${categoryClass(item.category)} ${item.quantity <= 0 ? 'is-untracked' : ''}`} aria-label={`${item.name} · ${formatCurrency(item.price)}`} title={item.name} disabled={locked || inCart >= 10000} onClick={() => onQuantity(item, 1)}>
             <ProductArtwork item={item} />
             {inCart > 0 && <span className="cart-badge">{formatQuantity(inCart)}</span>}
             <span className="sale-product-label"><strong>{label.title}</strong>{label.variant && <small>{label.variant}</small>}</span>
             <div className="sale-product-footer"><span className="sale-product-price">{formatCurrency(item.price)}</span>{item.quantity > 0 && <span className="sale-product-stock"><b>{formatQuantity(item.quantity)}</b><small>{unitLabel(item.unit)}</small></span>}</div>
-            {item.quantity <= 0 ? <i>{t('outOfStock')}</i> : <Plus className="sale-product-add" size={16} />}
+            {item.quantity <= 0 ? <i>{t('withoutStock')}</i> : <Plus className="sale-product-add" size={16} />}
           </button><button type="button" className={`favorite-button ${favorite ? 'active' : ''}`} aria-label={`${t(favorite ? 'removeFavorite' : 'addFavorite')}: ${item.name}`} aria-pressed={favorite} onClick={() => onFavorite(item.id)}><Star size={15} fill={favorite ? 'currentColor' : 'none'} /></button></div>
 })
 
@@ -186,7 +186,7 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
         {pointVoucher && <div className="point-document-state"><ReceiptText size={16} /><div><strong>{t('pointVoucher')}</strong><span>{t('pointVoucherDescription')}</span></div></div>}
       </section>}
       <div className="sale-detail-lines">
-        {sale.items.map((line) => <div key={line.lineId}><div><strong>{line.name}</strong><span>{formatQuantity(line.quantity)} {unitLabel(line.unit)} · {formatCurrency(line.unitPrice)}</span></div><b>{formatCurrency(line.lineTotal)}</b></div>)}
+        {sale.items.map((line) => <div key={line.lineId}><div><strong>{line.name}</strong><span>{formatQuantity(line.quantity)} {unitLabel(line.unit)} · {formatCurrency(line.unitPrice)}</span>{line.unstockedQuantity>0&&<small className="stock-shortfall">{t('withoutStock')}: {formatQuantity(line.unstockedQuantity)} {unitLabel(line.unit)}</small>}</div><b>{formatCurrency(line.lineTotal)}</b></div>)}
       </div>
       {canManage && sale.refunds?.length > 0 && <section className="refund-history"><div className="section-label"><span>{t('refundHistory')}</span></div>{sale.refunds.map((refund) => <article key={refund.id}>
         <div className={`refund-icon ${refund.status}`}><Undo2 size={17} /></div>
@@ -271,14 +271,20 @@ function SalesHistory({ refreshToken, onResume, onSelect, showOperator }) {
   </section>
 }
 
-const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRefresh, setToast, onNavigate, registerView = 'cart', historyRevision, onRegisterViewChange, serverAvailable = true, user, registerSession, onOpenRegister }) {
+const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRefresh, setToast, onNavigate, registerView = 'cart', historyRevision, onRegisterViewChange, serverAvailable = true, user, registerOpening, registerSession, onOpenRegister }) {
   const { t, categoryLabel, unitLabel, formatCurrency, language } = useI18n()
   const tx=(es,en)=>language==='es'?es:en
   const [openingCash,setOpeningCash]=useState(''),[opening,setOpening]=useState(false),[openError,setOpenError]=useState('')
+  const [additionalCash,setAdditionalCash]=useState(''),openingSource=useRef(null)
+  useEffect(()=>{
+    if(!registerOpening||registerSession)return
+    const key=`${user.id}:${registerOpening.previousSessionId}:${registerOpening.previousRevision}`
+    if(openingSource.current!==key){openingSource.current=key;setOpeningCash(String(registerOpening.openingCash));setAdditionalCash('')}
+  },[registerOpening,registerSession,user.id])
   const setRegisterView = onRegisterViewChange
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('All')
-  const [inStockOnly, setInStockOnly] = useState(true)
+  const [inStockOnly, setInStockOnly] = useState(false)
   const [attempt, setAttempt] = useState(pendingCheckout)
   const [cart, setCart] = useState(() => pendingCheckout()?.items || loadCartDraft())
   const [favorites, setFavorites] = useState(loadFavorites), [cartExpanded, setCartExpanded] = useState(false)
@@ -293,7 +299,7 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
   const products = useMemo(() => catalogItems.filter((item) => (filter === 'All' || filter === 'Favorites' && favorites.includes(item.id) || item.category === filter) && searchText(`${item.name} ${item.sku}`).includes(searchText(search))).sort((a,b) => Number(favorites.includes(b.id)) - Number(favorites.includes(a.id)) || a.name.localeCompare(b.name, 'es')), [catalogItems, filter, favorites, search])
   const itemsById = useMemo(() => new Map(items.map(item => [item.id, item])), [items])
   const cartLines = useMemo(() => cart.map((line) => ({ ...line, item: itemsById.get(line.itemId) || { id: line.itemId, name: t('unavailableProduct'), price: 0, quantity: 0, unit: 'pieces', missing: true } })), [cart, itemsById, t])
-  const cartInvalid = cartLines.some(l => l.item.missing || !l.item.sellable || l.item.price <= 0 || l.quantity > l.item.quantity)
+  const cartInvalid = cartLines.some(l => l.item.missing || !l.item.sellable || l.item.price <= 0 || l.quantity > 10000)
   useEffect(() => { saveCartDraft(cart) }, [cart])
   useEffect(() => { saveFavorites(favorites) }, [favorites])
   const total = cartLines.reduce((sum, line) => sum + Math.round(line.item.price * line.quantity), 0)
@@ -315,7 +321,7 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
     if (attempt) return
     setCart((current) => {
     const existing = current.find((line) => line.itemId === item.id)
-    const next = Math.max(0, Math.min(item.quantity, (existing?.quantity || 0) + delta))
+    const next = Math.round(Math.max(0, Math.min(10000, (existing?.quantity || 0) + delta))*100)/100
     if (!existing && next > 0) return [...current, { itemId: item.id, quantity: next }]
     if (next === 0) return current.filter((line) => line.itemId !== item.id)
     return current.map((line) => line.itemId === item.id ? { ...line, quantity: next } : line)
@@ -510,7 +516,7 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
         <button type="button" id="caja-history-tab" role="tab" aria-selected={registerView === 'history'} aria-controls="caja-history-panel" tabIndex={registerView === 'history' ? 0 : -1} onClick={() => setRegisterView('history')}><History size={16} />{t('registerHistory')}</button>
       </div>
     </section>
-    {registerView==='cart'&&!registerSession&&!attempt&&<form className="card open-register" aria-label={tx('Abrir caja','Open register')} onSubmit={async e=>{e.preventDefault();setOpening(true);setOpenError('');try{await onOpenRegister(Number(openingCash));setOpeningCash('')}catch(e){setOpenError(e.message)}finally{setOpening(false)}}}><Banknote size={26}/><label className="field"><span>{tx('Fondo inicial · CLP','Opening cash · CLP')}</span><div className="money-input"><span>$</span><input type="number" inputMode="numeric" min="0" max="100000000000" step="1" required value={openingCash} onChange={e=>setOpeningCash(e.target.value)}/></div></label>{openError&&<div className="inline-error" role="alert">{openError}</div>}<button className="button primary" disabled={opening||!serverAvailable}>{opening?t('saving'):tx('Abrir caja','Open register')}<ArrowRight size={18}/></button></form>}
+    {registerView==='cart'&&!registerSession&&!attempt&&<form className="card open-register" aria-label={tx('Abrir caja','Open register')} onSubmit={async e=>{e.preventDefault();setOpening(true);setOpenError('');try{await onOpenRegister({openingCash:Number(openingCash),additionalCash:Number(additionalCash||0),previousSessionId:registerOpening.previousSessionId,previousRevision:registerOpening.previousRevision})}catch(e){setOpenError(e.message)}finally{setOpening(false)}}}><Banknote size={26}/><label className="field"><span>{tx('Fondo anterior · CLP','Previous cash · CLP')}</span><div className="money-input"><span>$</span><input aria-label={tx('Fondo anterior','Previous cash')} type="number" inputMode="numeric" min="0" max="100000000000" step="1" required value={openingCash} onChange={e=>setOpeningCash(e.target.value)}/></div>{registerOpening?.previousClosedAt&&<small>{tx('Último cierre','Last close')} · {new Date(registerOpening.previousClosedAt).toLocaleDateString(language==='es'?'es-CL':'en-GB')}</small>}</label><details><summary>{tx('Agregar efectivo','Add cash')}</summary><label className="field"><span>{tx('Efectivo adicional · CLP','Additional cash · CLP')}</span><div className="money-input"><span>$</span><input aria-label={tx('Efectivo adicional','Additional cash')} type="number" inputMode="numeric" min="0" max="100000000000" step="1" value={additionalCash} placeholder="0" onChange={e=>setAdditionalCash(e.target.value)}/></div></label></details><div className="cash-operation-total"><span>{tx('Fondo inicial','Opening cash')}</span><strong>{formatCurrency(Number(openingCash||0)+Number(additionalCash||0))}</strong></div>{openError&&<div className="inline-error" role="alert">{openError}</div>}<button className="button primary" disabled={opening||!serverAvailable||!registerOpening}>{opening?t('saving'):tx('Abrir caja','Open register')}<ArrowRight size={18}/></button></form>}
     {registerView === 'cart' ? <section className={`pos-layout ${!registerSession&&!attempt?'session-locked':''}`} id="caja-cart-panel" role="tabpanel" aria-labelledby="caja-cart-tab">
       <div className="catalog-panel">
         <div className="toolbar pos-toolbar">
@@ -533,7 +539,7 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
         <header><div><ShoppingBasket size={20} /><h2>{t('cart')}</h2><span className="cart-count">{formatQuantity(count)}</span></div><div>{cartLines.length > 0 && <button disabled={Boolean(attempt)} onClick={() => setCart([])}><Trash2 size={14} />{t('clear')}</button>}<button className="cart-collapse" onClick={() => setCartExpanded(false)} aria-label={t('hideCart')}><ChevronDown size={19} /></button></div></header>
         <div className="cart-detail" id="cart-detail">
         {cartInvalid && !attempt && <div className="inline-error" role="alert"><AlertTriangle size={15} />{t('cartReview')}</div>}
-        {cartLines.length ? <div className="cart-lines">{cartLines.map(({ item, quantity }) => <article className={quantity > item.quantity || item.missing ? 'invalid-line' : ''} key={item.id}><div className="cart-line-main"><div><strong>{item.name}</strong><span>{formatCurrency(item.price)} · {unitLabel(item.unit)}{quantity > item.quantity && ` · ${t('available')}: ${formatQuantity(item.quantity)}`}</span></div><b>{formatCurrency(item.price * quantity)}</b></div><div className="quantity-stepper"><button onClick={() => changeQuantity(item, -1)} disabled={Boolean(attempt)} aria-label={`${t('removeOne')}: ${item.name}`}><Minus size={16} /></button><span>{formatQuantity(quantity)}</span><button onClick={() => changeQuantity(item, 1)} disabled={Boolean(attempt) || quantity >= item.quantity} aria-label={`${t('addOne')}: ${item.name}`}><Plus size={16} /></button><button className="remove-line" onClick={() => changeQuantity(item, -quantity)} disabled={Boolean(attempt)} aria-label={`${t('removeFromCart')}: ${item.name}`}><Trash2 size={16} /></button></div></article>)}</div> : <div className="cart-empty"><div><ShoppingBasket size={28} /></div><h3>{t('emptyCart')}</h3></div>}
+        {cartLines.length ? <div className="cart-lines">{cartLines.map(({ item, quantity }) => <article className={item.missing ? 'invalid-line' : quantity>item.quantity?'shortfall-line':''} key={item.id}><div className="cart-line-main"><div><strong>{item.name}</strong><span>{formatCurrency(item.price)} · {unitLabel(item.unit)}</span>{quantity>item.quantity&&<small className="stock-shortfall">{t('withoutStock')}: {formatQuantity(Math.round((quantity-item.quantity)*100)/100)} {unitLabel(item.unit)}</small>}</div><b>{formatCurrency(item.price * quantity)}</b></div><div className="quantity-stepper"><button onClick={() => changeQuantity(item, -1)} disabled={Boolean(attempt)} aria-label={`${t('removeOne')}: ${item.name}`}><Minus size={16} /></button><span>{formatQuantity(quantity)}</span><button onClick={() => changeQuantity(item, 1)} disabled={Boolean(attempt) || quantity >= 10000} aria-label={`${t('addOne')}: ${item.name}`}><Plus size={16} /></button><button className="remove-line" onClick={() => changeQuantity(item, -quantity)} disabled={Boolean(attempt)} aria-label={`${t('removeFromCart')}: ${item.name}`}><Trash2 size={16} /></button></div></article>)}</div> : <div className="cart-empty"><div><ShoppingBasket size={28} /></div><h3>{t('emptyCart')}</h3></div>}
         </div>
         <footer><button type="button" className="cart-summary-toggle" onClick={() => setCartExpanded(v => !v)} aria-expanded={cartExpanded} aria-controls="cart-detail" aria-label={t(cartExpanded ? 'hideCart' : 'cartDetails')}><span>{t('productsCount', { count: formatQuantity(count) })}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong>{cartExpanded ? <ChevronDown size={17} /> : <ChevronUp size={17} />}</button><div className="cart-summary"><div><span>{t('total')}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong></div></div><button className="button primary pay-button" disabled={busy || !serverAvailable || (!attempt && (!registerSession || !cartLines.length || cartInvalid))} onClick={() => attempt ? recoverCheckout() : setCheckout({ stage: 'method', total })}>{t(!serverAvailable ? 'serverOffline' : attempt ? 'reviewPendingCheckout' : 'charge')}<ArrowRight size={19} /></button></footer>
       </aside>

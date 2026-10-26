@@ -55,12 +55,12 @@ test('sales metrics and the daily cash close reconcile payment methods', async (
 
     const workspace = await store.getCashClosureWorkspace(businessDate)
     const closure = await store.saveCashClosure({
-      businessDate, openingCash: 10000, cashIn: 0, cashOut: 1000, countedCash: 10500, countedCard: 4500,
+      businessDate, openingCash: 10000, cashIn: 0, cashOut: 1000, countedCash: 11500, countedCard: 4500,
       operator: 'Test operator', expectedRevision: 0, fingerprint: workspace.live.fingerprint, note: 'Test close',
     })
     assert.equal(closure.cashSales, 1500)
     assert.equal(closure.cardSales, 4500)
-    assert.equal(closure.expectedCash, 10500)
+    assert.equal(closure.expectedCash, 11500, 'Cash out comes from the ledger, never from a forged closing field')
     assert.equal(closure.difference, 0)
     assert.equal(closure.transactionCount, 2)
 

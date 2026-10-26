@@ -6,10 +6,12 @@ Integración entre Bakery POS y la tienda en otro repositorio. Consulta de inven
 
 | Ruta | Resultado |
 | --- | --- |
-| `GET /api/integrations/v1/inventory` | Todo el catálogo vigente, también agotados y productos no vendibles |
-| `GET /api/integrations/v1/inventory/{itemId}` | Un producto por UUID |
+| `GET /api/integrations/v1/inventory` | Catálogo completo con saldo disponible mayor a cero |
+| `GET /api/integrations/v1/inventory/{itemId}` | Un producto con saldo positivo por UUID; 404 si está agotado |
 
 La respuesta proviene de una única lectura coherente, ordenada por UUID y con `count` igual a `items.length`. No admite filtros ni paginación. El saldo operativo ya descuenta ventas, reservas Point y reservas online aplicadas; no es un conteo físico. La consulta no modifica existencias, movimientos, ventas o cierres.
+
+Desde la revisión de contrato 1.2.0 (26-10-2026), se omiten los productos con saldo cero. `complete=true` significa todos los productos con saldo positivo; una respuesta 200 con `items=[]` es válida. El consumidor debe retirar de su disponibilidad los UUID ausentes en un snapshot completo; no confundir esta respuesta con un error de autenticación, red o servidor. Se conservan los productos no vendibles que tienen saldo, con su campo `sellable`. No cambia el formato decimal, la ruta v1, las claves, las cuotas ni la autorización antes de 304.
 
 Bakery POS conserva la autoridad del inventario. La tienda separada gestiona carrito, compradores, pedidos y pagos online. La consulta por sí sola no garantiza disponibilidad al cobrar: el checkout debe usar el flujo de reserva, inicio de pago y confirmación documentado en [reservas](stock-reservations.md) antes de habilitar cobros.
 

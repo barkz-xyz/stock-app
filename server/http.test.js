@@ -261,13 +261,32 @@ test('HTTP authentication rejects malformed sessions and validates product calen
     for(const path of [`/api/sales/${saleB.id}`,`/api/checkouts/${keyB}`,`/api/register-sessions/${b.session.id}/closure`,`/api/register-sessions/${b.session.id}/closure/pdf?revision=1`])assert.equal((await request(path,{headers:a.headers})).status,404,path)
     const workspace=await(await request(`/api/register-sessions/${a.session.id}/closure`,{headers:a.headers})).json()
     assert.equal(workspace.live.cash.net,2000)
-    const closeBody={businessDate:workspace.live.businessDate,openingCash:999999,cashIn:0,cashOut:0,countedCash:12000,countedCard:0,operator:'Spoof',expectedRevision:0,fingerprint:workspace.live.fingerprint}
+    assert.equal((await request('/api/register-cash')).status,401)
+    assert.equal((await request('/api/register-cash/withdrawals',{method:'POST',headers:a.headers,body:JSON.stringify({sessionId:a.session.id,amount:300,recipient:'Compras',purpose:'Prueba'})})).status,400)
+    const cashKey=crypto.randomUUID(),cashBody={sessionId:a.session.id,amount:300,recipient:'Compras',purpose:'Prueba local'}
+    const out=await request('/api/register-cash/withdrawals',{method:'POST',headers:{...a.headers,'Idempotency-Key':cashKey},body:JSON.stringify(cashBody)})
+    assert.equal(out.status,201);assertPrivate(out);const withdrawal=(await out.json()).withdrawal
+    assert.equal((await request('/api/register-cash/withdrawals',{method:'POST',headers:{...a.headers,'Idempotency-Key':cashKey},body:JSON.stringify(cashBody)})).status,200)
+    const settle={sessionId:a.session.id,spentAmount:100,documentType:'factura',documentNumber:'FAKE-42',supplier:'Proveedor local',detail:'Insumo ficticio'}
+    assert.equal((await request(`/api/register-cash/withdrawals/${withdrawal.id}/settle`,{method:'POST',headers:{...b.headers,'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify({...settle,sessionId:b.session.id})})).status,404)
+    assert.equal((await request(`/api/register-cash/withdrawals/${withdrawal.id}/settle`,{method:'POST',headers:{...a.headers,'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify(settle)})).status,200)
+    const cashView=await(await request('/api/register-cash',{headers:a.headers})).json();assert.equal(cashView.availableCash,11900)
+    assert.equal((await(await request('/api/register-cash',{headers:b.headers})).json()).withdrawals.length,0)
+    const fresh=await(await request(`/api/register-sessions/${a.session.id}/closure`,{headers:a.headers})).json()
+    const closeBody={businessDate:workspace.live.businessDate,openingCash:999999,cashIn:999999,cashOut:999999,countedCash:11900,countedCard:0,operator:'Spoof',expectedRevision:0,fingerprint:fresh.live.fingerprint}
     const closed=await request(`/api/register-sessions/${a.session.id}/closure`,{method:'POST',headers:a.headers,body:JSON.stringify(closeBody)});assert.equal(closed.status,200)
     const closure=await closed.json();assert.equal(closure.openingCash,10000);assert.equal(closure.operator,'Caja A');assert.equal(closure.totalSales,2000);assert.equal(closure.difference,0)
+    assert.equal(closure.cashOut,300);assert.equal(closure.cashIn,200)
     assert.equal((await sale(a,1,crypto.randomUUID())).status,409)
     assert.equal((await sale(a,1,keyA)).status,200)
     assert.equal((await request(`/api/register-sessions/${a.session.id}/closure`,{method:'POST',headers:a.headers,body:JSON.stringify(closeBody)})).status,409)
     const pdf=await request(`/api/register-sessions/${a.session.id}/closure/pdf?revision=1`,{headers:a.headers});assert.equal(pdf.status,200);assertPrivate(pdf);assert.ok((await pdf.arrayBuffer()).byteLength<20000)
+    const opening=await(await request('/api/bootstrap',{headers:a.headers})).json();assert.equal(opening.registerOpening.openingCash,11900)
+    const reopened=await(await request('/api/register-sessions',{method:'POST',headers:a.headers,body:JSON.stringify({...opening.registerOpening,additionalCash:100})})).json();assert.equal(reopened.openingCash,12000)
+    const untracked=await(await request('/api/items',{method:'POST',headers:adminHeaders,body:JSON.stringify({name:'Untracked local',category:'Bread',unit:'kg',quantity:0,price:1000,sellable:true})})).json()
+    const zeroSale=await request('/api/sales/cash',{method:'POST',headers:{...b.headers,'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify({items:[{itemId:untracked.id,quantity:1.25}],cashReceived:2000})})
+    assert.equal(zeroSale.status,201);assert.equal((await zeroSale.json()).items[0].unstockedQuantity,1.25)
+    assert.equal((await(await request('/api/items',{headers:adminHeaders})).json()).find(i=>i.id===untracked.id).quantity,0)
     const users=await(await request('/api/users',{headers:adminHeaders})).json();assert.ok(users.every(u=>!('passwordHash'in u)&&!('password_hash'in u)))
     const admin=users.find(u=>u.role==='admin')
     assert.equal((await request('/api/users/'+admin.id,{method:'PATCH',headers:adminHeaders,body:JSON.stringify({...admin,role:'cashier'})})).status,409)

@@ -27,7 +27,7 @@ export async function readInventorySnapshot(pool, revision = null, itemId = null
     CASE WHEN r.revision=$1::uuid THEN NULL ELSE
       COALESCE((SELECT json_agg(i ORDER BY i.id) FROM (
         SELECT id,sku,name,category,unit,quantity,price,sellable,expiry_date,updated_at
-        FROM items ${itemId ? 'WHERE id=$2::uuid' : ''}
+        FROM items WHERE quantity>0 ${itemId ? 'AND id=$2::uuid' : ''}
       ) i), '[]'::json)
     END AS items
     FROM inventory_read_revision r WHERE r.singleton`, itemId ? [revision, itemId] : [revision])

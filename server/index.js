@@ -19,7 +19,7 @@ import {
   getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales, getInventoryIntegrationStore, getStockReservationStore,
   markCardSaleFailed, prepareRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
   updateItem, updateSaleFromPoint, updateSalePaymentDetails,
-  listUsers, createUser, updateUser, listRegisterSessions, getActiveRegisterSession, openRegisterSession, getRegisterClosure, saveRegisterClosure, getRegisterClosureRevision,
+  listUsers, createUser, updateUser, listRegisterSessions, getActiveRegisterSession, getRegisterOpening, getRegisterCashStore, openRegisterSession, getRegisterClosure, saveRegisterClosure, getRegisterClosureRevision,
 } from './store.js'
 import { createDailyReport } from './report.js'
 import { createCashClosurePdf } from './cash-closure-pdf.js'
@@ -313,7 +313,8 @@ app.get('/api/bootstrap', async (req, res, next) => {
     const dataPromise=auth.user.role==='admin'?getBootstrapData():Promise.all([listItems(),searchSales({limit:50},auth.user)]).then(([items,history])=>({items:items.filter(i=>i.sellable),movements:[],sales:history.sales,dailySummary:null}))
     const [registerSessions,registerSession,data]=await Promise.all([listRegisterSessions(auth.user),getActiveRegisterSession(auth.user),dataPromise])
     res.setHeader('Server-Timing', `data;dur=${elapsedMilliseconds(startedAt)}`)
-    res.json({ auth, ...data, registerSessions,registerSession, posConfig: pointConfiguration() })
+    const registerOpening = registerSession ? null : await getRegisterOpening(auth.user)
+    res.json({ auth, ...data, registerSessions,registerSession,registerOpening, posConfig: pointConfiguration() })
   } catch (error) { next(error) }
 })
 app.use('/api', requireAuth, cashierBoundary)
@@ -329,7 +330,13 @@ app.get('/api/users',requireAdmin,async(_req,res)=>res.json(await listUsers()))
 app.post('/api/users',requireAdmin,async(req,res)=>res.status(201).json(await createUser(req.body)))
 app.patch('/api/users/:id',requireAdmin,async(req,res)=>res.json(await updateUser(req.params.id,req.body)))
 app.get('/api/register-sessions',async(req,res)=>res.json(await listRegisterSessions(req.user)))
-app.post('/api/register-sessions',async(req,res)=>res.json(await openRegisterSession(req.user,req.body.openingCash)))
+app.post('/api/register-sessions',async(req,res)=>res.json(await openRegisterSession(req.user,req.body)))
+app.get('/api/register-cash',async(req,res)=>res.json(await getRegisterCashStore().workspace(req.user)))
+app.post('/api/register-cash/withdrawals',async(req,res)=>{
+  const result=await getRegisterCashStore().issue(req.user,checkoutKey(req.headers['idempotency-key']),req.body)
+  res.status(result.replayed?200:201).json(result)
+})
+app.post('/api/register-cash/withdrawals/:id/settle',async(req,res)=>res.json(await getRegisterCashStore().settle(req.user,req.params.id,checkoutKey(req.headers['idempotency-key']),req.body)))
 app.get('/api/register-sessions/:id/closure',async(req,res)=>res.json(await getRegisterClosure(req.user,req.params.id)))
 app.post('/api/register-sessions/:id/closure',async(req,res)=>res.json(await saveRegisterClosure(req.user,req.params.id,req.body)))
 app.get('/api/register-sessions/:id/closure/pdf',async(req,res)=>{

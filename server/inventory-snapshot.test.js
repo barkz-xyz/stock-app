@@ -157,6 +157,19 @@ test('PostgreSQL snapshot revisions stay coherent across commits, rollback, repl
       } finally { resume(); integration.readInventorySnapshot = reader }
     })
 
+    await t.test('zero stock leaves the online snapshot and returns only after replenishment', async () => {
+      const single=first+'/'+item.id
+      const listed=await get(single)
+      await otherPool.query('UPDATE items SET quantity=0 WHERE id=$1',[item.id])
+      const empty=await get(first,old.etag)
+      assert.equal(empty.status,200);assert.equal(JSON.parse(empty.body).count,0)
+      assert.equal((await get(single,listed.etag)).status,404)
+      assert.equal((await get(first,empty.etag)).status,304)
+      await otherPool.query('UPDATE items SET quantity=0.25 WHERE id=$1',[item.id])
+      const restored=await get(first,empty.etag)
+      assert.equal(restored.status,200);assert.equal(JSON.parse(restored.body).items[0].stockQuantity,'0.25')
+      old=restored
+    })
     await t.test('delete, insertion and truncate cannot resurrect cached rows', async () => {
       const single = first + '/' + item.id
       const before = await get(single)

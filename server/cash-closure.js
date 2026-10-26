@@ -117,14 +117,15 @@ export function cleanClosureInput(body) {
 
 export function createClosure(summary, input, existing) {
   if (summary.fingerprint !== input.fingerprint || (existing?.revision || 0) !== input.expectedRevision) throw closureError('Las operaciones o el cierre cambiaron. Actualiza el día y revisa los montos antes de confirmar.', 409, 'CLOSURE_CHANGED')
-  const expectedCash = input.openingCash + summary.cash.net + input.cashIn - input.cashOut
+  const cashIn = summary.cashLedger?.cashIn ?? input.cashIn, cashOut = summary.cashLedger?.cashOut ?? input.cashOut
+  const expectedCash = input.openingCash + summary.cash.net + cashIn - cashOut
   const difference = input.countedCash - expectedCash
   const cardDifference = input.countedCard - summary.card.net
-  if ((difference !== 0 || cardDifference !== 0 || input.cashIn || input.cashOut || summary.pendingCount || existing) && !input.note) {
+  if ((difference !== 0 || cardDifference !== 0 || (!summary.cashLedger && (cashIn || cashOut)) || summary.pendingCount || existing) && !input.note) {
     throw closureError('Agrega una observación para explicar diferencias, movimientos, pendientes o la corrección del cierre.')
   }
   return { id: existing?.id || crypto.randomUUID(), businessDate: input.businessDate, revision: (existing?.revision || 0) + 1,
-    openingCash: input.openingCash, cashAdjustments: input.cashIn - input.cashOut, cashIn: input.cashIn, cashOut: input.cashOut,
+    openingCash: input.openingCash, cashAdjustments: cashIn - cashOut, cashIn, cashOut,
     countedCash: input.countedCash, countedCard: input.countedCard, operator: input.operator, terminalReference: input.terminalReference,
     denominations: input.denominations, cashSales: summary.cash.net, cardSales: summary.card.net, totalSales: summary.net,
     expectedCash, difference, cardDifference, transactionCount: summary.transactions, note: input.note,

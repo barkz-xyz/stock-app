@@ -7,6 +7,8 @@ import { publishChange } from './changes.js'
 import { cleanInventoryBatch, inventoryBatchChanges } from './inventory-batch.js'
 import { cleanHistoryQuery, historyMatches } from './sales-history.js'
 import { publicUser, cleanUser, hashPassword, userError } from './user-security.js'
+import { initializeCashLedger, cashAmount, withCashLedger } from './cash-ledger.js'
+import { createRegisterCashStore } from './register-cash-store.js'
 import { createIntegrationStore } from './integration-store.js'
 import { initializeInventoryRevision, readInventorySnapshot } from './inventory-snapshot.js'
 import { initializeStockReservations, createStockReservationStore, assertNoStockHolds } from './stock-reservations.js'
@@ -145,6 +147,8 @@ function normalizeSale(row, items = row.items || [], refunds = row.refunds || []
       name: item.item_name ?? item.name,
       unit: item.unit,
       quantity: Number(item.quantity),
+      inventoryQuantity: Number(item.inventory_quantity ?? item.inventoryQuantity ?? item.quantity),
+      unstockedQuantity: Math.round((Number(item.quantity) - Number(item.inventory_quantity ?? item.inventoryQuantity ?? item.quantity)) * 100) / 100,
       unitPrice: Number(item.unit_price ?? item.unitPrice),
       lineTotal: Number(item.line_total ?? item.lineTotal),
     })),
@@ -207,6 +211,7 @@ function ensureFileShape(data) {
   data.cashClosures ||= []
   data.stockBatches ||= []
   data.users ||= []; data.authSessions ||= []; data.registerSessions ||= []
+  data.cashWithdrawals ||= []; data.cashEntries ||= []; data.cashOperations ||= []
   for (const item of data.items) {
     item.price = Number(item.price || 0)
     item.sellable = Boolean(item.sellable)
@@ -315,6 +320,8 @@ export async function initializeStore() {
         unit_price NUMERIC(12,0) NOT NULL CHECK (unit_price >= 0),
         line_total NUMERIC(12,0) NOT NULL CHECK (line_total >= 0)
       );
+      ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS inventory_quantity NUMERIC(12,2)
+        CHECK(inventory_quantity >= 0 AND inventory_quantity <= quantity);
       CREATE TABLE IF NOT EXISTS refunds (
         id UUID PRIMARY KEY,
         sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
@@ -455,6 +462,7 @@ export async function initializeStore() {
     `)
     await initializeInventoryRevision(pool)
     await initializeStockReservations(pool)
+    await initializeCashLedger(pool)
     await seedInitialAdmin()
     return
   }
@@ -752,15 +760,23 @@ export async function adjustItem(id, input) {
   }
 }
 
-function validateSaleLines(items, requested) {
+function validateSaleLines(items, requested, allowShortfall = false) {
   const itemMap = new Map(items.map((item) => [item.id, item]))
-  return requested.map((line) => {
+  const combined = new Map()
+  for (const line of requested) {
+    if (!Number.isFinite(line.quantity) || line.quantity <= 0 || line.quantity > 10000 || Math.abs(line.quantity * 100 - Math.round(line.quantity * 100)) > .00001) throw userError('Indica una cantidad válida, con hasta dos decimales.')
+    combined.set(line.itemId, (combined.get(line.itemId) || 0) + Math.round(line.quantity * 100))
+  }
+  return [...combined].map(([itemId, cents]) => {
+    const line = { itemId, quantity: cents / 100 }
+    if (cents > 1000000) throw userError('La cantidad máxima por producto es 10.000.')
     const item = itemMap.get(line.itemId)
     if (!item) throw Object.assign(new Error('One of the selected products no longer exists.'), { status: 400 })
     if (!item.sellable || Number(item.price) <= 0) throw Object.assign(new Error(`${item.name} is not configured for sale.`), { status: 400 })
-    if (Number(item.quantity) < line.quantity) throw Object.assign(new Error(`There is not enough stock for ${item.name}.`), { status: 409 })
+    if (!allowShortfall && Number(item.quantity) < line.quantity) throw Object.assign(new Error(`There is not enough stock for ${item.name}.`), { status: 409 })
     const lineTotal = Math.round(Number(item.price) * line.quantity)
-    return { item, quantity: line.quantity, unitPrice: Number(item.price), lineTotal }
+    const inventoryQuantity = Math.min(Number(item.quantity), line.quantity)
+    return { item, quantity: line.quantity, inventoryQuantity, unitPrice: Number(item.price), lineTotal }
   })
 }
 
@@ -787,7 +803,7 @@ function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashRece
     return { ...normalizeSale(existing), checkoutReplayed: true }
   }
   if(actor&&!data.registerSessions.some(s=>s.id===actor.sessionId&&s.userId===actor.id&&!s.closedAt))throw userError('Abre una sesión de caja para vender.',409,'SESSION_REQUIRED')
-  const lines = validateSaleLines(data.items.map(normalizeItem), requested)
+  const lines = validateSaleLines(data.items.map(normalizeItem), requested, Boolean(actor))
   const now = new Date().toISOString()
   const id = crypto.randomUUID()
   const total = lines.reduce((sum, line) => sum + line.lineTotal, 0)
@@ -801,7 +817,7 @@ function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashRece
     total,
     cashReceived,
     cashierId:actor?.id||null,cashierName:actor?.name||'',registerSessionId:actor?.sessionId||null,
-    items: lines.map(({ item, quantity, unitPrice, lineTotal }) => ({ lineId: crypto.randomUUID(), itemId: item.id, name: item.name, unit: item.unit, quantity, unitPrice, lineTotal })),
+    items: lines.map(({ item, quantity, inventoryQuantity, unitPrice, lineTotal }) => ({ lineId: crypto.randomUUID(), itemId: item.id, name: item.name, unit: item.unit, quantity, inventoryQuantity, unitPrice, lineTotal })),
     refunds: [],
     mpOrderId: null,
     mpPaymentId: null,
@@ -829,12 +845,12 @@ function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashRece
   }
   for (const line of lines) {
     const item = data.items.find((entry) => entry.id === line.item.id)
-    item.quantity = Number(item.quantity) - line.quantity
+    item.quantity = Math.round((Number(item.quantity) - line.inventoryQuantity) * 100) / 100
     item.updatedAt = now
     data.movements.unshift({
       id: crypto.randomUUID(), itemId: item.id, itemName: item.name, saleId: id, type: 'stock_out',
-      quantity: -line.quantity, balanceAfter: item.quantity,
-      note: paymentMethod === 'cash' ? `Sale #${shortId(id)}` : `Reserved for card sale #${shortId(id)}`,
+      quantity: -line.inventoryQuantity, balanceAfter: item.quantity,
+      note: `${paymentMethod === 'cash' ? `Sale #${shortId(id)}` : `Reserved for card sale #${shortId(id)}`}${line.quantity > line.inventoryQuantity ? ` · Sin stock registrado: ${Math.round((line.quantity-line.inventoryQuantity)*100)/100}` : ''}`,
       createdAt: now,
     })
   }
@@ -870,7 +886,7 @@ export async function createSale(requested, paymentMethod, checkoutKey = null, c
     if(actor){const session=(await client.query('SELECT id FROM register_sessions WHERE id=$1 AND user_id=$2 AND closed_at IS NULL FOR UPDATE',[actor.sessionId,actor.id])).rows[0];if(!session)throw userError('Abre una sesión de caja para vender.',409,'SESSION_REQUIRED')}
     const ids = [...new Set(requested.map((line) => line.itemId))].sort()
     const itemResult = await client.query('SELECT * FROM items WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE', [ids])
-    const lines = validateSaleLines(itemResult.rows.map(normalizeItem), requested)
+    const lines = validateSaleLines(itemResult.rows.map(normalizeItem), requested, Boolean(actor))
     const id = crypto.randomUUID()
     const total = lines.reduce((sum, line) => sum + line.lineTotal, 0)
     validateCashReceived(cashReceived, paymentMethod, total)
@@ -882,9 +898,9 @@ export async function createSale(requested, paymentMethod, checkoutKey = null, c
     )
     const persistedLines = lines.map((line) => ({ ...line, lineId: crypto.randomUUID() }))
     await client.query(
-      `INSERT INTO sale_items (id, sale_id, item_id, item_name, unit, quantity, unit_price, line_total)
+      `INSERT INTO sale_items (id, sale_id, item_id, item_name, unit, quantity, unit_price, line_total, inventory_quantity)
        SELECT * FROM UNNEST(
-         $1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::numeric[], $7::numeric[], $8::numeric[]
+         $1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::numeric[], $7::numeric[], $8::numeric[], $9::numeric[]
        )`,
       [
         persistedLines.map((line) => line.lineId),
@@ -895,6 +911,7 @@ export async function createSale(requested, paymentMethod, checkoutKey = null, c
         persistedLines.map((line) => line.quantity),
         persistedLines.map((line) => line.unitPrice),
         persistedLines.map((line) => line.lineTotal),
+        persistedLines.map((line) => line.inventoryQuantity),
       ],
     )
     const updatedItems = await client.query(
@@ -906,7 +923,7 @@ export async function createSale(requested, paymentMethod, checkoutKey = null, c
        FROM requested
        WHERE item.id=requested.item_id
        RETURNING item.id, item.quantity`,
-      [persistedLines.map((line) => line.item.id), persistedLines.map((line) => line.quantity)],
+      [persistedLines.map((line) => line.item.id), persistedLines.map((line) => line.inventoryQuantity)],
     )
     const balances = new Map(updatedItems.rows.map((item) => [item.id, item.quantity]))
     const movementNote = paymentMethod === 'cash' ? `Sale #${shortId(id)}` : `Reserved for card sale #${shortId(id)}`
@@ -920,16 +937,16 @@ export async function createSale(requested, paymentMethod, checkoutKey = null, c
         persistedLines.map(() => crypto.randomUUID()),
         persistedLines.map((line) => line.item.id),
         persistedLines.map((line) => line.item.name),
-        persistedLines.map((line) => -line.quantity),
+        persistedLines.map((line) => -line.inventoryQuantity),
         persistedLines.map((line) => balances.get(line.item.id)),
-        persistedLines.map(() => movementNote),
+        persistedLines.map(line => movementNote + (line.quantity > line.inventoryQuantity ? ` · Sin stock registrado: ${Math.round((line.quantity-line.inventoryQuantity)*100)/100}` : '')),
         persistedLines.map(() => id),
       ],
     )
     await client.query('COMMIT')
     return normalizeSale(saleResult.rows[0], persistedLines.map((line) => ({
       id: line.lineId, item_id: line.item.id, item_name: line.item.name, unit: line.item.unit,
-      quantity: line.quantity, unit_price: line.unitPrice, line_total: line.lineTotal,
+      quantity: line.quantity, inventory_quantity: line.inventoryQuantity, unit_price: line.unitPrice, line_total: line.lineTotal,
     })))
   } catch (error) {
     await client.query('ROLLBACK')
@@ -980,11 +997,12 @@ function restoreFileSale(data, sale, status, detail) {
     for (const line of sale.items) {
       const item = data.items.find((entry) => entry.id === line.itemId)
       if (!item) continue
-      item.quantity = Number(item.quantity) + Number(line.quantity)
+      const restored = Number(line.inventoryQuantity ?? line.quantity)
+      item.quantity = Number(item.quantity) + restored
       item.updatedAt = now
       data.movements.unshift({
         id: crypto.randomUUID(), itemId: item.id, itemName: item.name, saleId: sale.id, type: 'stock_in',
-        quantity: Number(line.quantity), balanceAfter: item.quantity,
+        quantity: restored, balanceAfter: item.quantity,
         note: `Card sale #${shortId(sale.id)} ${status} — stock restored`, createdAt: now,
       })
     }
@@ -1157,11 +1175,12 @@ async function updatePostgresSaleStatus(saleId, status, mpStatus, mpStatusDetail
     if (restoreInventory) {
       const itemResult = await client.query('SELECT * FROM sale_items WHERE sale_id=$1 ORDER BY item_id', [saleId])
       for (const line of itemResult.rows) {
-        const updated = await client.query('UPDATE items SET quantity=quantity+$2, updated_at=NOW() WHERE id=$1 RETURNING quantity', [line.item_id, line.quantity])
+        const restored = line.inventory_quantity ?? line.quantity
+        const updated = await client.query('UPDATE items SET quantity=quantity+$2, updated_at=NOW() WHERE id=$1 RETURNING quantity', [line.item_id, restored])
         await client.query(
           `INSERT INTO movements (id, item_id, item_name, type, quantity, balance_after, note, sale_id)
            VALUES ($1,$2,$3,'stock_in',$4,$5,$6,$7)`,
-          [crypto.randomUUID(), line.item_id, line.item_name, line.quantity, updated.rows[0].quantity,
+          [crypto.randomUUID(), line.item_id, line.item_name, restored, updated.rows[0].quantity,
             `Card sale #${shortId(saleId)} ${status} — stock restored`, saleId],
         )
       }
@@ -1469,6 +1488,12 @@ export async function completeRefund(refundId, order = null) {
       const refund = sale.refunds.find((entry) => entry.id === refundId)
       if (refund.status === 'processed') return normalizeSale(sale)
       if (refund.status !== 'pending') throw refundConflict('This refund can no longer be completed.')
+      const register = data.registerSessions.find(s=>s.id===sale.registerSessionId&&!s.closedAt)
+      if(sale.paymentMethod==='cash'&&register){
+        const net=sessionSummary(data.sales.filter(s=>s.registerSessionId===register.id).map(s=>normalizeSale(s)),normalizeRegister(register)).cash.net
+        const ledger=data.cashEntries.filter(e=>e.sessionId===register.id).reduce((sum,e)=>sum+(e.kind==='return'?e.amount:-e.amount),0)
+        if(Number(register.openingCash)+net+ledger<refund.amount)throw userError('No hay efectivo disponible para esta devolución.',409,'INSUFFICIENT_CASH')
+      }
       const now = new Date().toISOString()
       if (refund.restock) {
         for (const line of refund.items) {
@@ -1508,14 +1533,19 @@ export async function completeRefund(refundId, order = null) {
     await client.query('BEGIN')
     // Discover the immutable parent without locking the child first. All paths
     // that lock both an existing sale and its refunds must acquire the sale first.
-    const parent = (await client.query('SELECT sale_id FROM refunds WHERE id=$1', [refundId])).rows[0]
+    const parent = (await client.query('SELECT r.sale_id,s.payment_method,s.register_session_id FROM refunds r JOIN sales s ON s.id=r.sale_id WHERE r.id=$1', [refundId])).rows[0]
     if (!parent) { await client.query('ROLLBACK'); return null }
+    // Cash refunds and withdrawals share the register mutex, before sale/refund
+    // locks. This keeps an expense and a refund from spending the same cash.
+    const cashRegister = parent.payment_method==='cash'&&parent.register_session_id
+      ? (await client.query('SELECT * FROM register_sessions WHERE id=$1 FOR UPDATE',[parent.register_session_id])).rows[0] : null
     const saleResult = await client.query('SELECT * FROM sales WHERE id=$1 FOR UPDATE', [parent.sale_id])
     const refundResult = await client.query('SELECT * FROM refunds WHERE id=$1 FOR UPDATE', [refundId])
     const refund = refundResult.rows[0]
     if (!refund) { await client.query('ROLLBACK'); return null }
     if (refund.status === 'processed') { await client.query('COMMIT'); return getSale(refund.sale_id) }
     if (refund.status !== 'pending') throw refundConflict('This refund can no longer be completed.')
+    if(cashRegister&&!cashRegister.closed_at&&(await getRegisterCashStore().balance(cashRegister,client)).balance<Number(refund.amount))throw userError('No hay efectivo disponible para esta devolución.',409,'INSUFFICIENT_CASH')
     const sale = saleResult.rows[0]
     if (refund.restock) await lockPostgresRefundProducts(client, refundId)
     const itemResult = await client.query('SELECT * FROM refund_items WHERE refund_id=$1 ORDER BY item_name FOR UPDATE', [refundId])
@@ -2059,8 +2089,8 @@ async function closureSales(period, client) {
     ORDER BY s.id`, [period.from.toISOString(), period.to.toISOString()])
   return hydratePostgresSales(rows, client)
 }
-function closureWorkspace(sales, period, existing) {
-  const live = buildClosureSummary(sales, period)
+function closureWorkspace(sales, period, existing, entries = []) {
+  const live = withCashLedger(buildClosureSummary(sales, period), entries, existing?.snapshot?.cashLedger || existing || {})
   const { history = [], snapshot, ...fields } = existing || {}
   const closure = { ...fields, snapshot: snapshot ? { fingerprint: snapshot.fingerprint } : null }
   return { live, closure: existing ? closure : null, today: businessDateAt(),
@@ -2072,14 +2102,14 @@ export async function getCashClosureWorkspace(date) {
   if (!pool) {
     const data = await readFileData()
     return closureWorkspace(data.sales.map(s => normalizeSale(s)), period,
-      normalizeCashClosure(data.cashClosures.find(c => c.businessDate === period.businessDate)))
+      normalizeCashClosure(data.cashClosures.find(c => c.businessDate === period.businessDate)), await getRegisterCashStore().entries(null,null,period))
   }
   const client = await pool.connect()
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
     const sales = await closureSales(period, client)
     const existing = await client.query('SELECT * FROM cash_closures WHERE business_date=$1', [period.businessDate])
-    const workspace = closureWorkspace(sales, period, normalizeCashClosure(existing.rows[0]))
+    const workspace = closureWorkspace(sales, period, normalizeCashClosure(existing.rows[0]), await getRegisterCashStore().entries(null,client,period))
     await client.query('COMMIT')
     return workspace
   } catch (error) { await client.query('ROLLBACK'); throw error }
@@ -2098,15 +2128,16 @@ export async function getCashClosureRevision(date, revision) {
 export async function saveCashClosure(body) {
   const input = cleanClosureInput(body)
   const period = closurePeriod(input.businessDate)
-  const save = (sales, existing) => {
-    const closure = createClosure(buildClosureSummary(sales, period), input, existing)
+  const save = async (sales, existing, queryable) => {
+    const summary = withCashLedger(buildClosureSummary(sales, period), await getRegisterCashStore().entries(null,queryable,period), existing?.snapshot?.cashLedger || existing || {})
+    const closure = createClosure(summary, input, existing)
     const history = existing ? [...existing.history, Object.fromEntries(Object.entries(existing).filter(([key]) => key !== 'history'))] : []
     return { closure, history }
   }
   if (!pool) {
-    return mutateFileData(data => {
+    return mutateFileData(async data => {
       const index = data.cashClosures.findIndex(c => c.businessDate === input.businessDate)
-      const { closure, history } = save(data.sales.map(s => normalizeSale(s)), normalizeCashClosure(data.cashClosures[index]))
+      const { closure, history } = await save(data.sales.map(s => normalizeSale(s)), normalizeCashClosure(data.cashClosures[index]))
       const stored = { ...closure, history }
       if (index >= 0) data.cashClosures[index] = stored
       else data.cashClosures.unshift(stored)
@@ -2117,7 +2148,7 @@ export async function saveCashClosure(body) {
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ')
     const existing = await client.query('SELECT * FROM cash_closures WHERE business_date=$1 FOR UPDATE', [input.businessDate])
-    const { closure: c, history } = save(await closureSales(period, client), normalizeCashClosure(existing.rows[0]))
+    const { closure: c, history } = await save(await closureSales(period, client), normalizeCashClosure(existing.rows[0]),client)
     const result = await client.query(`INSERT INTO cash_closures (
       id,business_date,opening_cash,cash_adjustments,counted_cash,cash_sales,card_sales,total_sales,
       expected_cash,difference,transaction_count,note,closed_at,details
@@ -2151,6 +2182,7 @@ export async function listMovements(limit = 50) {
 
 function normalizeRegister(row) {
   return row ? { id:row.id,userId:row.user_id??row.userId,operator:row.operator,openingCash:Number(row.opening_cash??row.openingCash),
+    additionalCash:Number(row.opening_extra_cash??row.additionalCash??0),sourceSessionId:row.opening_source_session_id??row.sourceSessionId??null,
     openedAt:row.opened_at??row.openedAt,closedAt:row.closed_at??row.closedAt??null,closure:row.closure||null } : null
 }
 export async function listRegisterSessions(user) {
@@ -2160,12 +2192,44 @@ export async function listRegisterSessions(user) {
 export async function getActiveRegisterSession(user) {
   return normalizeRegister(pool?(await pool.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NULL',[user.id])).rows[0]:(await readFileData()).registerSessions.find(s=>s.userId===user.id&&!s.closedAt))
 }
-export async function openRegisterSession(user,openingCash) {
-  if(!Number.isSafeInteger(openingCash)||openingCash<0||openingCash>100000000000)throw userError('Indica un fondo inicial válido en CLP.')
-  const build=()=>({id:crypto.randomUUID(),userId:user.id,operator:user.name,openingCash,openedAt:new Date().toISOString(),closedAt:null,closure:null})
-  if(!pool)return mutateFileData(data=>{const old=data.registerSessions.find(s=>s.userId===user.id&&!s.closedAt);if(old)return normalizeRegister(old);const next=build();data.registerSessions.unshift(next);return next})
+function openingFrom(row) {
+  const previous = normalizeRegister(row)
+  return { openingCash: Number(previous?.closure?.countedCash ?? 0), previousSessionId: previous?.id || null,
+    previousRevision: previous?.closure?.revision || 0, previousClosedAt: previous?.closedAt || null }
+}
+const previousRegister = data => (user => data.registerSessions.filter(s=>s.userId===user.id&&s.closedAt&&s.closure)
+  .sort((a,b)=>new Date(b.closedAt)-new Date(a.closedAt)||b.id.localeCompare(a.id))[0])
+export async function getRegisterOpening(user) {
+  return openingFrom(pool ? (await pool.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NOT NULL AND closure IS NOT NULL ORDER BY closed_at DESC,id DESC LIMIT 1',[user.id])).rows[0]
+    : previousRegister(await readFileData())(user))
+}
+export async function openRegisterSession(user,input) {
+  const body = typeof input === 'number' ? { openingCash: input } : input || {}
+  const build = previous => {
+    const context = openingFrom(previous)
+    if ('previousSessionId' in body && (body.previousSessionId !== context.previousSessionId || body.previousRevision !== context.previousRevision)) throw userError('El cierre anterior cambió. Actualiza el fondo inicial.',409,'OPENING_CHANGED')
+    const base = cashAmount(body.openingCash ?? context.openingCash,'el fondo anterior')
+    const additionalCash = cashAmount(body.additionalCash ?? 0,'el efectivo adicional')
+    const openingCash = cashAmount(base+additionalCash,'el fondo inicial')
+    return {id:crypto.randomUUID(),userId:user.id,operator:user.name,openingCash,additionalCash,sourceSessionId:context.previousSessionId,openedAt:new Date().toISOString(),closedAt:null,closure:null}
+  }
+  if(!pool)return mutateFileData(data=>{
+    const old=data.registerSessions.find(s=>s.userId===user.id&&!s.closedAt)
+    if(old)return normalizeRegister(old)
+    const next=build(previousRegister(data)(user));data.registerSessions.unshift(next);return next
+  })
   const client=await pool.connect()
-  try {await client.query('BEGIN');await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['register:'+user.id]);const old=(await client.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NULL',[user.id])).rows[0];if(old){await client.query('COMMIT');return normalizeRegister(old)}const {rows}=await client.query('INSERT INTO register_sessions(id,user_id,operator,opening_cash) VALUES($1,$2,$3,$4) RETURNING *',[crypto.randomUUID(),user.id,user.name,openingCash]);await client.query('COMMIT');return normalizeRegister(rows[0])}catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
+  try {
+    await client.query('BEGIN')
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['register:'+user.id])
+    const old=(await client.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NULL',[user.id])).rows[0]
+    if(old){await client.query('COMMIT');return normalizeRegister(old)}
+    const previous=(await client.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NOT NULL AND closure IS NOT NULL ORDER BY closed_at DESC,id DESC LIMIT 1 FOR UPDATE',[user.id])).rows[0]
+    const next=build(previous)
+    const {rows}=await client.query(`INSERT INTO register_sessions(id,user_id,operator,opening_cash,opening_extra_cash,opening_source_session_id)
+      VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,[next.id,user.id,user.name,next.openingCash,next.additionalCash,next.sourceSessionId])
+    await client.query('COMMIT');return normalizeRegister(rows[0])
+  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 }
 function ownedRegister(row,user) {const s=normalizeRegister(row);if(!s||(user.role!=='admin'&&s.userId!==user.id))throw userError('Sesión de caja no encontrada.',404);return s}
 function sessionSummary(sales,session) {
@@ -2177,28 +2241,38 @@ function sessionSummary(sales,session) {
   return summary
 }
 async function sessionSales(id,client=pool) {return hydratePostgresSales((await client.query('SELECT * FROM sales WHERE register_session_id=$1 ORDER BY id',[id])).rows,client)}
+export function getRegisterCashStore() {
+  return createRegisterCashStore({pool,readFileData,mutateFileData,normalizeRegister,sessionSales,sessionSummary})
+}
 export async function getRegisterClosure(user,id,full=false) {
-  let session,sales
-  if(!pool){const d=await readFileData();session=ownedRegister(d.registerSessions.find(s=>s.id===id),user);sales=d.sales.filter(s=>s.registerSessionId===id).map(s=>normalizeSale(s))}
-  else {session=ownedRegister((await pool.query('SELECT * FROM register_sessions WHERE id=$1',[id])).rows[0],user);sales=session.closedAt?[]:await sessionSales(id)}
-  const live=session.closedAt?session.closure.snapshot:sessionSummary(sales,session),{history=[],snapshot,...fields}=session.closure||{}
-  return {session:full?session:{...session,closure:session.closure?{revision:session.closure.revision}:null},live,closure:session.closure?{...fields,snapshot:{fingerprint:snapshot.fingerprint}}:null,today:businessDateAt(),stale:false,
-    revisions:[...history,...(session.closure?[session.closure]:[])].map(c=>({revision:c.revision,closedAt:c.closedAt,operator:c.operator,note:c.note,exportable:true}))}
+  const reader=pool?await pool.connect():null
+  try {
+    if(reader)await reader.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    const data=reader?null:await readFileData()
+    const session=ownedRegister(reader?(await reader.query('SELECT * FROM register_sessions WHERE id=$1',[id])).rows[0]:data.registerSessions.find(s=>s.id===id),user)
+    const sales=session.closedAt?[]:reader?await sessionSales(id,reader):data.sales.filter(s=>s.registerSessionId===id).map(s=>normalizeSale(s))
+    const live=session.closedAt?session.closure.snapshot:withCashLedger(sessionSummary(sales,session),await getRegisterCashStore().entries(id,reader||data))
+    const {history=[],snapshot,...fields}=session.closure||{}
+    if(reader)await reader.query('COMMIT')
+    return {session:full?session:{...session,closure:session.closure?{revision:session.closure.revision}:null},live,closure:session.closure?{...fields,snapshot:{fingerprint:snapshot.fingerprint}}:null,today:businessDateAt(),stale:false,
+      revisions:[...history,...(session.closure?[session.closure]:[])].map(c=>({revision:c.revision,closedAt:c.closedAt,operator:c.operator,note:c.note,exportable:true}))}
+  }catch(e){if(reader)await reader.query('ROLLBACK');throw e}finally{reader?.release()}
 }
 export async function saveRegisterClosure(user,id,body) {
-  const make=(session,sales)=>{
+  const make=(session,sales,entries)=>{
     if(session.closedAt&&user.role!=='admin')throw userError('Esta sesión ya está cerrada.',409,'SESSION_CLOSED')
-    const summary=session.closedAt?session.closure.snapshot:sessionSummary(sales,session)
+    const summary=session.closedAt?session.closure.snapshot:withCashLedger(sessionSummary(sales,session),entries)
     if(summary.pendingCount)throw userError('Resuelve los cobros pendientes antes de cerrar la sesión.',409,'PENDING_PAYMENTS')
     const input=cleanClosureInput({...body,businessDate:summary.businessDate,openingCash:session.openingCash,operator:session.operator})
     const result=createClosure(summary,input,session.closure)
     result.scope='session';result.registerSessionId=id;result.userId=session.userId;result.openedAt=session.openedAt;result.closedBy=user.id
+    result.additionalCash=session.additionalCash;result.sourceSessionId=session.sourceSessionId
     result.history=session.closure?[...(session.closure.history||[]),Object.fromEntries(Object.entries(session.closure).filter(([k])=>k!=='history'))]:[]
     return result
   }
-  if(!pool)return mutateFileData(data=>{const s=ownedRegister(data.registerSessions.find(s=>s.id===id),user),closure=make(s,data.sales.filter(s=>s.registerSessionId===id).map(s=>normalizeSale(s)));const row=data.registerSessions.find(s=>s.id===id);row.closedAt ||= closure.closedAt;row.closure=closure;return closure})
+  if(!pool)return mutateFileData(async data=>{const s=ownedRegister(data.registerSessions.find(s=>s.id===id),user),closure=make(s,data.sales.filter(s=>s.registerSessionId===id).map(s=>normalizeSale(s)),await getRegisterCashStore().entries(id));const row=data.registerSessions.find(s=>s.id===id);row.closedAt ||= closure.closedAt;row.closure=closure;return closure})
   const client=await pool.connect()
-  try {await client.query('BEGIN');const session=ownedRegister((await client.query('SELECT * FROM register_sessions WHERE id=$1 FOR UPDATE',[id])).rows[0],user),closure=make(session,await sessionSales(id,client));await client.query('UPDATE register_sessions SET closed_at=COALESCE(closed_at,$2),closure=$3 WHERE id=$1',[id,closure.closedAt,JSON.stringify(closure)]);await client.query('COMMIT');return closure}catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
+  try {await client.query('BEGIN');const session=ownedRegister((await client.query('SELECT * FROM register_sessions WHERE id=$1 FOR UPDATE',[id])).rows[0],user),closure=make(session,await sessionSales(id,client),await getRegisterCashStore().entries(id,client));await client.query('UPDATE register_sessions SET closed_at=COALESCE(closed_at,$2),closure=$3 WHERE id=$1',[id,closure.closedAt,JSON.stringify(closure)]);await client.query('COMMIT');return closure}catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 }
 export async function getRegisterClosureRevision(user,id,revision) {
   const {session}=await getRegisterClosure(user,id,true),latest=session.closure

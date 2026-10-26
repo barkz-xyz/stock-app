@@ -47,6 +47,7 @@ export function requireAdmin(req,res,next){if(req.user?.role==='admin')return ne
 export function cashierBoundary(req,res,next){
   if(req.user.role==='admin')return next()
   const read=req.method==='GET',path=req.path
+  if (read && path==='/register-cash' || req.method==='POST' && /^\/register-cash\/withdrawals(?:\/[0-9a-f-]{36}\/settle)?$/i.test(path)) return next()
   const allowed=read&&(/^\/(events|items|pos\/(config|terminal)|sales|sales\/history)$/.test(path)||/^\/(sales|checkouts)\/[^/]+$/.test(path))||/^\/register-sessions(?:\/[^/]+\/closure(?:\/pdf)?)?$/.test(path)&&['GET','POST'].includes(req.method)||req.method==='POST'&&(/^\/sales\/(cash|card)$/.test(path)||/^\/sales\/[^/]+\/(retry-card|cancel)$/.test(path))
   return allowed?next():res.status(403).json({error:'Tu acceso está limitado a Caja.',code:'FORBIDDEN'})
 }

@@ -21,6 +21,8 @@ The private, read-only inventory integration API is documented in [docs/inventor
 - Review revenue, payment mix, hourly demand, best sellers, and daily cash reconciliation.
 - Carry the last counted close into the next opening, with an optional extra cash contribution.
 - Issue cash withdrawals during a shift and settle expenses with receipt details and the returned excess, reflected in the compressed closing PDF.
+- Optionally count returned cash by banknotes and coins; closing card totals are calculated by POS and cannot be edited.
+- Let cashiers adjust inventory quantities, with staff attribution; product details, prices and settings remain restricted to administrators.
 - Export a lightweight, self-contained daily HTML report.
 - Switch between a soft pastel light theme and a gray dark theme.
 - Optional staff PIN protection with an HTTP-only session cookie.

@@ -310,7 +310,7 @@ app.get('/api/bootstrap', async (req, res, next) => {
   if (!auth.authenticated || auth.user.mustChangePassword) return res.json({ auth })
   try {
     const startedAt = performance.now()
-    const dataPromise=auth.user.role==='admin'?getBootstrapData():Promise.all([listItems(),searchSales({limit:50},auth.user)]).then(([items,history])=>({items:items.filter(i=>i.sellable),movements:[],sales:history.sales,dailySummary:null}))
+    const dataPromise=auth.user.role==='admin'?getBootstrapData():Promise.all([listItems(),searchSales({limit:50},auth.user)]).then(([items,history])=>({items,movements:[],sales:history.sales,dailySummary:null}))
     const [registerSessions,registerSession,data]=await Promise.all([listRegisterSessions(auth.user),getActiveRegisterSession(auth.user),dataPromise])
     res.setHeader('Server-Timing', `data;dur=${elapsedMilliseconds(startedAt)}`)
     const registerOpening = registerSession ? null : await getRegisterOpening(auth.user)
@@ -380,7 +380,7 @@ app.get('/api/items', async (_req, res, next) => {
   try { res.json(await listItems()) } catch (error) { next(error) }
 })
 app.post('/api/inventory/batch', async (req, res, next) => {
-  try { res.json(await saveInventoryBatch(req.body, req.headers['idempotency-key'])) } catch (error) { next(error) }
+    try { res.json(await saveInventoryBatch(req.body, req.headers['idempotency-key'],req.user)) } catch (error) { next(error) }
 })
 app.post('/api/items', async (req, res, next) => {
   try { res.status(201).json(await createItem(cleanItem(req.body))) } catch (error) { next(error) }
@@ -405,7 +405,7 @@ app.post('/api/items/:id/adjust', async (req, res, next) => {
     const quantity = Number(req.body.quantity)
     if (!['stock_in', 'stock_out', 'adjustment'].includes(type)) throw badRequest('Invalid stock action.')
     if (!Number.isFinite(quantity) || quantity < 0 || (type !== 'adjustment' && quantity === 0)) throw badRequest('Enter a valid quantity.')
-    const item = await adjustItem(req.params.id, { type, quantity, note: String(req.body.note || '').trim() })
+      const item = await adjustItem(req.params.id, { type, quantity, note: String(req.body.note || '').trim() },req.user)
     if (!item) return res.status(404).json({ error: 'Product not found.' })
     res.json(item)
   } catch (error) { next(error) }

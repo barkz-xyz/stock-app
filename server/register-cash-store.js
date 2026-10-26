@@ -1,24 +1,25 @@
 import crypto from 'node:crypto'
 import { cashError, cleanWithdrawal, cleanSettlement, cashFingerprint, isCashId, withCashLedger } from './cash-ledger.js'
+import { cashCountTotal } from '../src/cashCount.js'
 
 const normalize = row => ({ id: row.id, sessionId: row.session_id ?? row.sessionId,
   ownerId: row.owner_id ?? row.ownerId, operator: row.operator, amount: Number(row.amount),
   recipient: row.recipient, purpose: row.purpose, status: row.status,
   spentAmount: row.spent_amount == null && row.spentAmount == null ? null : Number(row.spent_amount ?? row.spentAmount),
   documentType: row.document_type ?? row.documentType ?? null, documentNumber: row.document_number ?? row.documentNumber ?? '',
-  supplier: row.supplier || '', detail: row.detail || '',
+  supplier: row.supplier || '', detail: row.detail || '', returnDenominations: row.return_denominations ?? row.returnDenominations ?? null,
   settledSessionId: row.settled_session_id ?? row.settledSessionId ?? null,
   createdAt: new Date(row.created_at ?? row.createdAt).toISOString(),
   settledAt: row.settled_at || row.settledAt ? new Date(row.settled_at ?? row.settledAt).toISOString() : null })
 const withdrawalSelect = `SELECT w.*,s.user_id AS owner_id,s.operator FROM register_cash_withdrawals w JOIN register_sessions s ON s.id=w.session_id`
-const entrySelect = `SELECT e.*,w.recipient,w.purpose,w.spent_amount,w.document_type,w.document_number,w.supplier,w.detail,u.name AS operator
+const entrySelect = `SELECT e.*,w.recipient,w.purpose,w.spent_amount,w.document_type,w.document_number,w.supplier,w.detail,w.return_denominations,u.name AS operator
   FROM register_cash_entries e JOIN register_cash_withdrawals w ON w.id=e.withdrawal_id JOIN app_users u ON u.id=e.created_by`
 const normalizeEntry = row => ({ id: row.id, sessionId: row.session_id ?? row.sessionId,
   withdrawalId: row.withdrawal_id ?? row.withdrawalId, kind: row.kind, amount: Number(row.amount),
   recipient: row.recipient, purpose: row.purpose, operator: row.operator,
   spentAmount: row.spent_amount == null && row.spentAmount == null ? null : Number(row.spent_amount ?? row.spentAmount),
   documentType: row.document_type ?? row.documentType ?? null, documentNumber: row.document_number ?? row.documentNumber ?? '',
-  supplier: row.supplier || '', detail: row.detail || '', createdAt: new Date(row.created_at ?? row.createdAt).toISOString() })
+  supplier: row.supplier || '', detail: row.detail || '', returnDenominations: row.return_denominations ?? row.returnDenominations ?? null, createdAt: new Date(row.created_at ?? row.createdAt).toISOString() })
 
 export function createRegisterCashStore({ pool, readFileData, mutateFileData, normalizeRegister, sessionSales, sessionSummary }) {
   const own = (row, user, open = false) => {
@@ -135,9 +136,10 @@ export function createRegisterCashStore({ pool, readFileData, mutateFileData, no
         if (user.role !== 'admin' && w.ownerId !== user.id) throw cashError('Retiro no encontrado.',404,'NOT_FOUND')
         if (w.status === 'settled') throw cashError('Este retiro ya fue rendido.',409,'WITHDRAWAL_SETTLED')
         if (body.spentAmount > w.amount) throw cashError('El monto usado supera el retiro. Registra otro retiro para el excedente.',409,'SPENT_EXCEEDS_WITHDRAWAL')
+        if (body.returnDenominations && cashCountTotal(body.returnDenominations) !== w.amount-body.spentAmount) throw cashError('El conteo de billetes y monedas no coincide con el vuelto.',409,'RETURN_COUNT_MISMATCH')
         if (pool) await db.query(`UPDATE register_cash_withdrawals SET status='settled',spent_amount=$2,document_type=$3,
-          document_number=$4,supplier=$5,detail=$6,settled_session_id=$7,settled_by=$8,settled_at=NOW() WHERE id=$1`,
-          [id,body.spentAmount,body.documentType,body.documentNumber,body.supplier,body.detail,session.id,user.id])
+          document_number=$4,supplier=$5,detail=$6,settled_session_id=$7,settled_by=$8,settled_at=NOW(),return_denominations=$9 WHERE id=$1`,
+          [id,body.spentAmount,body.documentType,body.documentNumber,body.supplier,body.detail,session.id,user.id,body.returnDenominations||null])
         else {
           const { sessionId, ...details } = body
           Object.assign(data.cashWithdrawals.find(w=>w.id===id),details,{status:'settled',settledSessionId:session.id,settledAt:new Date().toISOString()})

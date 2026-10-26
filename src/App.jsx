@@ -200,7 +200,7 @@ function AdjustForm({ item, initialType = 'stock_in', onSubmit, onClose, busy })
 
 function EmptyState({ onAdd }) {
   const { t } = useI18n()
-  return <div className="empty-state"><div className="empty-art"><PackageOpen size={32} /></div><h3>{t('emptyInventoryTitle')}</h3><button className="button primary" onClick={onAdd}><Plus size={18} /> {t('addFirstProduct')}</button></div>
+  return <div className="empty-state"><div className="empty-art"><PackageOpen size={32} /></div><h3>{t('emptyInventoryTitle')}</h3>{onAdd&&<button className="button primary" onClick={onAdd}><Plus size={18} /> {t('addFirstProduct')}</button>}</div>
 }
 
 const InventoryList = memo(function InventoryList({ items, onAdjust, onEdit, dayKey }) {
@@ -215,7 +215,7 @@ const InventoryList = memo(function InventoryList({ items, onAdjust, onEdit, day
         <div className="quantity-cell"><strong>{formatQuantity(item.quantity)}</strong><span>{unitLabel(item.unit)}</span></div>
         <div><span className={`status ${state.tone}`}><i />{state.label}</span></div>
         <div className={`expiry-cell ${expiry !== null && expiry <= 2 ? 'urgent' : ''}`}>{item.expiryDate ? <><CalendarClock size={16} /><span>{expiry < 0 ? t('expired') : expiry === 0 ? t('todayExpiry') : formatDate(item.expiryDate)}</span></> : <span>—</span>}</div>
-        <div className="row-actions"><button className="button compact" onClick={() => onAdjust(item)}>{t('updateStockButton')}</button><button className="icon-button subtle" onClick={() => onEdit(item)} aria-label={`${t('productDetails')}: ${item.name}`}><Pencil size={17} /></button></div>
+        <div className="row-actions"><button className="button compact" onClick={() => onAdjust(item)}>{t('updateStockButton')}</button>{onEdit&&<button className="icon-button subtle" onClick={() => onEdit(item)} aria-label={`${t('productDetails')}: ${item.name}`}><Pencil size={17} /></button>}</div>
       </article>
     })}
   </div>
@@ -270,7 +270,7 @@ const Inventory = memo(function Inventory({ items, onAdd, onAdjust, onEdit, onBa
   const [search, setSearch] = useState(''), [filter, setFilter] = useState('All'), [category, setCategory] = useState('All')
   const filtered = useMemo(() => items.filter(item => searchText(`${item.name} ${item.sku}`).includes(searchText(search)) &&
     (category === 'All' || item.category === category) && (filter === 'All' || filter === 'Low' && item.quantity <= item.lowStockThreshold || filter === 'Out' && item.quantity === 0)), [items, search, category, filter])
-  return <div className="page enter"><div className="page-actions"><button className="button secondary" onClick={onBatch}><Boxes size={18} />{t('batchInventory')}</button><button className="button primary desktop-action" onClick={onAdd}><Plus size={19} />{t('addProduct')}</button></div>
+  return <div className="page enter"><div className="page-actions"><button className="button secondary" onClick={onBatch}><Boxes size={18} />{t('batchInventory')}</button>{onAdd&&<button className="button primary desktop-action" onClick={onAdd}><Plus size={19} />{t('addProduct')}</button>}</div>
     <div className="toolbar inventory-toolbar"><label className="search-box"><Search size={18} /><input aria-label={t('searchPlaceholder')} value={search} onChange={e => setSearch(e.target.value)} placeholder={t('searchPlaceholder')} />{search && <button onClick={() => setSearch('')} aria-label={t('clearSearch')}><X size={16} /></button>}</label><select value={category} onChange={e => setCategory(e.target.value)} aria-label={t('category')}><option value="All">{t('allCategories')}</option>{categories.filter(c => items.some(i => i.category === c)).map(c => <option key={c} value={c}>{categoryLabel(c)}</option>)}</select><div className="filter-scroll" role="group" aria-label={t('status')}>{[['All','all',items.length],['Low','lowMinimum',items.filter(i => i.quantity <= i.lowStockThreshold).length],['Out','soldOutFilter',items.filter(i => i.quantity === 0).length]].map(([key,label,count]) => <button key={key} className={filter === key ? 'active' : ''} aria-pressed={filter === key} onClick={() => setFilter(key)}>{t(label)}<span>{count}</span></button>)}</div></div>
     <section className="card inventory-card">{items.length === 0 ? <EmptyState onAdd={onAdd} /> : filtered.length ? <InventoryList items={filtered} onAdjust={onAdjust} onEdit={onEdit} dayKey={dayKey} /> : <div className="empty-state compact"><Search size={27} /><h3>{t('noProductsFound')}</h3></div>}</section>
   </div>
@@ -364,7 +364,7 @@ export default function App() {
       if (sequence !== refreshSequence.current) return
       setAuth(next.auth); setSyncError(''); setLastSync(Date.now()); setReconciled(current => current + 1)
       if (!next.auth.authenticated || next.auth.user.mustChangePassword) return
-      setCheckoutUser(next.auth.user.id,next.auth.user.role==='admin');setWorkspaceUser(next.auth.user.id)
+      setCheckoutUser(next.auth.user.id,next.auth.user.role==='admin');setWorkspaceUser(next.auth.user.id,next.auth.user.role==='admin')
       setRegisterSession(next.registerSession);setRegisterSessions(next.registerSessions||[])
       setRegisterOpening(next.registerOpening||null)
       setItems(next.items); setMovements(next.movements); setSales(next.sales); setPosConfig(next.posConfig); setDailySummary(next.dailySummary)
@@ -489,8 +489,8 @@ export default function App() {
     { id:'users',label:language==='es'?'Usuarios':'Users',icon:LockKeyhole },
   ]
   const isAdmin=auth?.user?.role==='admin'
-  const nav=isAdmin?allNav:allNav.filter(n=>n.id==='pos')
-  const blockedPage=auth?.authenticated&&!isAdmin&&page!=='pos'
+  const nav=isAdmin?allNav:allNav.filter(n=>['pos','inventory'].includes(n.id))
+  const blockedPage=auth?.authenticated&&!isAdmin&&!['pos','inventory'].includes(page)
   useEffect(()=>{if(blockedPage&&!auth?.user?.mustChangePassword)router.navigate('/caja',{replace:true})},[blockedPage,auth?.user?.mustChangePassword])
   const pageTitle = nav.find((entry) => entry.id === page)?.label || t('sectionNotFound')
   useEffect(() => { document.title = `${pageTitle} · Bakery POS` }, [pageTitle])
@@ -522,7 +522,7 @@ export default function App() {
         {page === 'pos' && route.registerView === 'close' && <CashClosurePage user={auth.user} sessionId={closureSessionId} sessions={registerSessions} onSessionChange={id=>router.navigate(id?'/caja/cierre?sesion='+id:'/caja/cierre')} refreshToken={reconciled} date={route.closureDate} onClosed={refreshAfterChange} onNavigate={href => router.navigate(href)} setToast={setToast} />}
         {page === 'pos' && route.registerView === 'cash' && <CashMovementsPage user={auth.user} refreshToken={reconciled} onRefresh={refreshAfterChange} onNavigate={navigate} setToast={setToast}/>}
         {page === 'pos' && ['cart','history'].includes(route.registerView) && <SalesCounter user={auth.user} registerOpening={registerOpening} registerSession={registerSession} onOpenRegister={openRegister} serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refreshAfterChange} setToast={setToast} onNavigate={navigate} registerView={route.registerView} historyRevision={route.registerView === 'history' ? reconciled : 0} onRegisterViewChange={changeRegisterView} />}
-        {page === 'inventory' && <Inventory items={items} onBatch={openBatch} onAdd={openAdd} onAdjust={openAdjust} onEdit={openEdit} dayKey={dayKey} />}
+        {page === 'inventory' && <Inventory items={items} onBatch={openBatch} onAdd={isAdmin?openAdd:undefined} onAdjust={openAdjust} onEdit={isAdmin?openEdit:undefined} dayKey={dayKey} />}
         {page === 'metrics' && <MetricsPage metrics={metricsData} range={metricsRange} onRangeChange={setMetricsRange} onRefresh={() => loadMetrics(metricsRange)} onExport={exportDailyReport} loading={metricsLoading} exporting={exportingReport} />}
         {page === 'activity' && <Activity movements={movements} dayKey={dayKey} />}
         {page==='users'&&isAdmin&&<UserManagement currentUser={auth.user} setToast={setToast}/>}

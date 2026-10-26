@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { cleanCashCount } from '../src/cashCount.js'
 
 export const cashError = (message, status = 400, code = 'INVALID_CASH_OPERATION') => Object.assign(new Error(message), { status, code })
 export const isCashId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
@@ -20,12 +21,17 @@ export function cleanWithdrawal(body) {
 export function cleanSettlement(body) {
   if (!body || !isCashId(body.sessionId)) throw cashError('Abre una sesión para recibir el vuelto.', 409, 'SESSION_REQUIRED')
   const spentAmount = cashAmount(body.spentAmount, 'el monto usado')
+  let returnDenominations
+  if (body.returnDenominations != null) {
+    try { returnDenominations = cleanCashCount(body.returnDenominations) } catch (error) { throw cashError(error.message) }
+  }
   if (spentAmount && !['boleta', 'factura'].includes(body.documentType)) throw cashError('Selecciona boleta o factura.')
   return { sessionId: body.sessionId, spentAmount,
     documentType: spentAmount ? body.documentType : 'sin_gasto',
     documentNumber: text(body.documentNumber ?? '', 'el folio', 80, spentAmount > 0),
     supplier: text(body.supplier ?? '', 'el proveedor', 160, spentAmount > 0),
-    detail: text(body.detail, 'el detalle de la rendición', 1000) }
+    detail: text(body.detail, 'el detalle de la rendición', 1000),
+    ...(returnDenominations ? { returnDenominations } : {}) }
 }
 export const cashFingerprint = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export function withCashLedger(summary, entries = [], legacy = {}) {
@@ -53,6 +59,7 @@ export async function initializeCashLedger(pool) {
         OR (status='settled' AND spent_amount IS NOT NULL AND settled_at IS NOT NULL AND settled_session_id IS NOT NULL))
     );
     CREATE INDEX IF NOT EXISTS cash_withdrawals_session_idx ON register_cash_withdrawals(session_id,created_at);
+    ALTER TABLE register_cash_withdrawals ADD COLUMN IF NOT EXISTS return_denominations JSONB;
     CREATE TABLE IF NOT EXISTS register_cash_entries (
       id UUID PRIMARY KEY, session_id UUID NOT NULL REFERENCES register_sessions(id),
       withdrawal_id UUID NOT NULL REFERENCES register_cash_withdrawals(id),

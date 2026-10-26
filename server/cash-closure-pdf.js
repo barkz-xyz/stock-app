@@ -115,7 +115,13 @@ export async function createCashClosurePdf(closure) {
     ['Efectivo esperado', money(closure.expectedCash), true], ['Efectivo contado', money(closure.countedCash), true],
     ['Diferencia', money(closure.difference), true, closure.difference],
   ]
-  const cardRows = [
+  const automaticCard = closure.cardTotalSource === 'pos'
+  const cardRows = automaticCard ? [
+    ['Ventas', money(s.card.gross)], ['Devoluciones', money(-s.card.refunds)],
+    ['Total tarjeta POS', money(s.card.net), true], ['Comisiones informadas', money(s.card.recordedFees)],
+    ['Neto proveedor informado', money(s.card.recordedSettlement)],
+    ['Cobros con datos prov.', `${s.card.reconciledTransactions}/${s.card.transactions}`], ['Lote / referencia', closure.terminalReference || '-'],
+  ] : [
     ['Comisiones informadas', money(s.card.recordedFees)], ['Neto proveedor informado', money(s.card.recordedSettlement)],
     ['Cobros con datos prov.', `${s.card.reconciledTransactions}/${s.card.transactions}`], ['Lote / referencia', closure.terminalReference || '-'],
     ['Esperado sin comisiones', money(s.card.net), true], ['Total terminal', money(closure.countedCard), true],
@@ -130,7 +136,7 @@ export async function createCashClosurePdf(closure) {
   const panelsHeight = 24 + sum(panelRows, row => row.height)
   ensure(panelsHeight + 14)
   const panelTop = y
-  for (const [i, title] of ['02 / ARQUEO EFECTIVO', '03 / CONCILIACIÓN TARJETAS'].entries()) {
+  for (const [i, title] of ['02 / ARQUEO EFECTIVO', automaticCard ? '03 / TARJETA' : '03 / CONCILIACIÓN TARJETAS'].entries()) {
     const x = left + i * (panelWidth + gap)
     page.drawRectangle({ x, y: panelTop - panelsHeight, width: panelWidth, height: panelsHeight, borderColor: rule, borderWidth: .5 })
     page.drawRectangle({ x, y: panelTop - 23, width: panelWidth, height: 23, color: wash })

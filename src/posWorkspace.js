@@ -1,5 +1,15 @@
 let draftKey = 'bakery-cart-draft'
-export function setWorkspaceUser(id){draftKey=id?`bakery-cart-draft:${id}`:'bakery-cart-draft'}
+let batchKey = 'bakery-pending-stock-batch'
+export function setWorkspaceUser(id,admin=false){
+  draftKey=id?`bakery-cart-draft:${id}`:'bakery-cart-draft'
+  batchKey=id?`bakery-pending-stock-batch:${id}`:'bakery-pending-stock-batch'
+  // Previously only administrators could create batches. Preserve their old
+  // recovery attempt without sharing it with newly authorized cashiers.
+  if(id&&admin)try{
+    const legacy=globalThis.sessionStorage?.getItem('bakery-pending-stock-batch')
+    if(legacy&&!globalThis.sessionStorage.getItem(batchKey)){globalThis.sessionStorage.setItem(batchKey,legacy);globalThis.sessionStorage.removeItem('bakery-pending-stock-batch')}
+  }catch{/* Storage remains optional. */}
+}
 const favoriteKey = 'bakery-favorite-products'
 export const searchText = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 export function loadCartDraft(storage = globalThis.sessionStorage) {
@@ -31,10 +41,10 @@ export function cashTender(total, received) {
 
 export function loadPendingBatch() {
   try {
-    const saved = JSON.parse(globalThis.sessionStorage?.getItem('bakery-pending-stock-batch') || 'null')
+    const saved = JSON.parse(globalThis.sessionStorage?.getItem(batchKey) || 'null')
     return saved?.key && Array.isArray(saved.body?.items) && saved.body.items.length && Array.isArray(saved.rows) ? saved : null
   } catch { return null }
 }
 export function savePendingBatch(value) {
-  try { if (value) globalThis.sessionStorage?.setItem('bakery-pending-stock-batch', JSON.stringify(value)); else globalThis.sessionStorage?.removeItem('bakery-pending-stock-batch') } catch { /* In-memory retry still uses the same key. */ }
+  try { if (value) globalThis.sessionStorage?.setItem(batchKey, JSON.stringify(value)); else globalThis.sessionStorage?.removeItem(batchKey) } catch { /* In-memory retry still uses the same key. */ }
 }

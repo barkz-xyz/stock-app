@@ -33,7 +33,8 @@ export function inventoryItem(row) {
 }
 
 export function inventoryRepresentation(rows, single = false) {
-  const items = rows.map(inventoryItem).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  const items = rows.map(inventoryItem).filter(item => Number(item.stockQuantity) > 0).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  if (single && !items.length) throw integrationError('Product not found.', 404, 'NOT_FOUND')
   const data = single ? items[0] : { apiVersion: '1', inventoryPoolId: 'global', complete: true, count: items.length, items }
   const body = JSON.stringify(data)
   return { body, etag: `W/"inventory-${crypto.createHash('sha256').update(body).digest('base64url')}"` }

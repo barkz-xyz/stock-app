@@ -14,6 +14,8 @@ La creación de líneas de devolución también implica bloqueos FK sobre produc
 
 ## Orden auditado
 
+Actualización de caja del 26-10-2026: la finalización de una devolución **en efectivo** adquiere primero la sesión de caja original, antes de venta → devolución → productos. Comparte ese mutex con retiros, ventas y cierre. Las devoluciones Point conservan el orden de esta tabla. Véase [cash-register-operations.md](cash-register-operations.md).
+
 Regla común: **todos los productos existentes afectados, en UUID ascendente, antes de modificar cualquiera de ellos o adquirir la revisión**. No se adquieren productos adicionales después de bloquear la revisión. Las llamadas a proveedores quedan fuera de las transacciones de stock.
 
 | Camino | Orden y observaciones |

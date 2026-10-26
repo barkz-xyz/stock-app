@@ -33,10 +33,10 @@ test('PostgreSQL inventory credentials and quotas work across independent pools 
     const before = (await secondPool.query('SELECT row_to_json(i) AS row FROM items i ORDER BY id')).rows
     const ledger = await secondPool.query('SELECT (SELECT count(*) FROM movements) AS movements,(SELECT count(*) FROM sales) AS sales')
     const exported = JSON.parse(inventoryRepresentation(await integration.readInventory()).body)
-    assert.equal(exported.count, 2)
+    assert.equal(exported.count, 1)
     assert.equal(exported.items.find(row => row.id === item.id).stockQuantity, '12.25')
     assert.equal(exported.items.find(row => row.id === item.id).expiryDate, '2026-12-31')
-    assert.ok(exported.items.some(row => !row.sellable && row.stockQuantity === '0.00'))
+    assert.ok(exported.items.every(row => Number(row.stockQuantity)>0))
     assert.equal((await integration.readInventory(item.id)).length, 1)
     const requests = await Promise.all(Array.from({ length: 30 }, (_, index) => (index % 2 ? integration : other).consumeLimits([
       { key: 'same-client:minute', seconds: 86400, limit: 7 }, { key: 'same-client:burst', seconds: 86400, limit: 20 },

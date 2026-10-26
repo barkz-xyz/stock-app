@@ -2,6 +2,8 @@
 
 Las reservas usan el saldo neto disponible que ya consume Caja. Reservar descuenta una vez; confirmar no vuelve a descontar; liberar o vencer repone una vez. El pedido comercial, los compradores y los cobros online permanecen en el repositorio `bakery-checkout`. Las reservas confirmadas generan movimientos de inventario, sin incluir cobros web en cierres de efectivo o Point.
 
+Las ventas autenticadas del mostrador pueden superar el saldo registrado: se conserva el saldo mínimo en cero y se registra `inventoryQuantity` (descuento real) y `unstockedQuantity` (faltante) por línea. Esta excepción no se aplica a reservas web, que siguen exigiendo saldo completo. Una cancelación Point restituye sólo `inventoryQuantity`; no inventa stock por la parte sin registro ni readquiere unidades de reservas online. Por tanto, puede haber varias ventas POS con faltante, pero la suma de asignaciones de stock registrado entre canales sigue siendo exclusiva. Una devolución con restitución es una decisión explícita sobre productos físicamente devueltos y suma la cantidad efectivamente retornada.
+
 ## Activación y permisos
 
 Se requiere PostgreSQL para todas las reservas, incluso en desarrollo. El arranque rechaza activar escrituras con almacenamiento JSON o con la API desactivada.

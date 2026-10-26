@@ -2,12 +2,12 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Bakery POS API de inventario y reservas",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "API privada entre servidores. Lectura con inventory:read; reservas con inventory:reserve, PostgreSQL e INVENTORY_RESERVATIONS_ENABLED=true. El checkout separado conserva pedidos, compradores y pagos. Ver inventory-api.md y stock-reservations.md."
   },
   "x-status": "implemented",
   "x-prepared-at": "2026-10-20",
-  "x-inventory-semantics": "stockQuantity es items.quantity: saldo neto disponible, con ventas y reservas Point/online ya descontadas. Confirmar una reserva no descuenta otra vez. Liberar o vencer restituye una sola vez.",
+  "x-inventory-semantics": "stockQuantity es items.quantity: saldo neto disponible, con ventas y reservas Point/online ya descontadas. Confirmar una reserva no descuenta otra vez. Liberar o vencer restituye una sola vez. El catálogo de lectura omite saldo cero; POS registra faltantes por separado y las reservas web siguen exigiendo saldo positivo suficiente.",
   "servers": [
     {
       "url": "/",
@@ -37,7 +37,7 @@
         ],
         "operationId": "getInventorySnapshot",
         "summary": "Consultar todo el inventario vigente",
-        "description": "Snapshot completo de una única lectura consistente, ordenado por UUID. Incluye stock cero, sellable=false y SKU faltante. No admite filtros ni páginas en esta primera entrega. count se obtiene de los mismos items enviados. Un fallo de base de datos es un error, no un array vacío. El cliente debe ignorar campos adicionales futuros. Evaluar If-None-Match sólo después de autenticar y autorizar; la representación no contiene timestamps generados por petición.",
+        "description": "Snapshot completo de una única lectura consistente, ordenado por UUID. Sólo incluye saldo positivo; conserva sellable=false y SKU faltante si hay saldo. complete=true corresponde a todo el catálogo con saldo positivo, incluso si queda vacío. Los UUID ausentes ya no están disponibles. No admite filtros ni páginas en esta primera entrega. count se obtiene de los mismos items enviados. Un fallo de base de datos es un error, no un array vacío. El cliente debe ignorar campos adicionales futuros. Evaluar If-None-Match sólo después de autenticar y autorizar; la representación no contiene timestamps generados por petición.",
         "x-required-scopes": [
           "inventory:read"
         ],
@@ -135,7 +135,7 @@
         ],
         "operationId": "getInventoryItem",
         "summary": "Consultar un producto por UUID",
-        "description": "Identidad estable por UUID, no por nombre o SKU. Sólo lectura. El ETag corresponde a este recurso y se evalúa tras verificar credencial y permiso.",
+        "description": "Identidad estable por UUID, no por nombre o SKU. Sólo lectura. El ETag corresponde a este recurso y se evalúa tras verificar credencial y permiso. Un producto con stock cero no se exporta y responde 404.",
         "x-required-scopes": [
           "inventory:read"
         ],
@@ -1253,7 +1253,8 @@
             "description": "Unidad actual; por ejemplo pieces o kg. No normalizar por nombre del producto ni usarla para inferir incrementos de venta."
           },
           "stockQuantity": {
-            "$ref": "#/components/schemas/DecimalQuantity"
+            "$ref": "#/components/schemas/DecimalQuantity",
+            "description": "Saldo mayor a cero, en la unidad original y con dos decimales. Agotados omitidos del catálogo."
           },
           "price": {
             "$ref": "#/components/schemas/MoneyCLP"

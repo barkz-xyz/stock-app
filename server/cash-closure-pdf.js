@@ -95,6 +95,7 @@ export async function createCashClosurePdf(closure) {
   note('Responsable:', closure.operator || '-')
   note('Cierre:', `${dateTime.format(new Date(closure.closedAt))}  |  Hora Chile  |  Ref. ${shortId(closure.id)}`)
   if(closure.scope==='session')note('Turno:', `${shortId(closure.registerSessionId)}  |  Apertura ${dateTime.format(new Date(closure.openedAt))}`)
+  if(closure.additionalCash)note('Fondo:',`Anterior ${money(closure.openingCash-closure.additionalCash)} + aporte ${money(closure.additionalCash)}`)
 
   section('01 / VENTAS')
   table([
@@ -158,6 +159,15 @@ export async function createCashClosurePdf(closure) {
     { label: 'Hora', width: 46 }, { label: 'Venta / ref.', width: 120 }, { label: 'Tipo', width: 53 },
     { label: 'Medio', width: 91 }, { label: 'Ingresos', width: 106.5, align: 'right' }, { label: 'Egresos', width: width - 416.5, align: 'right' },
   ], ledgerRows, { continuation: 'MOVIMIENTOS' })
+
+  if (s.cashLedger?.entries.length) {
+    section('05 / RETIROS Y RENDICIONES')
+    table([{label:'Ref. / hora',width:85},{label:'Destinatario / detalle',width:width-305},
+      {label:'Retiro',width:110,align:'right'},{label:'Vuelto',width:110,align:'right'}],
+    s.cashLedger.entries.map(e=>({cells:[`${shortId(e.withdrawalId)} / ${clock.format(new Date(e.createdAt))}`,
+      e.kind==='withdrawal'?`${e.recipient} / ${e.purpose}`:`${e.recipient} / ${e.documentType==='sin_gasto'?'Sin gasto':`${e.documentType} ${e.documentNumber} / ${e.supplier}`} / Usado ${money(e.spentAmount)} / ${e.detail}`,
+      e.kind==='withdrawal'?money(e.amount):'-',e.kind==='return'?money(e.amount):'-']})),{continuation:'RETIROS Y RENDICIONES',fontSize:8})
+  }
 
   if (s.excluded.length) {
     const groups = new Map()

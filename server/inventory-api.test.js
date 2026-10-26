@@ -87,7 +87,7 @@ test('local keys persist only hashes, rotate with overlap, enforce limits and re
 
 test('HTTP integration verifies auth before 304, remains read-only and fails closed on outages', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'bakery-inventory-http-'))
-  const rows = [fixture(), fixture({ quantity: '3.25', sellable: true, sku: 'PAN-1' })]
+  const rows = [fixture({quantity:'1.00'}), fixture({ quantity: '3.25', sellable: true, sku: 'PAN-1' }),fixture()]
   let failInventory = false, consume = true
   const store = createIntegrationStore({ pool: null, dataPath: path.join(directory, 'stock'), readInventory: async id => {
     if (failInventory) throw new Error('postgres password=do-not-leak')
@@ -114,6 +114,8 @@ test('HTTP integration verifies auth before 304, remains read-only and fails clo
   const snapshot = await response.json()
   assert.equal(snapshot.count, 2)
   assert.equal(snapshot.items.find(row => row.id === rows[0].id).sellable, false)
+  assert.ok(snapshot.items.every(row=>Number(row.stockQuantity)>0))
+  assert.equal((await request(`/inventory/${rows[2].id}`)).status,404)
   const etag = response.headers.get('etag')
   const unchanged = await request('/inventory', { headers: { 'If-None-Match': etag } })
   assert.equal(unchanged.status, 304); assert.equal(await unchanged.text(), '')

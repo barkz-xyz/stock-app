@@ -74,12 +74,13 @@ export default function CashClosurePage({ date, onNavigate, setToast, refreshTok
     finally { setBusy(false) }
   }
   const changed = data && form && (form.fingerprint !== data.live.fingerprint || form.expectedRevision !== (data.closure?.revision || 0))
-  const expectedCash = data && form ? Number(form.openingCash || 0) + data.live.cash.net + Number(form.cashIn || 0) - Number(form.cashOut || 0) : 0
+  const cashIn = data?.live.cashLedger?.cashIn ?? Number(form?.cashIn||0), cashOut=data?.live.cashLedger?.cashOut??Number(form?.cashOut||0)
+  const expectedCash = data && form ? Number(form.openingCash || 0) + data.live.cash.net + cashIn - cashOut : 0
   const cashDifference = form?.countedCash === '' ? null : Number(form?.countedCash) - expectedCash
   const cardDifference = form?.countedCard === '' ? null : Number(form?.countedCard) - (data?.live.card.net || 0)
   const readOnly=Boolean(data?.session?.closedAt&&user?.role!=='admin')
   const StatusIcon = changed || data?.stale ? AlertTriangle : data?.closure ? ShieldCheck : Clock3
-  const needsNote = !readOnly && data && form && (cashDifference || cardDifference || Number(form.cashIn) || Number(form.cashOut) || data.live.pendingCount || data.closure)
+  const needsNote = !readOnly && data && form && (cashDifference || cardDifference || data.live.pendingCount || data.closure)
   const amountField = (key, label, hint, signed = false) => <label className="closure-field" key={key}><span>{label}</span><div className="closure-money"><span>$</span><input disabled={readOnly} name={key} type="number" inputMode={signed ? 'text' : 'numeric'} min={signed ? undefined : 0} max="100000000000" step="1" required value={form[key]} onChange={update(key)} readOnly={Boolean(data.session?.closedAt&&user?.role!=='admin')||key==='openingCash'&&Boolean(sessionId)||key === 'countedCash' && form.useDenominations} placeholder="0" /></div>{hint && <small>{hint}</small>}</label>
   const statRow = (label, value, strong = false) => <div className={strong ? 'closure-total' : ''}><span>{label}</span><strong>{money(value)}</strong></div>
   const differenceRow = (label, value) => <div className={`closure-difference ${value == null ? '' : value === 0 ? 'balanced' : 'unbalanced'}`}><span>{label}</span><strong>{value == null ? tx('Por contar', 'Not counted') : value === 0 ? tx('Cuadrado · $0', 'Balanced · $0') : `${value > 0 ? '+' : ''}${money(value)}`}</strong></div>
@@ -111,7 +112,7 @@ export default function CashClosurePage({ date, onNavigate, setToast, refreshTok
           <section className="card closure-method"><header className="card-header"><div className="closure-method-title"><span className="metric-icon sage"><Banknote size={21} /></span><h3>{tx('Efectivo', 'Cash')}</h3></div><small>{data.live.cash.transactions} {tx('ventas', 'sales')}</small></header><div className="closure-method-body">
             <div className="closure-pair">{amountField('openingCash', tx('Fondo inicial', 'Opening cash'))}{amountField('countedCash', tx('Contado', 'Counted cash'))}</div>
             <div className="closure-ledger">{statRow(tx('Ventas', 'Sales'), data.live.cash.gross)}{statRow(tx('Devoluciones', 'Refunds'), -data.live.cash.refunds)}</div>
-            <div className="closure-pair">{amountField('cashIn', tx('Entradas', 'Cash in'))}{amountField('cashOut', tx('Retiros', 'Cash out'))}</div>
+            <div className="closure-ledger-summary">{statRow(tx('Vueltos de retiros','Returned cash'),cashIn)}{statRow(tx('Retiros registrados','Recorded withdrawals'),cashOut)}{!readOnly&&<a href="/caja/retiros" onClick={e=>{e.preventDefault();onNavigate('/caja/retiros')}}>{tx('Ver retiros','View withdrawals')}<ArrowRight size={14}/></a>}</div>
             <label className="closure-check"><input disabled={readOnly} type="checkbox" checked={form.useDenominations} onChange={e => {
               const enabled = e.target.checked
               setForm(f => ({ ...f, useDenominations: enabled, countedCash: enabled ? denominations.reduce((n, value) => n + value * Number(f.denominations[value] || 0), 0) : f.countedCash })); setReviewing(false)

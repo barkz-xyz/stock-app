@@ -15,6 +15,7 @@ const AstryxDeleteDialog = lazy(() => import('./AstryxDeleteDialog.jsx'))
 const SalesCounter = lazy(() => import('./SalesCounter.jsx'))
 const MetricsPage = lazy(() => import('./MetricsPage.jsx'))
 const CashClosurePage = lazy(() => import('./CashClosurePage.jsx'))
+const CashMovementsPage = lazy(() => import('./CashMovementsPage.jsx'))
 const SettingsPage = lazy(() => import('./SettingsPage.jsx'))
 const InventoryBatch = lazy(() => import('./InventoryBatch.jsx'))
 const UserManagement = lazy(() => import('./UserManagement.jsx'))
@@ -292,13 +293,14 @@ export default function App() {
   const routeUrl = useSyncExternalStore(router.subscribe, router.getSnapshot)
   const route = useMemo(() => parseRoute(routeUrl), [routeUrl])
   const page = route.page
-  const isCounterPage = page === 'pos' && route.registerView !== 'close'
+  const isCounterPage = page === 'pos' && ['cart','history'].includes(route.registerView)
   const setPage = page => router.navigate(sectionHref(page))
   const [items, setItems] = useState([])
   const [movements, setMovements] = useState([])
   const [sales, setSales] = useState([])
   const [dailySummary, setDailySummary] = useState(null)
   const [registerSession,setRegisterSession]=useState(null),[registerSessions,setRegisterSessions]=useState([])
+  const [registerOpening,setRegisterOpening]=useState(null)
   const [metricsData, setMetricsData] = useState(null)
   const metricsRange = route.metricsRange
   const setMetricsRange = range => router.navigate(sectionHref('metrics', { range }))
@@ -364,6 +366,7 @@ export default function App() {
       if (!next.auth.authenticated || next.auth.user.mustChangePassword) return
       setCheckoutUser(next.auth.user.id,next.auth.user.role==='admin');setWorkspaceUser(next.auth.user.id)
       setRegisterSession(next.registerSession);setRegisterSessions(next.registerSessions||[])
+      setRegisterOpening(next.registerOpening||null)
       setItems(next.items); setMovements(next.movements); setSales(next.sales); setPosConfig(next.posConfig); setDailySummary(next.dailySummary)
     } catch (error) {
       if (sequence === refreshSequence.current) setSyncError(error.message)
@@ -517,7 +520,8 @@ export default function App() {
       {loading ? <LoadingSkeleton /> : <Suspense fallback={<LoadingSkeleton />}>
         {page === 'dashboard' && <Dashboard items={items} movements={movements} dailySummary={dailySummary} onAdd={openAdd} onAdjust={openAdjust} onGoInventory={goInventory} onGoPos={goPos} dayKey={dayKey} />}
         {page === 'pos' && route.registerView === 'close' && <CashClosurePage user={auth.user} sessionId={closureSessionId} sessions={registerSessions} onSessionChange={id=>router.navigate(id?'/caja/cierre?sesion='+id:'/caja/cierre')} refreshToken={reconciled} date={route.closureDate} onClosed={refreshAfterChange} onNavigate={href => router.navigate(href)} setToast={setToast} />}
-        {page === 'pos' && route.registerView !== 'close' && <SalesCounter user={auth.user} registerSession={registerSession} onOpenRegister={openRegister} serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refreshAfterChange} setToast={setToast} onNavigate={navigate} registerView={route.registerView} historyRevision={route.registerView === 'history' ? reconciled : 0} onRegisterViewChange={changeRegisterView} />}
+        {page === 'pos' && route.registerView === 'cash' && <CashMovementsPage user={auth.user} refreshToken={reconciled} onRefresh={refreshAfterChange} onNavigate={navigate} setToast={setToast}/>}
+        {page === 'pos' && ['cart','history'].includes(route.registerView) && <SalesCounter user={auth.user} registerOpening={registerOpening} registerSession={registerSession} onOpenRegister={openRegister} serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refreshAfterChange} setToast={setToast} onNavigate={navigate} registerView={route.registerView} historyRevision={route.registerView === 'history' ? reconciled : 0} onRegisterViewChange={changeRegisterView} />}
         {page === 'inventory' && <Inventory items={items} onBatch={openBatch} onAdd={openAdd} onAdjust={openAdjust} onEdit={openEdit} dayKey={dayKey} />}
         {page === 'metrics' && <MetricsPage metrics={metricsData} range={metricsRange} onRangeChange={setMetricsRange} onRefresh={() => loadMetrics(metricsRange)} onExport={exportDailyReport} loading={metricsLoading} exporting={exportingReport} />}
         {page === 'activity' && <Activity movements={movements} dayKey={dayKey} />}

@@ -9,7 +9,7 @@ The private, read-only inventory integration API is documented in [docs/inventor
 - Add and edit products, prices, sale availability, low-stock thresholds, SKUs, and expiry dates.
 - Permanently remove discontinued products while retaining historical sales and activity.
 - Record stock in, stock out, count corrections, and a complete movement trail.
-- Build a cart from sellable products currently in stock.
+- Build a cart from sellable products, recording explicit shortfalls for in-person sales beyond tracked stock while keeping inventory non-negative.
 - Record cash sales immediately.
 - Send card sales to a Mercado Pago Point Smart 2 terminal.
 - Keep sales, line-item price snapshots, payment state, and inventory changes in PostgreSQL.
@@ -19,6 +19,8 @@ The private, read-only inventory integration API is documented in [docs/inventor
 - Optionally return refunded items to stock without duplicating inventory movements.
 - Track pending and manually issued credit notes separately from the financial refund.
 - Review revenue, payment mix, hourly demand, best sellers, and daily cash reconciliation.
+- Carry the last counted close into the next opening, with an optional extra cash contribution.
+- Issue cash withdrawals during a shift and settle expenses with receipt details and the returned excess, reflected in the compressed closing PDF.
 - Export a lightweight, self-contained daily HTML report.
 - Switch between a soft pastel light theme and a gray dark theme.
 - Optional staff PIN protection with an HTTP-only session cookie.
@@ -67,7 +69,9 @@ Inventory refresh measurements, local-only fixtures, snapshot consistency and re
 
 ### Section URLs
 
-The app uses normal browser URLs: `/resumen`, `/caja`, `/caja/historial`, `/inventario`, `/metricas`, `/actividad`, and `/configuracion`. `/` redirects within the app to `/resumen`. Metrics periods use `/metricas?periodo=7d` or `periodo=30d`. Refresh, bookmarks, opening navigation links in another tab, and browser Back/Forward retain the selected section. Authentication keeps the destination URL. Unknown sections show a recovery link to the overview. Transient forms and cart filters are not encoded in the URL; unresolved checkouts keep their existing recovery storage.
+The app uses normal browser URLs: `/resumen`, `/caja`, `/caja/historial`, `/caja/retiros`, `/caja/cierre`, `/inventario`, `/metricas`, `/actividad`, and `/configuracion`. `/` redirects within the app to `/resumen`. Metrics periods use `/metricas?periodo=7d` or `periodo=30d`. Refresh, bookmarks, opening navigation links in another tab, and browser Back/Forward retain the selected section. Authentication keeps the destination URL. Unknown sections show a recovery link to the overview. Transient forms and cart filters are not encoded in the URL; unresolved checkouts keep their existing recovery storage.
+
+Cash carry-over, withdrawal settlement, local POS shortfalls, additive migrations, and locking are documented in [docs/cash-register-operations.md](docs/cash-register-operations.md). Registers currently belong to individual staff accounts; a shared physical till is not modelled. Online reservations remain strict, and the integration catalog exports only products with positive stock.
 
 ### Production deployment gate
 

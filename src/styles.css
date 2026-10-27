@@ -1093,7 +1093,7 @@ html[data-theme='light'] .cash-close-card { background: linear-gradient(120deg,#
 
 .closure-page { max-width: 1500px; padding: 24px 24px 40px; }
 .closure-page .card { border-radius: 12px; box-shadow: none; }
-.closure-page .caja-heading { margin-bottom: 14px; }
+.closure-page .caja-heading, .cash-movements-page .caja-heading { margin-bottom: 14px; }
 .closure-context { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .closure-scope-field { position: relative; display: flex; flex: 1; min-width: 0; align-items: center; }
 .closure-scope-field > svg { position: absolute; left: 10px; color: var(--cocoa); pointer-events: none; }
@@ -1197,7 +1197,7 @@ html[data-theme='light'] .cash-close-card { background: linear-gradient(120deg,#
 }
 @media (max-width: 580px) {
   .caja-sections a { padding: 0 11px; font-size: 11px; }.caja-heading { gap: 8px; }.caja-sections { gap: 0; }
-  .closure-page { padding: 14px 14px 24px; }.closure-page .caja-heading { margin-bottom: 12px; }
+  .closure-page { padding: 14px 14px 24px; }.closure-page .caja-heading, .cash-movements-page .caja-heading { margin-bottom: 12px; }
   .closure-context { display: block; padding: 0 8px; }
   .closure-context-meta { gap: 6px; padding: 2px 0; border-top: 1px solid var(--line); border-left: 0; }
   .closure-period { flex: 1; }.closure-period input { width: 100%; max-width: 154px; }

@@ -26,7 +26,7 @@ const ProductTile = memo(function ProductTile({ item, inCart, favorite, locked, 
   return <div className="product-tile"><button className={`sale-product category-${categoryClass(item.category)} ${item.quantity <= 0 ? 'is-untracked' : ''}`} aria-label={`${item.name} · ${formatCurrency(item.price)}`} title={item.name} disabled={locked || inCart >= 10000} onClick={() => onQuantity(item, 1)}>
             <ProductArtwork item={item} />
             {inCart > 0 && <span className="cart-badge">{formatQuantity(inCart)}</span>}
-            <span className="sale-product-label"><strong>{label.title}</strong>{label.variant && <small>{label.variant}</small>}</span>
+            <span className="sale-product-label"><strong><span>{label.title}</span></strong>{label.variant && <small><span>{label.variant}</span></small>}</span>
             <div className="sale-product-footer"><span className="sale-product-price">{formatCurrency(item.price)}</span>{item.quantity > 0 && <span className="sale-product-stock"><b>{formatQuantity(item.quantity)}</b><small>{unitLabel(item.unit)}</small></span>}</div>
             {item.quantity <= 0 ? <i>{t('withoutStock')}</i> : <Plus className="sale-product-add" size={16} />}
           </button><button type="button" className={`favorite-button ${favorite ? 'active' : ''}`} aria-label={`${t(favorite ? 'removeFavorite' : 'addFavorite')}: ${item.name}`} aria-pressed={favorite} onClick={() => onFavorite(item.id)}><Star size={15} fill={favorite ? 'currentColor' : 'none'} /></button></div>
@@ -508,7 +508,7 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
     if (!['All','Favorites'].includes(filter) && !presentCategories.includes(filter)) setFilter('All')
   }, [filter, presentCategories])
 
-  return <div className="page pos-page enter">
+  return <div className="page pos-page">
     <CajaHeader onNavigate={onNavigate} />
     <section className="register-subnav">
       <div className="register-tabs" role="tablist" aria-label={t('registerSections')} onKeyDown={handleRegisterTabKey}>

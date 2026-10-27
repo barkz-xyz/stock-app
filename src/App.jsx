@@ -293,7 +293,7 @@ export default function App() {
   const routeUrl = useSyncExternalStore(router.subscribe, router.getSnapshot)
   const route = useMemo(() => parseRoute(routeUrl), [routeUrl])
   const page = route.page
-  const isCounterPage = page === 'pos' && ['cart','history'].includes(route.registerView)
+  const isCajaPage = page === 'pos'
   const setPage = page => router.navigate(sectionHref(page))
   const [items, setItems] = useState([])
   const [movements, setMovements] = useState([])
@@ -330,8 +330,8 @@ export default function App() {
   const dayKey = new Date().toLocaleDateString('en-CA')
   useEffect(() => { if (route.canonical) router.navigate(route.canonical, { replace: true }) }, [route.canonical])
   useLayoutEffect(() => {
-    if (auth?.authenticated && isCounterPage) window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
-  }, [auth?.authenticated, isCounterPage])
+    if (auth?.authenticated && isCajaPage) window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+  }, [auth?.authenticated, isCajaPage])
   useEffect(() => { setModal(null); setMobileMenu(false) }, [routeUrl])
   useEffect(() => {
     if (!mobileMenu) return
@@ -503,7 +503,7 @@ export default function App() {
 
   if(blockedPage)return <LoadingSkeleton/>
   const closureSessionId=route.registerSessionId||(!isAdmin?(registerSession?.id||registerSessions[0]?.id||'none'):null)
-  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${isCounterPage ? 'is-caja' : ''}`}>
+  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${isCajaPage ? 'is-caja' : ''}`}>
     <aside className={`sidebar ${mobileMenu ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
       <div className="brand"><button ref={brandLogoRef} className="brand-logo" onClick={toggleSidebar} aria-expanded={!sidebarCollapsed} aria-label={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')} title={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')}><span className="brand-mark"><Croissant size={24} /></span></button><span className="brand-copy"><strong>Bakery POS</strong></span><button className="sidebar-toggle" onClick={toggleSidebar} aria-label={t('collapseSidebar')} title={t('collapseSidebar')}><PanelLeftClose size={17} /></button></div>
       <nav>{nav.map(({ id, label, icon: Icon }) => <a key={id} href={sectionHref(id)} aria-current={page === id ? 'page' : undefined} className={page === id ? 'active' : ''} title={sidebarCollapsed ? label : undefined} onClick={event => followSection(event, sectionHref(id))}><Icon size={20} /><span className="nav-label">{label}</span>{page === id && <i />}</a>)}</nav>

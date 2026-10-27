@@ -53,8 +53,9 @@ export default function CashMovementsPage({ user, refreshToken, onRefresh, onNav
   const returnCount=cashCountTotal(returnCounts),countMismatch=useReturnCount&&returnCount!==expectedReturn
   const date = value => new Intl.DateTimeFormat(language==='es'?'es-CL':'en-GB',{dateStyle:'short',timeStyle:'short'}).format(new Date(value))
   const field = (label,value,set,{type='text',min,max,maxLength=300,required=true}={}) => <label className="field"><span>{label}</span><input type={type} inputMode={type==='number'?'numeric':undefined} min={min} max={max} step={type==='number'?'1':undefined} value={value} required={required} maxLength={type==='text'?maxLength:undefined} disabled={busy||Boolean(pending)} onChange={e=>set(e.target.value)}/></label>
-  return <div className="page cash-movements-page enter">
+  return <div className="page caja-detail-page cash-movements-page">
     <CajaHeader active="cash" onNavigate={onNavigate}/>
+    <div className="caja-detail-content">
     {error&&<div className="inline-error" role="alert">{error}</div>}
     {pending&&<div className="card cash-recovery"><span>{tx('Operación por verificar','Operation awaiting verification')}</span><button className="button primary" disabled={busy} onClick={()=>submit(pending)}><RotateCw size={16}/>{tx('Recuperar operación','Recover operation')}</button></div>}
     {!data?<LoadingSkeleton/>:<>
@@ -72,6 +73,7 @@ export default function CashMovementsPage({ user, refreshToken, onRefresh, onNav
         {!data.withdrawals.some(w=>w.status===view)&&<div className="card cash-empty"><Banknote size={27}/><strong>{tx(view==='pending'?'Sin retiros pendientes':'Sin rendiciones recientes',view==='pending'?'No pending withdrawals':'No recent settlements')}</strong></div>}
       </div>
     </>}
+    </div>
     {modal&&<Modal title={modal==='new'?tx('Nuevo retiro','New withdrawal'):tx('Rendir retiro','Settle withdrawal')} closeable={!busy&&!pending} onClose={closeModal}>
       <form className="cash-operation-form" onSubmit={e=>{e.preventDefault();if(!data?.session){setError(tx('Abre una sesión de caja.','Open a register session.'));return}if(modal!=='new'&&countMismatch)return;submit(modal==='new'?{kind:'withdrawal',key:crypto.randomUUID(),body:{sessionId:data.session.id,amount:Number(amount),recipient,purpose}}:{kind:'settlement',id:modal.id,key:crypto.randomUUID(),body:{sessionId:data.session.id,spentAmount:Number(spent),documentType,documentNumber:folio,supplier,detail,...useReturnCount?{returnDenominations:cashCountNumbers(returnCounts)}:{}}})}}>
         {modal==='new'?<>

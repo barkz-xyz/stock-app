@@ -143,7 +143,7 @@ This integration uses Mercado Pago's current Orders API for Point (`POST /v1/ord
    ```
 
 8. Select the **Order (Mercado Pago)** event and add the generated secret to Railway.
-9. Redeploy, open **Ventas**, and tap the Point status control to verify that the terminal reports `PDV`.
+9. Redeploy, open **Configuración → Point**, and refresh the terminal details to verify that it reports `PDV` and is ready to charge.
 
 Official references:
 

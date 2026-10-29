@@ -2,7 +2,7 @@ import { Calculator, ShoppingBasket, Banknote } from 'lucide-react'
 import { useI18n } from './i18n.js'
 import { isPlainNavigation, sectionHref } from './routes.js'
 
-export default function CajaHeader({ active = 'counter', onNavigate }) {
+export default function CajaHeader({ active = 'counter', onNavigate, children }) {
   const { language, t } = useI18n()
   return <section className="page-heading pos-heading caja-heading">
     <nav className="caja-sections" aria-label={language === 'es' ? 'Secciones de caja' : 'Register sections'}>
@@ -13,5 +13,6 @@ export default function CajaHeader({ active = 'counter', onNavigate }) {
         }}><Icon size={16} />{label}</a>
       })}
     </nav>
+    {children}
   </section>
 }

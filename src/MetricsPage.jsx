@@ -47,7 +47,7 @@ export default function MetricsPage({ metrics, range, onRangeChange, onRefresh, 
   const { t, language, formatCurrency } = useI18n()
   if (loading && !metrics) return <LoadingSkeleton />
   const data = metrics || {
-    summary: {}, paymentMethods: { cash: {}, card: {} }, daily: [], hourly: [], topProducts: [], today: {}, cashClosure: null,
+    summary: {}, paymentMethods: { cash: {}, card: {} }, daily: [], hourly: [], topProducts: [],
   }
   const summary = data.summary
   const trendPositive = summary.revenueChangePct !== null && summary.revenueChangePct >= 0

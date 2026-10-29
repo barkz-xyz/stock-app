@@ -366,7 +366,7 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
     if (!pending) return
     setBusy(true)
     try { await acceptSale(await api.checkout(pending.key)) }
-    catch (error) {
+    catch {
       setCheckout({ stage: 'connection-error', total: pending.total, error: t('checkoutUncertain') })
     } finally { setBusy(false) }
   }

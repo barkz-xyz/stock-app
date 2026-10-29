@@ -18,7 +18,7 @@ function request(url, options = {}) {
   if (!read) invalidateReads()
   if (!read && url.startsWith('/api/auth/')) bootstrapData = null
   const generation = readGeneration
-  const conditional = read && (url.startsWith('/api/sales?') || url === '/api/bootstrap')
+  const conditional = read && url === '/api/bootstrap'
   const cached = conditional ? validatedReads.get(url) : null
   const execute = async () => {
     try {
@@ -89,7 +89,6 @@ export function metricsPeriod(range = 'today') {
 
 export const api = {
   bootstrap: () => request('/api/bootstrap'),
-  authStatus: () => request('/api/auth/status'),
   login: (username,password) => request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username,password }) }),
   setupAdmin: body => request('/api/auth/setup',{method:'POST',body:JSON.stringify(body)}),
   changePassword: body => request('/api/auth/password',{method:'POST',body:JSON.stringify(body)}),
@@ -113,16 +112,11 @@ export const api = {
   saveRegisterClosure: (id,body) => request(`/api/register-sessions/${id}/closure`,{method:'POST',body:JSON.stringify(body)}),
   registerPdfUrl: (id,revision) => `/api/register-sessions/${id}/closure/pdf?${new URLSearchParams({revision})}`,
   logout: () => request('/api/auth/logout', { method: 'POST' }),
-  items: () => request('/api/items'),
-  movements: () => request('/api/movements?limit=100'),
-  sales: () => request('/api/sales?limit=50'),
   metrics: (range = 'today', options) => request(`/api/metrics?${new URLSearchParams(metricsPeriod(range))}`, options),
   cashClosure: (date, options) => request(`/api/cash-closures${date ? `?date=${encodeURIComponent(date)}` : ''}`, options),
   saveCashClosure: (closure) => request('/api/cash-closures', { method: 'POST', body: JSON.stringify(closure) }),
   cashClosurePdfUrl: (date, revision) => `/api/cash-closures/${encodeURIComponent(date)}/pdf?${new URLSearchParams({ revision })}`,
   dailyReportUrl: (language = 'es') => `/api/reports/daily?${new URLSearchParams({ ...metricsPeriod('today'), language })}`,
-  posConfig: () => request('/api/pos/config'),
-  terminal: () => request('/api/pos/terminal'),
   posManagement: () => request('/api/pos/management'),
   createPointStore: (store) => request('/api/pos/stores', { method: 'POST', body: JSON.stringify(store) }),
   updatePointStore: (id, store) => request(`/api/pos/stores/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(store) }),

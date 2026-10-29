@@ -4,6 +4,8 @@
   background: var(--canvas);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  --page-gutter: clamp(12px, 1.5vw, 24px);
+  --page-block: 20px;
   --ink: #2c2622;
   --muted: #655c55;
   --faint: #6b625b;
@@ -42,7 +44,7 @@ button { cursor: pointer; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid rgba(109, 69, 53, .2); outline-offset: 2px; }
 h1, h2, h3, p { margin-top: 0; }
 
-.app-shell { --sidebar-width: 210px; --sidebar-collapsed-width: 76px; --sidebar-motion: .34s cubic-bezier(.22,.8,.2,1); --page-gutter: clamp(12px, 1.5vw, 24px); --page-block: 20px; min-height: 100dvh; }
+.app-shell { --sidebar-width: 210px; --sidebar-collapsed-width: 76px; --sidebar-motion: .34s cubic-bezier(.22,.8,.2,1); min-height: 100dvh; }
 .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 30; display: flex; width: var(--sidebar-width); flex-direction: column; padding: 20px 12px 18px; overflow-x: clip; border-right: 1px solid var(--line); background: rgba(255, 253, 249, .92); backdrop-filter: blur(18px); transition: width var(--sidebar-motion); will-change: width; }
 .brand { position: relative; display: flex; width: 100%; min-height: 66px; align-items: flex-start; gap: 10px; padding: 0 5px 24px; color: var(--ink); text-align: left; transition: gap var(--sidebar-motion), padding var(--sidebar-motion); }
 .brand-logo { display: grid; width: 42px; height: 42px; flex: 0 0 auto; padding: 0; place-items: center; border: 0; border-radius: 13px; background: transparent; }

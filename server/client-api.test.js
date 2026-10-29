@@ -28,21 +28,21 @@ test('simultaneous initial reads share a request and failed reads can retry', as
   assert.equal(calls, 3)
 })
 
-test('sales polls validate freshness, retain identity for 304, and accept changed refunds', async (t) => {
-  const oldSales = [{ id: 'sale', refunds: [] }]
-  const newSales = [{ id: 'sale', refunds: [{ status: 'processed', amount: 1000 }] }]
+test('bootstrap validates freshness, retains identity for 304, and accepts changed refunds', async (t) => {
+  const oldSales = { sales: [{ id: 'sale', refunds: [] }], total: 1 }
+  const newSales = { sales: [{ id: 'sale', refunds: [{ status: 'processed', amount: 1000 }] }], total: 1 }
   const requests = []
   const responses = [json(oldSales, '"v1"'), new Response(null, { status: 304 }), json(newSales, '"v2"'), new Response('{"error":"Sign in"}', { status: 401 }), json(newSales, '"v2"')]
   const api = await client(t, async (_url, options) => { requests.push(options); return responses.shift() })
-  const first = await api.sales()
-  assert.equal(await api.sales(), first)
+  const first = await api.bootstrap()
+  assert.equal(await api.bootstrap(), first)
   assert.equal(requests[1].headers.get('If-None-Match'), '"v1"')
   assert.equal(requests[1].cache, 'no-cache')
-  const changed = await api.sales()
+  const changed = await api.bootstrap()
   assert.notEqual(changed, first)
   assert.deepEqual(changed, newSales)
-  await assert.rejects(api.sales(), { status: 401 })
-  await api.sales()
+  await assert.rejects(api.bootstrap(), { status: 401 })
+  await api.bootstrap()
   assert.equal(requests[4].headers.has('If-None-Match'), false)
 })
 
@@ -54,16 +54,16 @@ test('mutations never coalesce and reads cannot reuse a pre-mutation response', 
     if (options.method === 'POST') { writes += 1; return json({ id: writes }) }
     reads += 1
     if (reads === 1) return new Promise(resolve => { resolveOldRead = resolve })
-    if (reads === 2) return json([{ id: 'new' }], '"new"')
+    if (reads === 2) return json({ sales: [{ id: 'new' }], total: 1 }, '"new"')
     assert.equal(options.headers.get('If-None-Match'), '"new"')
     return new Response(null, { status: 304 })
   })
-  const old = api.sales()
+  const old = api.bootstrap()
   await Promise.all([api.cashSale([]), api.cashSale([])])
-  const updated = await api.sales()
-  resolveOldRead(json([{ id: 'old' }], '"old"'))
+  const updated = await api.bootstrap()
+  resolveOldRead(json({ sales: [{ id: 'old' }], total: 1 }, '"old"'))
   await old
-  assert.equal(await api.sales(), updated)
+  assert.equal(await api.bootstrap(), updated)
   assert.equal(writes, 2)
   assert.equal(reads, 3)
 })

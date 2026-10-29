@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, BarChart3, Boxes, CalendarClock, Check, ChevronRight, CirclePlus, Clock3, Croissant, History, LayoutDashboard, LineChart, LockKeyhole, LogOut, Menu, Minus, Moon, PanelLeftClose, PackageOpen, Pencil, Plus, ReceiptText, Search, ShoppingBasket, Settings, SlidersHorizontal, Sparkles, Sun, Trash2, Undo2, X } from 'lucide-react'
+import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, BarChart3, Boxes, CalendarClock, Check, ChevronRight, CirclePlus, Clock3, CloudOff, Croissant, Ellipsis, History, LayoutDashboard, LineChart, LockKeyhole, LogOut, Menu, Minus, Moon, PanelLeftClose, PackageOpen, Pencil, Plus, ReceiptText, Search, ShoppingBasket, Settings, SlidersHorizontal, Sparkles, Sun, Trash2, Undo2, X } from 'lucide-react'
 import { api } from './api.js'
 import { createRefreshCoordinator, watchUpdates } from './liveUpdates.js'
 import { createRouter, isPlainNavigation, parseRoute, sectionHref } from './routes.js'
@@ -8,7 +8,6 @@ import { useI18n } from './i18n.js'
 import { categories, CategoryIcon, categoryClass, formatQuantity, Modal, LoadingSkeleton } from './ui.jsx'
 import { saveCartDraft, searchText, setWorkspaceUser } from './posWorkspace.js'
 import { setCheckoutUser } from './checkoutAttempts.js'
-import { CloudOff, Ellipsis } from 'lucide-react'
 
 const units = ['pieces', 'loaves', 'cakes', 'kg', 'g', 'litres', 'bottles', 'boxes', 'packs']
 const AstryxDeleteDialog = lazy(() => import('./AstryxDeleteDialog.jsx'))
@@ -294,7 +293,6 @@ export default function App() {
   const route = useMemo(() => parseRoute(routeUrl), [routeUrl])
   const page = route.page
   const isCajaPage = page === 'pos'
-  const setPage = page => router.navigate(sectionHref(page))
   const [items, setItems] = useState([])
   const [movements, setMovements] = useState([])
   const [sales, setSales] = useState([])

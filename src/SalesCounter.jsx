@@ -509,13 +509,14 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
   }, [filter, presentCategories])
 
   return <div className="page pos-page">
-    <CajaHeader onNavigate={onNavigate} />
-    <section className="register-subnav">
-      <div className="register-tabs" role="tablist" aria-label={t('registerSections')} onKeyDown={handleRegisterTabKey}>
-        <button type="button" id="caja-cart-tab" role="tab" aria-selected={registerView === 'cart'} aria-controls="caja-cart-panel" tabIndex={registerView === 'cart' ? 0 : -1} onClick={() => setRegisterView('cart')}><ShoppingBasket size={16} />{t('cart')}</button>
-        <button type="button" id="caja-history-tab" role="tab" aria-selected={registerView === 'history'} aria-controls="caja-history-panel" tabIndex={registerView === 'history' ? 0 : -1} onClick={() => setRegisterView('history')}><History size={16} />{t('registerHistory')}</button>
-      </div>
-    </section>
+    <CajaHeader onNavigate={onNavigate}>
+      <section className="register-subnav">
+        <div className="register-tabs" role="tablist" aria-label={t('registerSections')} onKeyDown={handleRegisterTabKey}>
+          <button type="button" id="caja-cart-tab" role="tab" aria-selected={registerView === 'cart'} aria-controls="caja-cart-panel" tabIndex={registerView === 'cart' ? 0 : -1} onClick={() => setRegisterView('cart')}><ShoppingBasket size={16} />{t('cart')}</button>
+          <button type="button" id="caja-history-tab" role="tab" aria-selected={registerView === 'history'} aria-controls="caja-history-panel" tabIndex={registerView === 'history' ? 0 : -1} onClick={() => setRegisterView('history')}><History size={16} />{t('registerHistory')}</button>
+        </div>
+      </section>
+    </CajaHeader>
     {registerView==='cart'&&!registerSession&&!attempt&&<form className="card open-register" aria-label={tx('Abrir caja','Open register')} onSubmit={async e=>{e.preventDefault();setOpening(true);setOpenError('');try{await onOpenRegister({openingCash:Number(openingCash),additionalCash:Number(additionalCash||0),previousSessionId:registerOpening.previousSessionId,previousRevision:registerOpening.previousRevision})}catch(e){setOpenError(e.message)}finally{setOpening(false)}}}><Banknote size={26}/><label className="field"><span>{tx('Fondo anterior · CLP','Previous cash · CLP')}</span><div className="money-input"><span>$</span><input aria-label={tx('Fondo anterior','Previous cash')} type="number" inputMode="numeric" min="0" max="100000000000" step="1" required value={openingCash} onChange={e=>setOpeningCash(e.target.value)}/></div>{registerOpening?.previousClosedAt&&<small>{tx('Último cierre','Last close')} · {new Date(registerOpening.previousClosedAt).toLocaleDateString(language==='es'?'es-CL':'en-GB')}</small>}</label><details><summary>{tx('Agregar efectivo','Add cash')}</summary><label className="field"><span>{tx('Efectivo adicional · CLP','Additional cash · CLP')}</span><div className="money-input"><span>$</span><input aria-label={tx('Efectivo adicional','Additional cash')} type="number" inputMode="numeric" min="0" max="100000000000" step="1" value={additionalCash} placeholder="0" onChange={e=>setAdditionalCash(e.target.value)}/></div></label></details><div className="cash-operation-total"><span>{tx('Fondo inicial','Opening cash')}</span><strong>{formatCurrency(Number(openingCash||0)+Number(additionalCash||0))}</strong></div>{openError&&<div className="inline-error" role="alert">{openError}</div>}<button className="button primary" disabled={opening||!serverAvailable||!registerOpening}>{opening?t('saving'):tx('Abrir caja','Open register')}<ArrowRight size={18}/></button></form>}
     {registerView === 'cart' ? <section className={`pos-layout ${!registerSession&&!attempt?'session-locked':''}`} id="caja-cart-panel" role="tabpanel" aria-labelledby="caja-cart-tab">
       <div className="catalog-panel">

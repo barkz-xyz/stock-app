@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, BarChart3, Boxes, CalendarClock, Check, ChevronRight, CirclePlus, Clock3, Croissant, History, LayoutDashboard, LineChart, LockKeyhole, LogOut, Menu, Minus, Moon, PanelLeftClose, PackageOpen, Pencil, Plus, ReceiptText, Search, ShoppingBasket, Settings, SlidersHorizontal, Sparkles, Sun, Trash2, Undo2, Wifi, X } from 'lucide-react'
+import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, BarChart3, Boxes, CalendarClock, Check, ChevronRight, CirclePlus, Clock3, Croissant, History, LayoutDashboard, LineChart, LockKeyhole, LogOut, Menu, Minus, Moon, PanelLeftClose, PackageOpen, Pencil, Plus, ReceiptText, Search, ShoppingBasket, Settings, SlidersHorizontal, Sparkles, Sun, Trash2, Undo2, X } from 'lucide-react'
 import { api } from './api.js'
 import { createRefreshCoordinator, watchUpdates } from './liveUpdates.js'
 import { createRouter, isPlainNavigation, parseRoute, sectionHref } from './routes.js'
@@ -8,7 +8,7 @@ import { useI18n } from './i18n.js'
 import { categories, CategoryIcon, categoryClass, formatQuantity, Modal, LoadingSkeleton } from './ui.jsx'
 import { saveCartDraft, searchText, setWorkspaceUser } from './posWorkspace.js'
 import { setCheckoutUser } from './checkoutAttempts.js'
-import { Cloud as CloudCheck, CloudOff, Ellipsis, LoaderCircle } from 'lucide-react'
+import { CloudOff, Ellipsis } from 'lucide-react'
 
 const units = ['pieces', 'loaves', 'cakes', 'kg', 'g', 'litres', 'bottles', 'boxes', 'packs']
 const AstryxDeleteDialog = lazy(() => import('./AstryxDeleteDialog.jsx'))
@@ -289,7 +289,7 @@ const Activity = memo(function Activity({ movements, dayKey }) {
 })
 
 export default function App() {
-  const { t, formatDate, formatTime, language } = useI18n()
+  const { t, formatDate, language } = useI18n()
   const routeUrl = useSyncExternalStore(router.subscribe, router.getSnapshot)
   const route = useMemo(() => parseRoute(routeUrl), [routeUrl])
   const page = route.page
@@ -313,9 +313,8 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [toast, setToastState] = useState(null), [issue, setIssue] = useState(null)
   const setToast = useCallback(next => { if (next?.type === 'error' || next?.type === 'warning') setIssue(next); else setToastState(next) }, [])
-  const [syncing, setSyncing] = useState(false), [syncError, setSyncError] = useState(''), [lastSync, setLastSync] = useState(null)
+  const [syncing, setSyncing] = useState(false), [syncError, setSyncError] = useState('')
   const [reconciled, setReconciled] = useState(0)
-  const [pointStatus, setPointStatus] = useState('unchecked')
   const [mobileMenu, setMobileMenu] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem('bakery-sidebar') !== 'expanded')
   const [theme, setTheme] = useState(() => window.localStorage.getItem('bakery-theme') === 'dark' ? 'dark' : 'light')
@@ -362,7 +361,7 @@ export default function App() {
     try {
       const next = await api.bootstrap()
       if (sequence !== refreshSequence.current) return
-      setAuth(next.auth); setSyncError(''); setLastSync(Date.now()); setReconciled(current => current + 1)
+      setAuth(next.auth); setSyncError(''); setReconciled(current => current + 1)
       if (!next.auth.authenticated || next.auth.user.mustChangePassword) return
       setCheckoutUser(next.auth.user.id,next.auth.user.role==='admin');setWorkspaceUser(next.auth.user.id,next.auth.user.role==='admin')
       setRegisterSession(next.registerSession);setRegisterSessions(next.registerSessions||[])
@@ -443,16 +442,6 @@ export default function App() {
       setToast({ type: 'error', message: error.message })
     } finally { setBusy(false) }
   }
-  const checkPoint = async () => {
-    setPointStatus('checking')
-    try {
-      const terminal = await api.terminal()
-      const ready = terminal.ready ?? terminal.connected
-      setPointStatus(ready ? 'ready' : 'error')
-      setToast({ type: ready ? 'success' : 'error', message: ready ? t('pointReady', { id: terminal.label || '' }) : t('pointNeedsPdv') })
-    } catch (error) { setPointStatus('error'); setToast({ type: 'error', message: error.message }) }
-  }
-  useEffect(() => { setPointStatus('unchecked') }, [posConfig.configured, posConfig.terminalLabel])
   const addItem = (form) => perform(() => api.createItem(form), t('productAdded', { name: form.name }))
   const editItem = (item, form) => perform(() => api.updateItem(item.id, form), t('productUpdated', { name: form.name }))
   const deleteItem = (item) => perform(() => api.deleteItem(item.id), t('productDeleted', { name: item.name }))
@@ -512,8 +501,6 @@ export default function App() {
     {mobileMenu && <button className="menu-backdrop" onClick={() => setMobileMenu(false)} aria-label={t('close')} />}
     <main className="main-content">
       <header className="topbar"><button className="icon-button menu-button" onClick={() => setMobileMenu(true)} aria-label={t('openMenu')}><Menu size={21} /></button><div className="topbar-context">{!isAdmin&&<span>{auth.user.name}</span>}<h1>{pageTitle}</h1></div><span className="topbar-spacer" />
-        {isAdmin && <button className={`server-chip ${syncError ? 'offline' : ''}`} onClick={() => refresh().catch(() => {})} disabled={syncing} aria-label={`${t('server')}: ${t(syncError ? 'serverOffline' : syncing ? 'serverSyncing' : 'serverReady')}`} title={`${t('server')} · ${lastSync ? t('syncAt', { time: formatTime(lastSync) }) : t('serverSyncing')}`}>{syncing ? <LoaderCircle size={17} className="spin" /> : syncError ? <CloudOff size={17} /> : <CloudCheck size={17} />}<span>{t(syncError ? 'serverOffline' : syncing ? 'serverSyncing' : 'serverReady')}</span></button>}
-        {isAdmin && page === 'pos' && <button className={`terminal-chip topbar-terminal ${pointStatus === 'ready' ? 'ready' : ''}`} onClick={checkPoint} disabled={!posConfig.configured || pointStatus === 'checking'} aria-label={`${t('pointStatus')}: ${t(pointStatus === 'ready' ? 'readyToCharge' : pointStatus === 'error' ? 'pointCheckFailed' : pointStatus === 'checking' ? 'pointChecking' : 'pointUnchecked')}`} title={posConfig.configured ? t('pointStatus') : t('pointOffline')}><Wifi size={15} /><span className="terminal-dot" /><span className="topbar-terminal-copy"><strong>{posConfig.mockMode ? t('pointDemoMode') : 'Point'}</strong><small>{t(!posConfig.configured ? 'pointOffline' : pointStatus === 'ready' ? 'readyToCharge' : pointStatus === 'error' ? 'pointCheckFailed' : pointStatus === 'checking' ? 'pointChecking' : 'pointUnchecked')}</small></span></button>}
         <span className="signed-user">{auth.user.name}<small>{isAdmin?'Admin':language==='es'?'Cajero':'Cashier'}</small></span><button className="icon-button topbar-logout" onClick={handleLogout} aria-label={t('signOut')} title={t('signOut')}><LogOut size={17}/></button><ThemeToggle theme={theme} onToggle={() => setTheme(current => current === 'dark' ? 'light' : 'dark')} /><div className="topbar-language"><LanguageToggle /></div>{isAdmin&&['dashboard','inventory'].includes(page) && <button className="button primary mobile-add" onClick={() => setModal({ type: 'add' })}><Plus size={20} /><span>{t('add')}</span></button>}<div className="date-chip"><Clock3 size={17} /><span>{formatDate(new Date().toLocaleDateString('en-CA'))}</span></div></header>
       {syncError && <div className="connection-banner" role="alert"><CloudOff size={17} /><span>{t('serverFailed')}</span><button disabled={syncing} onClick={() => refresh().catch(() => {})}>{t('serverRetry')}</button></div>}
       {issue && <div className={`operation-banner ${issue.type}`} role="alert"><AlertTriangle size={17} /><span>{issue.message}</span><button onClick={() => setIssue(null)} aria-label={t('close')}><X size={18} /></button></div>}

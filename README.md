@@ -61,6 +61,8 @@ The app starts with `/api/bootstrap`, which checks the staff session and returns
 
 CAJA, metrics, and Point settings load as separate page modules. React and icons have stable, fingerprinted vendor bundles so ordinary application updates can reuse cached framework code. Product photos remain lazy-loaded and fingerprinted.
 
+Permanent product deletion uses a lazy-loaded Astryx `AlertDialog`. Its styles and language/theme provider stay scoped to the confirmation, preserve the app theme, and provide keyboard focus management. Keep this boundary when changing inventory dialogs; Astryx does not manage application data.
+
 Concurrent GETs share one in-flight request. Bootstrap reads revalidate their ETag; an unchanged snapshot returns `304` and reuses the existing data. Mutations and sign-out invalidate read state. Reads time out after 20 seconds. Authenticated server-sent events refresh the full snapshot after changes; bursts coalesce and changes during an in-flight refresh trigger another read. Hidden tabs close the stream, and returning to the tab reconciles missed changes. A one-minute reconciliation handles day rollover or lost events; disconnected streams fall back to 15-second refreshes. Payment/refund writes are never automatically retried or coalesced. Metrics requests are cancelled when changing ranges or leaving the page, and date/currency formatters are reused per language.
 
 Run `npm run measure:load` against a running local compiled app. Set `PRODUCTION_BASE_URL` and `STAFF_PIN` for authenticated production measurements; the script only reads application data and opens a staff session. Add `-- --legacy` to measure the former five-request startup flow. Results go to `output/performance.json` or `PERFORMANCE_OUTPUT`. The report counts all initial JavaScript, including preloaded vendors; gzip byte counts are estimates and timings use warm HTTP connections, not total browser page-load time.
@@ -197,8 +199,8 @@ A financial refund does not prove that physical products were returned or that a
 Planning and tax research:
 
 - [Product roadmap](ROADMAP.md)
-- [SII architecture summary](SII_DTE_RESEARCH.md)
-- [Detailed SII integration analysis](integraci%C3%B3n%20SII.md)
+- [SII research for a separate tax service](docs/research/sii-integration.md)
+- [Documentation index](docs/README.md)
 
 ## Users and register sessions
 

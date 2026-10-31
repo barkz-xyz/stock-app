@@ -12,8 +12,8 @@ en el inventario local.
 - Terminales: listar, revisar sucursal/caja asociada y cambiar el modo `PDV` o
   `STANDALONE` mediante la API de terminal setup.
 
-La pantalla esta disponible en `Configuracion` despues de iniciar sesion con
-el PIN del personal.
+La pantalla esta disponible en `Configuracion` para una cuenta de administrador
+autenticada. Las cuentas de cajero no pueden administrar Point.
 
 ## Recomendaciones para produccion
 

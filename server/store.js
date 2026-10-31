@@ -169,10 +169,6 @@ function normalizeSale(row, items = row.items || [], refunds = row.refunds || []
     mpTerminalSerial: row.mp_terminal_serial ?? row.mpTerminalSerial ?? '',
     mpTaxSetting: row.mp_tax_setting ?? row.mpTaxSetting ?? '',
     mpReconciledAt: row.mp_reconciled_at ?? row.mpReconciledAt ?? null,
-    pilotReceiptStatus: row.pilot_receipt_status ?? row.pilotReceiptStatus ?? 'not_requested',
-    pilotReceiptActionId: row.pilot_receipt_action_id ?? row.pilotReceiptActionId ?? null,
-    pilotReceiptError: row.pilot_receipt_error ?? row.pilotReceiptError ?? '',
-    pilotReceiptPrintedAt: row.pilot_receipt_printed_at ?? row.pilotReceiptPrintedAt ?? null,
     mpStatus: row.mp_status ?? row.mpStatus ?? null,
     mpStatusDetail: row.mp_status_detail ?? row.mpStatusDetail ?? null,
     inventoryApplied: Boolean(row.inventory_applied ?? row.inventoryApplied),
@@ -273,10 +269,6 @@ export async function initializeStore() {
         mp_terminal_serial TEXT NOT NULL DEFAULT '',
         mp_tax_setting TEXT NOT NULL DEFAULT '',
         mp_reconciled_at TIMESTAMPTZ,
-        pilot_receipt_status TEXT NOT NULL DEFAULT 'not_requested',
-        pilot_receipt_action_id TEXT,
-        pilot_receipt_error TEXT NOT NULL DEFAULT '',
-        pilot_receipt_printed_at TIMESTAMPTZ,
         inventory_applied BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -411,10 +403,6 @@ export async function initializeStore() {
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_terminal_serial TEXT NOT NULL DEFAULT '';
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_tax_setting TEXT NOT NULL DEFAULT '';
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_reconciled_at TIMESTAMPTZ;
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS pilot_receipt_status TEXT NOT NULL DEFAULT 'not_requested';
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS pilot_receipt_action_id TEXT;
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS pilot_receipt_error TEXT NOT NULL DEFAULT '';
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS pilot_receipt_printed_at TIMESTAMPTZ;
       ALTER TABLE refunds ADD COLUMN IF NOT EXISTS mp_reference_id TEXT;
       ALTER TABLE refunds ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'pos';
       ALTER TABLE refunds ADD COLUMN IF NOT EXISTS inventory_review_status TEXT NOT NULL DEFAULT 'resolved';
@@ -835,10 +823,6 @@ function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashRece
     mpTerminalSerial: '',
     mpTaxSetting: '',
     mpReconciledAt: null,
-    pilotReceiptStatus: 'not_requested',
-    pilotReceiptActionId: null,
-    pilotReceiptError: '',
-    pilotReceiptPrintedAt: null,
     mpStatus: null,
     mpStatusDetail: null,
     inventoryApplied: true,
@@ -1269,79 +1253,6 @@ export async function updateSalePaymentDetails(saleId, payment) {
      WHERE id=$1 RETURNING id`,
     [saleId, details.operationId, details.authorizationCode, details.cardBrand, details.cardLastFour,
       details.paymentType, details.feeAmount, details.netReceivedAmount, details.terminalSerial, details.taxSetting],
-  )
-  return rows[0] ? getSale(saleId) : null
-}
-
-export async function claimPilotReceiptPrint(saleId, retryFailed = false, forceReprint = false) {
-  if (!pool) return mutateFileData((data) => {
-    const sale = data.sales.find((entry) => entry.id === saleId)
-    if (!sale || !['paid', 'refunded'].includes(sale.status)) return null
-    const stale = sale.pilotReceiptStatus === 'printing'
-      && Date.now() - new Date(sale.updatedAt || 0).getTime() > 120000
-    const claimable = sale.pilotReceiptStatus === 'not_requested'
-      || stale
-      || (retryFailed && sale.pilotReceiptStatus === 'failed')
-      || (forceReprint && ['sent', 'printed'].includes(sale.pilotReceiptStatus))
-    if (!claimable) return null
-    sale.pilotReceiptStatus = 'printing'
-    sale.pilotReceiptError = ''
-    sale.updatedAt = new Date().toISOString()
-    return normalizeSale(sale)
-  })
-
-  const { rows } = await pool.query(
-    `UPDATE sales SET pilot_receipt_status='printing', pilot_receipt_error='', updated_at=NOW()
-     WHERE id=$1 AND status IN ('paid','refunded')
-       AND (pilot_receipt_status='not_requested'
-          OR (pilot_receipt_status='printing' AND updated_at < NOW() - INTERVAL '2 minutes')
-         OR ($2::boolean AND pilot_receipt_status='failed')
-         OR ($3::boolean AND pilot_receipt_status IN ('sent','printed')))
-     RETURNING id`,
-    [saleId, retryFailed, forceReprint],
-  )
-  return rows[0] ? getSale(saleId) : null
-}
-
-export async function completePilotReceiptPrint(saleId, action) {
-  const actionId = action?.id ? String(action.id) : null
-  const processed = action?.status === 'processed'
-  const receiptStatus = processed ? 'printed' : 'sent'
-  if (!pool) return mutateFileData((data) => {
-    const sale = data.sales.find((entry) => entry.id === saleId)
-    if (!sale) return null
-    sale.pilotReceiptStatus = receiptStatus
-    sale.pilotReceiptActionId = actionId
-    sale.pilotReceiptError = ''
-    const now = new Date().toISOString()
-    if (processed) sale.pilotReceiptPrintedAt = now
-    sale.updatedAt = now
-    return normalizeSale(sale)
-  })
-  const { rows } = await pool.query(
-    `UPDATE sales SET pilot_receipt_status=$3, pilot_receipt_action_id=$2,
-     pilot_receipt_error='', pilot_receipt_printed_at=CASE WHEN $4::boolean THEN NOW() ELSE pilot_receipt_printed_at END,
-     updated_at=NOW()
-     WHERE id=$1 RETURNING id`,
-    [saleId, actionId, receiptStatus, processed],
-  )
-  return rows[0] ? getSale(saleId) : null
-}
-
-export async function failPilotReceiptPrint(saleId, error) {
-  const detail = String(error || 'Point print failed').slice(0, 500)
-  if (!pool) return mutateFileData((data) => {
-    const sale = data.sales.find((entry) => entry.id === saleId)
-    if (!sale) return null
-    sale.pilotReceiptStatus = 'failed'
-    sale.pilotReceiptError = detail
-    sale.updatedAt = new Date().toISOString()
-    return normalizeSale(sale)
-  })
-  const { rows } = await pool.query(
-    `UPDATE sales SET pilot_receipt_status='failed', pilot_receipt_error=$2, updated_at=NOW()
-     WHERE id=$1 RETURNING id`,
-    [saleId, detail],
   )
   return rows[0] ? getSale(saleId) : null
 }

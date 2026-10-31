@@ -1,6 +1,6 @@
 # Bakery POS Roadmap
 
-Updated: 2026-08-05
+Updated: 2026-10-31
 
 This roadmap prioritizes operational correctness before adding breadth. Anything that moves money, stock, or tax documents must be auditable and idempotent.
 
@@ -13,7 +13,7 @@ This roadmap prioritizes operational correctness before adding breadth. Anything
 - [x] Keep refund history and adjust sales metrics and cash closing by processed refunds.
 - [x] Track a pending or manually issued credit note against its refund.
 - [ ] Validate one low-value full refund and one partial refund with the physical Point Smart 2.
-- [ ] Add a dedicated searchable sales and returns history page instead of relying only on recent sales.
+- [x] Search the complete sales and returns history by reference, date, payment method and status.
 
 ## Next: electronic receipts and SII
 
@@ -28,7 +28,7 @@ The target is an in-house DTE integration, not a screen-scraping automation.
 - [ ] Add delivery of the receipt by print, email, or QR and retain the accepted XML plus its audit trail.
 - [ ] Add retry queues and operational alerts for rejected, delayed, or exhausted-folio documents.
 
-See [SII_DTE_RESEARCH.md](SII_DTE_RESEARCH.md) for the architecture summary and [integracion SII](integraci%C3%B3n%20SII.md) for the current regulatory and economic deep dive.
+Historical architecture, regulatory and economic research is consolidated in [the SII research document](docs/research/sii-integration.md). Revalidate its dated findings before implementation; tax issuance remains separate from the POS.
 
 ## Product import
 
@@ -65,7 +65,7 @@ Deferred until sales, returns, and tax issuance are stable.
 
 - [ ] Barcode scanning from the Elo computer and supported Point/SmartApps surfaces.
 - [ ] Discounts, promotions, and price lists with permission controls.
-- [ ] Cashier shifts, register opening, withdrawals, and immutable close history.
+- [x] Cashier shifts, register opening, withdrawals, and versioned close history.
 - [ ] Customer records only where they provide a clear operational or tax benefit.
 - [ ] Receipt lookup by sale ID, Point order, barcode, date, amount, or cashier.
 - [ ] Offline continuity for cash sales with an explicit synchronization queue.

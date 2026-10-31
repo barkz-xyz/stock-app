@@ -1,10 +1,8 @@
 # Integración SII
 
-> Estado: análisis y prompt de implementación futura. No implementa ni activa emisión tributaria.
+> Estado: investigación histórica del 2026-08-08 para un servicio tributario separado, `sii-dte-service`. No implementa ni activa emisión tributaria.
 >
-> Decisión de arquitectura 2026-08-08: el motor tributario se desarrollará en el repositorio independiente `F:\sii-dte-service`; este archivo queda como investigación contextual de `stock-app`.
->
-> Investigación verificada y evidencia operativa revisada: 2026-08-08.
+> Las cuentas, terminales, precios, fuentes normativas y evidencias descritos corresponden a esa investigación; deben verificarse de nuevo antes de una implementación o decisión de producción.
 >
 > Alcance: Atelier del Puerto / `stock-app`, boletas electrónicas de ventas y servicios. No confundir con boletas de honorarios.
 
@@ -190,7 +188,6 @@ Hay páginas antiguas, instructivos y librerías que aún dicen que debe enviars
 
 Fuente: [FAQ SII actualizada el 2026-07-20](https://www.sii.cl/preguntas_frecuentes/bol_electr_vtas_serv/001_380_7679.htm) y [Resolución Ex. SII N° 53 de 2022](https://www.sii.cl/normativa_legislacion/resoluciones/2022/reso53.pdf).
 
-Esta conclusión corrige la afirmación sobre un resumen diario que aparece actualmente en `SII_DTE_RESEARCH.md` y `ROADMAP.md` del repositorio. Esos documentos no deben usarse como fuente normativa sin esta corrección.
 
 ### Entrega al comprador
 
@@ -612,167 +609,7 @@ No desplegar si ocurre cualquiera de estos puntos:
 - dos emisores pueden operar el mismo rango de folios;
 - sólo se ha probado el camino feliz.
 
-## 15. Prompt maestro para una implementación futura
-
-El siguiente bloque está pensado para entregarse a Codex cuando se decida comenzar. Debe acompañarse con las respuestas de Fase 0 y acceso al ambiente de certificación, nunca con secretos escritos en el chat o en Git.
-
-```text
-Actúa como arquitecto y desarrollador senior responsable de implementar una integración tributaria chilena en el repositorio stock-app. Lee primero por completo el archivo "integración SII.md" y usa sus conclusiones como restricciones de diseño. No asumas que una API HTTP exitosa equivale a un DTE aceptado.
-
-OBJETIVO
-
-Integrar stock-app con el SII para emitir, enviar, reconciliar, conservar y entregar boletas electrónicas propias de las ventas gestionadas por la aplicación, evitando contratar un servicio tributario de Mercado Pago sin reemplazarlo como procesador de pagos.
-
-Existen dos Point distintos: (1) el terminal vigente de la panadería, cuyo sistema hoy imprime DTE bajo el RUT del comercio, y (2) el terminal nuevo destinado a stock-app, que no usa Mercado Pago Boletas y todavía no está asociado a la panadería. No asumas que ambos pertenecen a la misma cuenta, que sus comprobantes tienen el mismo valor tributario ni que existe una suscripción activa que cancelar.
-
-La política preferida para independencia es "Siempre emito boleta": DTE 39 propio para todo medio después de confirmar el pago. La política híbrida —voucher para tarjeta/QR y DTE propio para efectivo/transferencia— sólo puede seleccionarse si Fase 0 demuestra asociación correcta del Point, reporte bajo el RUT del emisor y coincidencia con el modelo declarado ante el SII.
-
-ALCANCE INICIAL
-
-- Un emisor/RUT y una sucursal, pero sin decisiones que impidan aislamiento multi-RUT futuro.
-- DTE 39 como documento principal.
-- DTE 41 sólo si Fase 0 demuestra operaciones exentas y autorización.
-- DTE 61 automático o un fallback manual oficial y probado antes de producción.
-- Ambientes de certificación y producción totalmente separados.
-- PostgreSQL obligatorio en producción.
-- Proceso worker separado del servidor web, usando outbox PostgreSQL.
-- Representación impresa/virtual, consulta, retención y auditoría.
-
-FUERA DE ALCANCE
-
-- Reemplazar Mercado Pago como adquirente o procesador de pagos.
-- Automatizar el portal SII con Puppeteer, RUT y clave tributaria.
-- Boletas de honorarios.
-- Factura 33 y otros DTE no aprobados expresamente.
-- RVD productivo diario; sólo artefacto de certificación/legado si el set vigente lo exige.
-- SaaS multiempresa en la primera salida.
-
-PRECONDICIONES: DETENTE Y ENTREGA UN INFORME DE FASE 0 SI FALTA ALGUNA
-
-1. Identidad y situación tributaria del emisor verificadas.
-2. Ambos Point inventariados por separado: propietario, cuenta/collector Mercado Pago, terminal ID/serial, aplicación, tienda, POS, modo operativo, titular/RUT asociado y destino de las liquidaciones.
-3. El Point nuevo, Access Token y collector demostrablemente pertenecen a la cuenta autorizada de la panadería. Si pertenece, reporta o liquida a otro contribuyente, detén la salida productiva; emitir un DTE propio no sanea esa discrepancia.
-4. Modelo voucher/boleta actual confirmado mediante evidencia del SII.
-5. Sistema/proveedor tributario del Point vigente y procedimiento de migración confirmados; no inferir que es Mercado Pago desde el dispositivo impresor.
-6. Tipos DTE autorizados y set de certificación vigente disponibles.
-7. Firmante autorizado y certificado digital vigente disponibles mediante un canal seguro.
-8. CAF de certificación disponible; no usar CAF productivo durante desarrollo.
-9. Sucursales/códigos SII, giro, dirección y datos del emisor validados.
-10. Regla contable para devoluciones y notas de crédito aprobada por contador.
-11. Canal de entrega al comprador decidido, incluyendo fallback si no se puede imprimir en Point.
-12. Responsable operacional para alertas y revisión manual asignado.
-
-FUENTES Y CRITERIO DE AUTORIDAD
-
-- Usa primero resoluciones, XSD, formatos, OpenAPI y guías oficiales vigentes del SII.
-- Verifica nuevamente versiones y fechas antes de programar; hoy el formato de boleta conocido es v4.2 de 2025-09-08 y la OpenAPI es 1.0.5.
-- Si una FAQ, instructivo antiguo, repo o set contradice una resolución posterior, documenta la contradicción y pide confirmación escrita al SII para el set específico.
-- Los repos laravel-dte-api y dte-sii son referencias, no fuente normativa.
-- eboleta-sii y BoletaHonorariosEmitir no pueden ser dependencias ni inspiración de seguridad.
-
-PRIMERA ENTREGA: DISEÑO ANTES DE CÓDIGO
-
-1. Inspecciona el worktree y preserva todos los cambios existentes del usuario.
-2. Describe el flujo actual de efectivo, Point, webhook, polling, inventario, refunds y tax_documents con referencias de archivo/línea.
-3. Documenta por separado el Point vigente y el Point nuevo, y entrega una matriz payment_method x modelo_de_emisión x elegibilidad_del_terminal -> evidencia financiera y evidencia tributaria.
-4. Propón migraciones compatibles y reversibles, sin borrar datos actuales.
-5. Define interfaces para TaxPolicyResolver, DteEngine, SiiBoletaGateway, SiiDteGateway, FolioAllocator, TaxReconciler, ReceiptRenderer y SecretStore.
-6. Define estados, transiciones, invariantes, idempotency keys y restricciones SQL.
-7. Define el modelo de amenazas para PFX, contraseña, CAF, tokens, XML y datos del receptor.
-8. Define la estrategia de certificación, migración, observabilidad, respaldo y reversión.
-9. Presenta el plan en fases con gates verificables. No escribas código productivo hasta aprobar esta entrega.
-
-IMPLEMENTACIÓN TÉCNICA OBLIGATORIA
-
-- Agrega el evento tributario en la misma transacción que confirma la venta pagada.
-- Implementa una verificación fail-closed de collector/cuenta, terminal, tienda, POS, modo y configuración esperada antes de habilitar cobros con el Point nuevo; registra evidencia sanitizada y alerta ante cambios.
-- No bloquees el cobro esperando la red o aceptación final del SII. Después del pago, mantén la confirmación operativa hasta disponer de la representación firmada o registrar una contingencia explícita.
-- Usa PostgreSQL como cola durable y reserva folios con bloqueo transaccional.
-- Impón UNIQUE(issuer_id, dte_type, folio) y UNIQUE(idempotency_key).
-- Guarda un snapshot inmutable de emisor, receptor, líneas, cantidades, precios, descuentos, impuestos, total, medio de pago y política tributaria.
-- Genera XML determinista, valida XSD antes de firmar/enviar y conserva un hash criptográfico.
-- Firma TED con CAF y DTE/sobre con el certificado autorizado según el protocolo oficial exacto.
-- Mantén TLS validado. Elimina cualquier rejectUnauthorized=false, NODE_TLS_REJECT_UNAUTHORIZED=0, curl -k o renegociación insegura.
-- Cifra PFX, contraseña y CAF en reposo con una clave externa a PostgreSQL. Nunca los registres ni los expongas al frontend.
-- Reutiliza token SII dentro de su vigencia de forma segura y renuévalo cuando corresponda.
-- Separa recibido, aceptado, observado y rechazado. HTTP 200 o Track ID no son estado final.
-- Modela Track ID en el sobre/envío y relaciona sus documentos; no impongas una relación 1:1 porque un envío puede contener varios DTE.
-- El texto público "Documento Recibido por el SII" tampoco equivale a `accepted`. Usa la API oficial de estado para reconciliación automática y no automatices la interfaz con CAPTCHA.
-- Ante resultado incierto, consulta/reintenta el mismo XML y folio; jamás reserves otro folio automáticamente.
-- Implementa backoff con jitter, clasificación de errores, dead-letter/manual_review y alertas antes de una hora.
-- Conserva XML firmado y eventos durante el plazo aplicable; minimiza datos en logs.
-- Genera la representación desde el snapshot inmutable inmediatamente después de firmar, sin esperar aceptación final, y registra la entrega impresa/virtual por separado.
-- Si se propone imprimir en el Point, prueba la Printing API con el dispositivo y credenciales reales; no confundas `print_on_terminal: no_ticket` con impresión del DTE y conserva un fallback externo/virtual.
-- Implementa la consulta de boleta conforme al requisito de certificación sin crear un endpoint público fácilmente enumerable ni filtrar datos personales.
-- Trata DTE 61 mediante el gateway DTE general; no lo envíes por la API REST de boletas 39/41 sin evidencia oficial.
-
-REGLAS DE MERCADO PAGO
-
-- Distingue siempre `payment_receipt` financiero, `verified_electronic_voucher`, DTE emitido por el proveedor vigente y DTE propio. No uses `mp_voucher` como nombre genérico de cualquier comprobante Point.
-- Bajo modelo voucher, una venta card/QR acreditada sólo registra `verified_electronic_voucher` y omite 39/41 si existe el comprobante entregable, pertenece al emisor correcto y Fase 0 demostró que el operador lo reporta bajo el RUT y modelo declarados. En otro caso queda en `manual_review`; no resuelvas la duda omitiendo silenciosamente el DTE.
-- Bajo modelo siempre-boleta, sólo encola DTE después de `processed/accredited` y conserva el comprobante Point como evidencia financiera adicional, no como evidencia tributaria primaria.
-- La aceptación del pago, order/payment ID, código de autorización o un campo local como `mp_tax_setting` no prueban que el SII haya recibido un voucher.
-- Un pago pending, failed, cancelled o expired no emite DTE de venta.
-- Un refund de Mercado Pago no implica nota 61 automática si la evidencia original fue sólo voucher.
-- Pago, inventario, tributación y entrega son máquinas de estado separadas y reconciliables.
-
-USO EVENTUAL DE dte-sii
-
-- Evalúalo únicamente en un fork fijado a un commit y detrás de nuestras interfaces.
-- Antes de ejecutarlo elimina TLS inseguro, cookies/folios JSON, secretos hardcodeados y logs XML por defecto.
-- No confíes en README o tipos; prueba la API ejecutable.
-- Sustituye FolioRegistry por PostgreSQL.
-- Crea fixtures propios y verifica firmas/XSD de manera independiente.
-- Si el costo de sanearlo supera el valor reutilizable, implementa el núcleo mínimo desde los XSD oficiales.
-
-PRUEBAS Y EVIDENCIA
-
-- Añade pruebas unitarias de cálculo CLP/IVA, encoding, orden XML, XSD, TED, XMLDSIG, CAF y certificados.
-- Añade pruebas de concurrencia real de folios y de duplicación webhook/polling.
-- Añade fault injection en cada frontera: después de reservar, firmar, enviar y recibir Track ID.
-- Añade integración en ambiente SII de certificación con estados finales verificables.
-- Añade pruebas de política voucher para impedir doble emisión.
-- Añade pruebas de refunds/notas 61 e independencia de inventario.
-- Añade pruebas de no filtración de secretos, TLS fail-closed y aislamiento por emisor.
-- Conserva evidencia sanitizada de casos aceptados/rechazados y el set exacto usado.
-
-MIGRACIÓN Y CUTOVER
-
-- No hagas shadow traffic que envíe DTE productivos duplicados; usa generación local o certificación.
-- Exporta y respalda documentos/datos del sistema tributario asociado al Point vigente antes de la baja; identifica primero al proveedor real y quién controla certificado, CAF y folios.
-- Preferir un CAF/rango nuevo para el sistema propio; cualquier rango legado debe reconciliarse y quedar bajo un único asignador.
-- Registra explícitamente último folio anterior y primero propio.
-- Coordina modelo SII, sistema tributario vigente y activación del motor propio en una ventana controlada. Cancela/revoca Mercado Pago Boletas sólo si Fase 0 confirma que ese servicio está activo.
-- Mantén el Point nuevo como frontera de pagos separada: su asociación comercial debe quedar resuelta antes del corte tributario y no se habilitan dos asignadores del mismo rango.
-- Verifica los primeros documentos aceptados y su RCV antes de considerar completado el corte.
-- Documenta runbooks para SII caído, token, rechazo, CAF agotado, certificado vencido, cola detenida, duplicidad sospechada y rollback operativo.
-
-DEFINITION OF DONE
-
-- Autorización/certificación aplicable confirmada.
-- El Point nuevo y su cuenta/collector, titular/RUT, tienda/POS y liquidación están verificados para la panadería, o el terminal queda explícitamente excluido de producción.
-- Ningún comprobante del Point nuevo se clasifica como voucher tributario sin evidencia verificable de pertenencia, entrega y reporte bajo el modelo SII correcto.
-- Ninguna emisión doble en efectivo, tarjeta, webhook duplicado o retry.
-- Ningún folio duplicado bajo concurrencia o reinicio.
-- Todos los estados SII terminales quedan reconciliados y auditables.
-- Plazo máximo de envío monitorizado con alertas.
-- Certificado/CAF cifrados y TLS validado.
-- Representación entregable y XML recuperable durante la retención.
-- Camino 61 o fallback oficial probado.
-- Migración conciliada entre el sistema tributario vigente, el motor propio, Mercado Pago como procesador de pagos y el RCV.
-- Pruebas, lint/check/build del repositorio en verde.
-- Runbook y documentación operacional revisados por dueño/contador.
-
-FORMA DE TRABAJO
-
-- Implementa en incrementos pequeños y verificables.
-- Antes de cada fase, muestra el diseño y riesgos que cambian decisiones tributarias.
-- No inventes requisitos ni completes con suposiciones datos del emisor.
-- No declares producción lista mientras quede un gate abierto.
-- Al cerrar cada fase, informa archivos modificados, pruebas ejecutadas, evidencia SII y riesgos restantes.
-```
-
-## 16. Fuentes principales
+## 15. Fuentes principales
 
 ### SII
 
@@ -811,7 +648,7 @@ FORMA DE TRABAJO
 - [BoletaHonorariosEmitir](https://github.com/FacTronica/BoletaHonorariosEmitir)
 - [Hilo Reddit analizado](https://www.reddit.com/r/chileIT/comments/1pmhkuv/certificacion_al_sii_mediante_simpleapi/)
 
-## 17. Decisión final propuesta
+## 16. Decisión final propuesta
 
 Para Atelier del Puerto hoy:
 
@@ -823,3 +660,23 @@ Para Atelier del Puerto hoy:
 6. Si se aprueba el desarrollo, comenzar en certificación, probar la entrega —incluida Printing API o su fallback— y ejecutar un cutover con rangos, XML y estados reconciliados.
 
 La respuesta técnica sigue siendo **sí se puede**. Con la evidencia nueva, el problema inmediato no es cancelar Mercado Pago Boletas en el Point nuevo —no está activo—, sino separar y regularizar los dos terminales, descubrir el emisor vigente y diseñar una migración sin omisiones, doble tributación ni pagos liquidados a la cuenta equivocada.
+
+## 17. Referencias de implementación evaluadas
+
+Estas notas proceden del resumen de investigación del 2026-08-05 y conservan su contexto histórico; las licencias y el estado de los proyectos deben revisarse antes de incorporar código.
+
+
+### LibreDTE
+
+[LibreDTE Core](https://github.com/LibreDTE/libredte-lib-core) is the most substantial implementation reviewed: PHP, extensive DTE scope, tests, signing, and SII integration. It is useful as a behavior and architecture reference.
+
+It is licensed under AGPL-3.0 and its repository explicitly states that software using it must publish its source under AGPL. That conflicts with a future proprietary POS unless we deliberately adopt that licensing model. We should not copy or embed it casually.
+
+### sii-chile-cert
+
+[sii-chile-cert](https://github.com/dbenaventep/sii-chile-cert) is an MIT-licensed Python guide and test-oriented implementation covering certification experience, DTE types including 39 and 61, examples, schemas, and known library patches. It is useful for certification fixtures and independent validation, but its small history means it should not become the production tax engine without a security and correctness audit.
+
+### Recommendation
+
+Use the official SII schemas and instructions as the source of truth. Use open-source projects to build test vectors and understand edge cases. Implement our production boundary with explicit tests and keep the option to replace the internal engine without changing the POS.
+

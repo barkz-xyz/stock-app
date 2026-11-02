@@ -30,6 +30,8 @@ test('Point adapter follows the documented Orders API contract', async () => {
     'MERCADOPAGO_ACCESS_TOKEN',
     'MERCADOPAGO_POINT_TERMINAL_ID',
     'MERCADOPAGO_WEBHOOK_SECRET',
+    'MERCADOPAGO_CASH_ENABLED',
+    'MERCADOPAGO_CASH_TAX_CONDITION',
   ])
   const terminalId = 'NEWLAND_N950__SBX0000001'
   const requests = []
@@ -113,12 +115,16 @@ test('Point adapter follows the documented Orders API contract', async () => {
     process.env.MERCADOPAGO_ACCESS_TOKEN = 'test-access-token'
     process.env.MERCADOPAGO_POINT_TERMINAL_ID = terminalId
     process.env.MERCADOPAGO_WEBHOOK_SECRET = 'test-webhook-secret'
+    delete process.env.MERCADOPAGO_CASH_ENABLED
+    delete process.env.MERCADOPAGO_CASH_TAX_CONDITION
     const point = await import(`./mercadopago.js?contract=${Date.now()}`)
     const sale = { id: 'sale-uuid-1', shortId: 'SALE0001', mpExternalReference: 'VENTA-SALE0001', total: 4850, createdAt: new Date().toISOString() }
 
     assert.deepEqual(point.pointConfiguration(), {
       configured: true,
       mockMode: false,
+      cashEnabled: false,
+      cashTaxCondition: 'payment_taxable_iva',
       terminalConfigured: true,
       credentialsCentralized: true,
       credentialStorage: 'server_environment',
@@ -245,6 +251,8 @@ test('built-in Point mock simulates terminal arrival, approval, and cancellation
       id: 'MOCK_POINT_SMART_2', operatingMode: 'PDV', connected: true, online: true, ready: true,
     })
     assert.equal((await point.createPointOrder(sale)).status, 'created')
+    const cash = { ...sale, paymentMethod: 'cash', createdAt: new Date(Date.now() - 2000).toISOString() }
+    assert.deepEqual((await point.getPointOrder(`MOCK-${cash.id}`, cash)).transactions.payments[0].payment_method, { id: 'cash', type: 'cash' })
     assert.equal((await point.getPointOrder('MOCK-mock-sale-1', sale)).status, 'at_terminal')
 
     const olderSale = { ...sale, createdAt: new Date(Date.now() - 1500).toISOString() }
@@ -324,6 +332,106 @@ test('Point infrastructure adapter manages stores, registers, and terminal modes
     assert.equal((await point.deletePointPos('POS-1')).deleted, true)
     assert.equal((await point.setupPointTerminal('NEWLAND_N950__SERIAL', 'PDV')).terminals[0].operating_mode, 'PDV')
     assert.ok(requests.every((request) => ['GET', 'DELETE'].includes(request.method) || request.body !== null))
+  } finally {
+    if (server.listening) await close(server)
+    restoreEnvironment()
+  }
+})
+
+test('Point writes preserve uncertainty and idempotency until the provider confirms their outcome', async () => {
+  const restoreEnvironment = preserveEnvironment([
+    'MERCADOPAGO_API_BASE', 'MERCADOPAGO_MOCK', 'MERCADOPAGO_ACCESS_TOKEN', 'MERCADOPAGO_POINT_TERMINAL_ID',
+  ])
+  const requests = []
+  let outcome
+  const server = http.createServer(async (request, response) => {
+    for await (const chunk of request) {} // Drain the local fixture's request.
+    requests.push({ method: request.method, key: request.headers['x-idempotency-key'] })
+    response.writeHead(outcome.status || 200, {
+      'Content-Type': 'application/json', ...(outcome.truncated ? { 'Content-Length': 4096 } : {}),
+    })
+    if (outcome.truncated) {
+      response.flushHeaders()
+      response.write('{"id":')
+      return setImmediate(() => response.destroy())
+    }
+    response.end(typeof outcome.body === 'string' ? outcome.body : JSON.stringify(outcome.body))
+  })
+  try {
+    const address = await listen(server)
+    process.env.MERCADOPAGO_API_BASE = `http://127.0.0.1:${address.port}`
+    process.env.MERCADOPAGO_MOCK = 'false'
+    process.env.MERCADOPAGO_ACCESS_TOKEN = 'local-fixture-token'
+    process.env.MERCADOPAGO_POINT_TERMINAL_ID = 'LOCAL-TERMINAL'
+    const point = await import(`./mercadopago.js?recovery=${Date.now()}`)
+    const sale = { id: 'stable-sale-key', shortId: 'SALEKEY', total: 1000, mpPaymentId: 'PAY-1' }
+    const refund = { id: 'stable-refund-key', amount: 500, full: false }
+    const operations = [() => point.createPointOrder(sale), () => point.refundPointOrder('ORDER-1', sale, refund)]
+    const uncertain = (error) => error.uncertain === true && error.status >= 500
+    for (const status of [500, 502, 503, 504]) {
+      outcome = { status, body: { message: 'Local provider accepted the operation but could not confirm it.' } }
+      for (const operation of operations) await assert.rejects(operation(), (error) => uncertain(error) && error.mercadoPagoStatus === status)
+    }
+    for (const status of [400, 401, 403, 409, 422, 429]) {
+      outcome = { status, body: { message: 'Local deterministic rejection', code: 'rejected' } }
+      for (const operation of operations) await assert.rejects(operation(), (error) => !error.uncertain && error.mercadoPagoStatus === status && error.mercadoPagoCode === 'rejected')
+    }
+    // A non-JSON rejection is still a rejection; its HTTP status is authoritative.
+    outcome = { status: 400, body: '<html>rejected</html>' }
+    await assert.rejects(operations[0](), (error) => !error.uncertain && error.mercadoPagoStatus === 400)
+    for (const body of ['', '{', 'null', '[]', '{}', '{"id":"ORDER-1","status":"unknown"}']) {
+      outcome = { status: 201, body }
+      for (const operation of operations) await assert.rejects(operation(), uncertain)
+    }
+    outcome = { status: 201, truncated: true }
+    for (const operation of operations) await assert.rejects(operation(), uncertain)
+    for (const confirmation of [
+      { id: 'REF-1', amount: '500', status: 'processing' },
+      { id: 'REF-1', amount: '600', status: 'processed' },
+      { id: 'REF-1', amount: '500', status: 'processed', transaction_id: 'OTHER-PAYMENT' },
+    ]) {
+      outcome = { body: { id: 'ORDER-1', status: 'processed', transactions: { refunds: [confirmation] } } }
+      await assert.rejects(operations[1](), uncertain)
+    }
+    outcome = { body: { id: 'ORDER-1', status: 'created', external_reference: 'ANOTHER-SALE' } }
+    await assert.rejects(operations[0](), uncertain)
+    outcome = { body: { id: 'ORDER-1', status: 'created' } }
+    assert.equal((await operations[0]()).id, 'ORDER-1')
+    outcome = { body: { id: 'ORDER-1', status: 'processed', transactions: { refunds: [{ id: 'REF-1', amount: '500', status: 'processed' }] } } }
+    assert.equal((await operations[1]()).transactions.refunds[0].id, 'REF-1')
+    assert.ok(requests.every((request) => [sale.id, refund.id].includes(request.key)))
+
+    const acceptedRefund = { ...refund, mpRefundId: 'REF-1' }
+    const readsStartedAt = requests.length
+    for (const body of [
+      { id: 'ORDER-1', status: 'processed', transactions: { refunds: [{ id: 'OTHER-REFUND', amount: '500', status: 'processed' }] } },
+      { id: 'ORDER-1', status: 'processed', transactions: { refunds: [{ id: 'REF-1', amount: '500', status: 'processing' }] } },
+    ]) {
+      outcome = { body }
+      await assert.rejects(point.refundPointOrder('ORDER-1', sale, acceptedRefund), (error) => uncertain(error) && error.pointRefundId === acceptedRefund.mpRefundId)
+    }
+    outcome = { status: 503, body: { message: 'Refund read unavailable' } }
+    await assert.rejects(point.refundPointOrder('ORDER-1', sale, acceptedRefund), (error) => uncertain(error) && error.pointRefundId === acceptedRefund.mpRefundId)
+    outcome = { body: { id: 'ORDER-1', status: 'processed', transactions: { refunds: [
+      { id: 'REF-1', amount: '500', status: 'processed' },
+      { id: 'OTHER-REFUND', amount: '500', status: 'processed' },
+    ] } } }
+    const confirmed = await point.refundPointOrder('ORDER-1', sale, acceptedRefund)
+    assert.deepEqual(confirmed.transactions.refunds, [{ id: 'REF-1', amount: '500', status: 'processed' }])
+    assert.ok(requests.slice(readsStartedAt).every((request) => request.method === 'GET' && !request.key), 'Known provider refunds must be polled, never resubmitted')
+
+    for (const invalid of [
+      { status: 503, body: { message: 'Read unavailable' } },
+      { body: 'null' }, { body: '{}' }, { body: '{' }, { truncated: true },
+      { body: { id: 'OTHER-ORDER', status: 'failed' } },
+      { body: { id: 'ORDER-1', status: 'unknown' } },
+    ]) {
+      outcome = invalid
+      await assert.rejects(point.getPointOrder('ORDER-1', sale), (error) => error.status >= 500 && !error.uncertain)
+    }
+    await close(server)
+    for (const operation of operations) await assert.rejects(operation(), uncertain)
+    await assert.rejects(point.getPointOrder('ORDER-1', sale), (error) => error.status === 502 && !error.uncertain)
   } finally {
     if (server.listening) await close(server)
     restoreEnvironment()

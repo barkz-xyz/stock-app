@@ -2,6 +2,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, Check, ChevronRight, ChevronUp, ChevronDown, CreditCard, FileCheck2, History, LayoutDashboard, Minus, PackageOpen, Plus, ReceiptText, RotateCw, Search, ShoppingBasket, Monitor, Star, Trash2, Undo2, Wifi, X } from 'lucide-react'
 import { api } from './api.js'
 import { beginCheckout, clearCheckout, pendingCheckout } from './checkoutAttempts.js'
+import { saleUsesPoint } from './pointPayments.js'
+import { beginRefund, clearRefund, pendingRefund } from './refundAttempts.js'
 import { useI18n } from './i18n.js'
 import { categories, CategoryIcon, categoryClass, formatQuantity, Modal } from './ui.jsx'
 
@@ -49,6 +51,7 @@ function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelS
   const [cashMode, setCashMode] = useState(false), [received, setReceived] = useState('')
   const tender = cashTender(checkout.total, received)
   const sale = checkout.sale
+  const pointCash = sale?.paymentMethod === 'cash' || checkout.paymentMethod === 'cash'
   const pending = checkout.stage === 'processing' || checkout.stage === 'connecting'
   const finalState = sale ? saleState(sale.status, t) : null
   const pointHasOrder = checkout.stage === 'processing' && sale?.mpStatus
@@ -59,18 +62,19 @@ function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelS
     : pointHasTerminal ? t('pointReady') : t('waitingForPoint')
   const progressDescription = checkout.stage === 'connecting'
     ? t('connectingPointDescription')
-    : pointHasTerminal ? t('customerUseTerminal') : t('waitingForPointDescription')
-  return <Modal title={checkout.stage === 'method' ? t(cashMode ? 'cash' : 'choosePaymentMethod') : sale ? `#${sale.shortId}` : t('cardPayment')} onClose={onClose} closeable={!pending}>
+    : pointHasTerminal ? t(pointCash ? 'confirmCashAtPoint' : 'customerUseTerminal') : t('waitingForPointDescription')
+  return <Modal title={checkout.stage === 'method' ? t(cashMode ? 'cash' : 'choosePaymentMethod') : sale ? `#${sale.shortId}` : t(pointCash ? 'cash' : 'cardPayment')} onClose={onClose} closeable={!pending}>
     {checkout.stage === 'method' && !cashMode && <div className="checkout-body">
       <div className="checkout-total"><span>{t('totalToPay')}</span><strong>{formatCurrency(checkout.total)}</strong></div>
       <div className="payment-options">
-        <button onClick={() => setCashMode(true)} disabled={busy}><div className="payment-icon cash"><Banknote size={25} /></div><span><strong>{t('cash')}</strong></span><ChevronRight size={20} /></button>
+        <button onClick={() => setCashMode(true)} disabled={busy || posConfig.cashEnabled && !posConfig.configured}><div className="payment-icon cash"><Banknote size={25} /></div><span><strong>{t('cash')}</strong>{posConfig.cashEnabled && <small>{t('cashViaPoint')}</small>}</span><ChevronRight size={20} /></button>
         <button onClick={onCard} disabled={busy || !posConfig.configured}><div className="payment-icon card"><CreditCard size={25} /></div><span><strong>{t('card')}</strong><small>{posConfig.configured ? t('pointSmart2Description') : t('pointNotConfigured')}</small></span><ChevronRight size={20} /></button>
       </div>
       {!posConfig.configured && <div className="setup-hint"><AlertTriangle size={17} /><span>{t('pointSetupHint')}</span></div>}
     </div>}
     {checkout.stage === 'method' && cashMode && <form className="checkout-body cash-tender" onSubmit={e => { e.preventDefault(); if (tender.valid && !busy) onCash(Number(received)) }}>
       <div className="cash-total"><span>{t('totalToPay')}</span><strong>{formatCurrency(checkout.total)}</strong></div>
+      {posConfig.cashEnabled && <p>{t('cashPointDescription')}</p>}
       <label className="field cash-received"><span>{t('receivedCash')}</span><div className="money-input"><span aria-hidden="true">$</span><input autoFocus required type="number" inputMode="numeric" min={checkout.total} max="999999999999" step="1" value={received} disabled={busy} onChange={e => setReceived(e.target.value)} aria-invalid={received !== '' && !tender.valid} aria-describedby={received !== '' && !tender.valid ? 'cash-tender-error' : undefined} /></div></label>
       <div className="cash-shortcuts"><button type="button" disabled={busy} aria-pressed={received === String(checkout.total)} onClick={() => setReceived(String(checkout.total))}>{t('exactAmount')}</button>{[1000,2000,5000,10000,20000].filter(n => n > checkout.total).slice(0,4).map(n => <button key={n} type="button" disabled={busy} aria-pressed={received === String(n)} onClick={() => setReceived(String(n))}>{formatCurrency(n)}</button>)}</div>
       <div className={`tender-change ${tender.valid ? 'is-ready' : ''}`} aria-live="polite"><span>{t('cashChange')}</span><strong>{tender.valid ? formatCurrency(tender.change) : '—'}</strong></div>
@@ -78,7 +82,7 @@ function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelS
       <div className="tender-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => setCashMode(false)}>{t('back')}</button><button className="button primary" disabled={busy || !tender.valid}>{busy ? t('saving') : t('confirmCash')}<Check size={18} /></button></div>
     </form>}
     {(checkout.stage === 'connecting' || checkout.stage === 'processing') && <div className="payment-progress">
-      <div className="terminal-animation"><CreditCard size={31} /><i /><i /><i /></div>
+      <div className="terminal-animation">{pointCash ? <Banknote size={31} /> : <CreditCard size={31} />}<i /><i /><i /></div>
       <h3>{progressTitle}</h3>
       <p>{progressDescription}</p>
       {sale && <div className="payment-reference"><span>{t('sale')}</span><strong>#{sale.shortId}</strong><span>{formatCurrency(sale.total)}</span></div>}
@@ -105,7 +109,7 @@ function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelS
   </Modal>
 }
 
-function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefundCopy, onCreditNote, onReconcilePoint, onResolveInventory, busy, canManage }) {
+function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefundCopy, onCreditNote, onReconcilePoint, onResolveInventory, busy, canManage, refundAttempt, onRecoverRefund }) {
   const { t, formatCurrency, formatTime, unitLabel } = useI18n()
   const [view, setView] = useState('details')
   const [quantities, setQuantities] = useState({})
@@ -142,7 +146,7 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
   }
   const submitRefund = async (event) => {
     event.preventDefault()
-    if (!refundAmountValid) return
+    if (!refundAmountValid && !refundAttempt) return
     try {
       const next = await onRefund({ ...refundForm, amount: refundAmount, restock: refundForm.restock && selectedItems.length > 0, items: selectedItems })
       if (next) setView('details')
@@ -175,13 +179,15 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
       </div>
       <div className="sale-detail-meta"><span className={`sale-status ${state.tone}`}>{state.label}</span><span>{sale.paymentMethod === 'card' ? t('card') : t('cash')} · {formatTime(sale.createdAt)}</span></div>
       {sale.cashReceived != null && <div className="cash-result"><span>{t('receivedCash')}<b>{formatCurrency(sale.cashReceived)}</b></span><span>{t('cashChange')}<b>{formatCurrency(sale.cashChange)}</b></span></div>}
-      {sale.paymentMethod === 'card' && <section className="point-payment-details">
+      {saleUsesPoint(sale) && <section className="point-payment-details">
         <header><div><CreditCard size={17} /><strong>{t('pointPaymentDetails')}</strong></div>{canManage&&<button type="button" className="button compact" onClick={() => onReconcilePoint().catch(() => {})} disabled={busy}><RotateCw size={15} />{t('syncPoint')}</button>}</header>
         <div className="point-payment-grid">
-          <div><span>{t('operationNumber')}</span><strong>{sale.mpOperationId || t('pendingData')}</strong></div>
-          <div><span>{t('paymentCard')}</span><strong>{sale.mpCardBrand ? `${sale.mpCardBrand.toUpperCase()}${sale.mpCardLastFour ? ` ···· ${sale.mpCardLastFour}` : ''}` : t('pendingData')}</strong></div>
-          <div><span>{t('mercadoPagoFee')}</span><strong>{formatCurrency(sale.mpFeeAmount || 0)}</strong></div>
-          <div><span>{t('netReceived')}</span><strong>{sale.mpNetReceivedAmount == null ? t('pendingData') : formatCurrency(sale.mpNetReceivedAmount)}</strong></div>
+          <div><span>{t('operationNumber')}</span><strong>{sale.mpOperationId || sale.mpOrderId || t('pendingData')}</strong></div>
+          {sale.paymentMethod === 'cash' ? <div><span>{t('cash')}</span><strong>{t('cashInDrawer')}</strong></div> : <>
+            <div><span>{t('paymentCard')}</span><strong>{sale.mpCardBrand ? `${sale.mpCardBrand.toUpperCase()}${sale.mpCardLastFour ? ` ···· ${sale.mpCardLastFour}` : ''}` : t('pendingData')}</strong></div>
+            <div><span>{t('mercadoPagoFee')}</span><strong>{formatCurrency(sale.mpFeeAmount || 0)}</strong></div>
+            <div><span>{t('netReceived')}</span><strong>{sale.mpNetReceivedAmount == null ? t('pendingData') : formatCurrency(sale.mpNetReceivedAmount)}</strong></div>
+          </>}
         </div>
         {pointVoucher && <div className="point-document-state"><ReceiptText size={16} /><div><strong>{t('pointVoucher')}</strong><span>{t('pointVoucherDescription')}</span></div></div>}
       </section>}
@@ -199,10 +205,11 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
           {refund.creditNote?.status === 'issued' && <span className="credit-note-state issued"><FileCheck2 size={15} />{t('creditNoteIssued')} · N° {refund.creditNote.folio}</span>}
         </div>
       </article>)}</section>}
-      <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>{t('close')}</button>{canManage&&<button type="button" className="button primary" onClick={openRefund} disabled={busy || sale.status !== 'paid' || sale.refundableTotal <= 0}><Undo2 size={18} />{sale.refundableTotal > 0 ? t('refundSale') : t('noRefundableProducts')}</button>}</div>
+      <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>{t('close')}</button>{canManage&&<button type="button" className="button primary" onClick={openRefund} disabled={busy || Boolean(refundAttempt) || sale.status !== 'paid' || sale.refundableTotal <= 0}><Undo2 size={18} />{sale.refundableTotal > 0 ? t('refundSale') : t('noRefundableProducts')}</button>}</div>
     </div>}
 
-    {view === 'refund' && <form className="refund-form" onSubmit={submitRefund}>
+    {view === 'refund' && refundAttempt && <div className="refund-form"><p role="status">{t('refundPending')} · {formatCurrency(refundAttempt.body.amount)}</p><button className="button primary" disabled={busy} onClick={onRecoverRefund}><RotateCw size={16}/>{t('retryRefund')}</button></div>}
+    {view === 'refund' && !refundAttempt && <form className="refund-form" onSubmit={submitRefund}>
       <p className="modal-description">{t('refundDescription')}</p>
       <section className="refund-amount-card">
         <div className="field full refund-amount-field"><label htmlFor="refund-amount">{t('refundAmountLabel')}</label><div className="money-input"><span aria-hidden="true">$</span><input id="refund-amount" type="number" inputMode="numeric" min="1" max={sale.refundableTotal} step="1" required value={refundAmountInput} onChange={(event) => setRefundAmountInput(event.target.value)} aria-invalid={refundAmountInput !== '' && !refundAmountValid} /></div></div>
@@ -290,6 +297,8 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
   const [favorites, setFavorites] = useState(loadFavorites), [cartExpanded, setCartExpanded] = useState(false)
   const [checkout, setCheckout] = useState(null)
   const [selectedSale, setSelectedSale] = useState(null)
+  const [refundAttempt, setRefundAttempt] = useState(() => pendingRefund(user.id))
+  const refundSubmitting = useRef(false)
   const [busy, setBusy] = useState(false)
   const submitting = useRef(false)
   const recoveryKey = useRef(attempt?.key)
@@ -347,14 +356,14 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
     const pending = beginCheckout(payload(), paymentMethod, total, cashReceived)
     setAttempt(pending)
     setBusy(true)
-    if (pending.paymentMethod === 'card') setCheckout(current => ({ ...current, stage: 'connecting' }))
+    if (pending.paymentMethod === 'card' || posConfig.cashEnabled) setCheckout(current => ({ ...current, stage: 'connecting', paymentMethod: pending.paymentMethod }))
     try {
       const sale = await (pending.paymentMethod === 'cash' ? api.cashSale : api.cardSale)(pending.items, pending.key, pending.cashReceived)
       await acceptSale(sale)
     } catch (error) {
       const uncertain = error.uncertain || !error.status || error.status >= 500 || error.code === 'CHECKOUT_CONFLICT'
       if (!uncertain) { clearCheckout(pending.key); setAttempt(null) }
-      const sale = error.saleId && uncertain ? { id: error.saleId, shortId: error.saleId.replaceAll('-', '').slice(0, 8).toUpperCase(), total: pending.total, status: 'pending' } : null
+      const sale = error.saleId && uncertain ? { id: error.saleId, shortId: error.saleId.replaceAll('-', '').slice(0, 8).toUpperCase(), total: pending.total, status: 'pending', paymentMethod: pending.paymentMethod, pointPayment: true } : null
       setCheckout(current => ({ ...current, stage: uncertain ? 'connection-error' : 'error', sale,
         error: uncertain ? t('checkoutUncertain') : error.message }))
     } finally { setBusy(false); submitting.current = false }
@@ -376,8 +385,8 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
   const retry = async () => {
     if (!checkout.sale?.id) return pay(pendingCheckout()?.paymentMethod || 'cash')
     setBusy(true)
-    try { await acceptSale(await api.retryCardSale(checkout.sale.id)) }
-    catch (error) { setCheckout((current) => ({ ...current, stage: error.uncertain ? 'connection-error' : 'error', error: error.message })) }
+    try { await acceptSale(await api.retryPointSale(checkout.sale.id)) }
+    catch (error) { setCheckout((current) => ({ ...current, stage: error.uncertain || !error.status || error.status >= 500 ? 'connection-error' : 'error', error: error.message })) }
     finally { setBusy(false) }
   }
   const cancelSale = async () => {
@@ -400,32 +409,70 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
     finally { setBusy(false) }
   }
   const refundSale = async (input) => {
-    if (!selectedSale) return null
+    if (!selectedSale || refundSubmitting.current) return null
+    const existing = pendingRefund(user.id)
+    if (existing && existing.saleId !== selectedSale.id) throw new Error(tx('Recupera la devolución pendiente antes de iniciar otra.','Recover the pending refund before starting another.'))
+    return submitRefundAttempt(existing || beginRefund(user.id,selectedSale.id,input))
+  }
+  const acceptRefundAttempt = (next,pending) => {
+    const refund = next.refunds?.find(r => r.requestKey === pending.key)
+    if (!refund) throw new Error(tx('La devolución sigue por verificar. Recupera el mismo intento.','The refund still needs verification. Recover the same attempt.'))
+    if (['processed','failed'].includes(refund.status)) { clearRefund(user.id,pending.key);setRefundAttempt(null) }
+    setSelectedSale(next)
+    setToast({type:refund.status==='processed'?'success':'error',message:t(refund.status==='processed'?'refundCompleted':refund.status==='failed'?'refundFailed':'refundPending')})
+    return next
+  }
+  const submitRefundAttempt = async pending => {
+    if (refundSubmitting.current) return null
+    refundSubmitting.current = true
+    setRefundAttempt(pending)
     setBusy(true)
     try {
-      const next = await api.refundSale(selectedSale.id, input)
-      setSelectedSale(next)
-      await onRefresh()
-      setToast({ type: 'success', message: t('refundCompleted') })
+      const next = await api.refundSale(pending.saleId,pending.body,pending.key)
+      acceptRefundAttempt(next,pending)
+      await onRefresh().catch(() => {})
       return next
     } catch (error) {
       if (error.refundId) {
-        const refreshed = await api.sale(selectedSale.id).catch(() => null)
-        if (refreshed) setSelectedSale(refreshed)
+        const refreshed = await api.sale(pending.saleId).catch(() => null)
+        if (refreshed) {
+          setSelectedSale(refreshed)
+          const result = refreshed.refunds?.find(r => r.requestKey === pending.key)
+          if (result && ['processed','failed'].includes(result.status)) { clearRefund(user.id,pending.key);setRefundAttempt(null) }
+        }
+      } else if (!error.uncertain && [400,404,409,422].includes(error.status)) {
+        clearRefund(user.id,pending.key);setRefundAttempt(null)
       }
       setToast({ type: 'error', message: error.message })
       throw error
-    } finally { setBusy(false) }
+    } finally { refundSubmitting.current=false;setBusy(false) }
   }
-  const retryRefund = async (refundId) => {
-    if (!selectedSale) return null
+  const recoverRefund = async () => {
+    const pending = pendingRefund(user.id)
+    if (!pending || refundSubmitting.current) return
+    try {
+      const sale = await api.sale(pending.saleId)
+      const refund = sale.refunds?.find(r => r.requestKey === pending.key)
+      if (refund && ['processed','failed'].includes(refund.status)) { acceptRefundAttempt(sale,pending);await onRefresh().catch(()=>{});return }
+      if (refund && sale.paymentMethod === 'card') {
+        setSelectedSale(sale)
+        return await retryRefund(refund.id,sale)
+      }
+      await submitRefundAttempt(pending)
+    } catch (error) { setToast({type:'error',message:error.message}) }
+  }
+  const retryRefund = async (refundId,currentSale=selectedSale) => {
+    if (!currentSale || refundSubmitting.current) return null
+    refundSubmitting.current=true
     setBusy(true)
     try {
-      const next = await api.retryRefund(selectedSale.id, refundId)
+      const next = await api.retryRefund(currentSale.id, refundId)
+      const pending=pendingRefund(user.id)
+      if(pending&&pending.saleId===next.id)acceptRefundAttempt(next,pending)
       setSelectedSale(next); await onRefresh(); setToast({ type: 'success', message: t('refundCompleted') })
       return next
     } catch (error) { setToast({ type: 'error', message: error.message }); throw error }
-    finally { setBusy(false) }
+    finally { refundSubmitting.current=false;setBusy(false) }
   }
   const printRefundCopy = async (refundId) => {
     if (!selectedSale) return null
@@ -517,6 +564,7 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
         </div>
       </section>
     </CajaHeader>
+    {refundAttempt&&<div className="card cash-recovery" role="status"><span>{t('refundPending')}</span><button className="button secondary" disabled={busy||!serverAvailable} onClick={recoverRefund}><RotateCw size={16}/>{tx('Recuperar devolución','Recover refund')}</button></div>}
     {registerView==='cart'&&!registerSession&&!attempt&&<form className="card open-register" aria-label={tx('Abrir caja','Open register')} onSubmit={async e=>{e.preventDefault();setOpening(true);setOpenError('');try{await onOpenRegister({openingCash:Number(openingCash),additionalCash:Number(additionalCash||0),previousSessionId:registerOpening.previousSessionId,previousRevision:registerOpening.previousRevision})}catch(e){setOpenError(e.message)}finally{setOpening(false)}}}><Banknote size={26}/><label className="field"><span>{tx('Fondo anterior · CLP','Previous cash · CLP')}</span><div className="money-input"><span>$</span><input aria-label={tx('Fondo anterior','Previous cash')} type="number" inputMode="numeric" min="0" max="100000000000" step="1" required value={openingCash} onChange={e=>setOpeningCash(e.target.value)}/></div>{registerOpening?.previousClosedAt&&<small>{tx('Último cierre','Last close')} · {new Date(registerOpening.previousClosedAt).toLocaleDateString(language==='es'?'es-CL':'en-GB')}</small>}</label><details><summary>{tx('Agregar efectivo','Add cash')}</summary><label className="field"><span>{tx('Efectivo adicional · CLP','Additional cash · CLP')}</span><div className="money-input"><span>$</span><input aria-label={tx('Efectivo adicional','Additional cash')} type="number" inputMode="numeric" min="0" max="100000000000" step="1" value={additionalCash} placeholder="0" onChange={e=>setAdditionalCash(e.target.value)}/></div></label></details><div className="cash-operation-total"><span>{tx('Fondo inicial','Opening cash')}</span><strong>{formatCurrency(Number(openingCash||0)+Number(additionalCash||0))}</strong></div>{openError&&<div className="inline-error" role="alert">{openError}</div>}<button className="button primary" disabled={opening||!serverAvailable||!registerOpening}>{opening?t('saving'):tx('Abrir caja','Open register')}<ArrowRight size={18}/></button></form>}
     {registerView === 'cart' ? <section className={`pos-layout ${!registerSession&&!attempt?'session-locked':''}`} id="caja-cart-panel" role="tabpanel" aria-labelledby="caja-cart-tab">
       <div className="catalog-panel">
@@ -546,7 +594,7 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
       </aside>
     </section> : <SalesHistory showOperator={user?.role==='admin'} refreshToken={historyRevision} onResume={resumeSale} onSelect={setSelectedSale} />}
     {checkout && <CheckoutModal checkout={checkout} posConfig={posConfig} onCash={payCash} onCard={payCard} onRetry={retry} onCancelSale={cancelSale} onClose={() => setCheckout(null)} busy={busy || !serverAvailable} />}
-    {selectedSale && <SaleDetailsModal canManage={user?.role==='admin'} sale={selectedSale} onClose={() => setSelectedSale(null)} onRefund={refundSale} onRetryRefund={retryRefund} onPrintRefundCopy={printRefundCopy} onCreditNote={recordCreditNote} onReconcilePoint={reconcilePointSale} onResolveInventory={resolveRefundInventory} busy={busy} />}
+    {selectedSale && <SaleDetailsModal canManage={user?.role==='admin'} sale={selectedSale} onClose={() => setSelectedSale(null)} onRefund={refundSale} onRetryRefund={retryRefund} onPrintRefundCopy={printRefundCopy} onCreditNote={recordCreditNote} onReconcilePoint={reconcilePointSale} onResolveInventory={resolveRefundInventory} busy={busy} refundAttempt={refundAttempt} onRecoverRefund={recoverRefund} />}
   </div>
 })
 

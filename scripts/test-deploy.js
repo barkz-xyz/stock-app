@@ -6,9 +6,13 @@ import { spawn } from 'node:child_process'
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
 export function deploymentTestEnvironment(source) {
-  const database = source.TEST_DATABASE_URL || source.DATABASE_URL
-  if (!database) throw new Error('Deployment tests require a PostgreSQL test connection; integration tests cannot be skipped.')
-  const env = Object.fromEntries(Object.entries(source).filter(([key]) => !/^(DATABASE_|TEST_DATABASE_URL$|DATA_PATH$|PORT$|STAFF_PIN$|APP_USERNAME$|APP_PASSWORD$|SESSION_SECRET$|MERCADOPAGO_|INVENTORY_|POINT_|RAILWAY_|PGOPTIONS$|PGSERVICE|PGHOST$|PGPORT$|PGDATABASE$|PGUSER$|PGPASSWORD$)/.test(key)))
+  const database = source.TEST_DATABASE_URL
+  if (!database) throw new Error('Deployment tests require an explicit TEST_DATABASE_URL; integration tests cannot be skipped and never use DATABASE_URL.')
+  if ((source.NODE_ENV === 'production' || source.RAILWAY_PROJECT_ID || source.RAILWAY_ENVIRONMENT_ID) && source.DATABASE_URL) {
+    const target = value => { const u = new URL(value); return `${u.hostname.toLowerCase()}:${u.port || '5432'}${decodeURIComponent(u.pathname)}` }
+    if (target(database) === target(source.DATABASE_URL)) throw new Error('TEST_DATABASE_URL must point to a separate test database, not the production database.')
+  }
+  const env = Object.fromEntries(Object.entries(source).filter(([key]) => !/^(DATABASE_|MIGRATION_|RUNTIME_DATABASE_|PROVISION_|BACKUP_|RESTORE_|TEST_DATABASE_URL$|DATA_PATH$|PORT$|STAFF_PIN$|APP_USERNAME$|APP_PASSWORD$|SESSION_SECRET$|MERCADOPAGO_|INVENTORY_|POINT_|RAILWAY_|PGOPTIONS$|PGSERVICE|PGHOST$|PGPORT$|PGDATABASE$|PGUSER$|PGPASSWORD$|PGPASSFILE$)/.test(key)))
   return { ...env, NODE_ENV: 'test', TEST_DATABASE_URL: database, SEED_DEMO_DATA: 'false' }
 }
 

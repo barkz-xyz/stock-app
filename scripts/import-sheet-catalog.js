@@ -1,3 +1,4 @@
+import { postgresConfig } from '../server/postgres.js'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -103,7 +104,7 @@ async function replacePostgres(products, apply) {
   assert.equal(process.env.RAILWAY_SERVICE_ID, 'bac0302d-107e-489e-9192-a0232b9f0444', 'Use the Postgres service variables.')
   const connectionString = process.env.DATABASE_PUBLIC_URL
   assert.ok(connectionString)
-  const client = new pg.Client({ connectionString, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 15000 })
+  const client = new pg.Client({ ...postgresConfig(connectionString), connectionTimeoutMillis: 15000 })
   let transaction = false
   try {
     await client.connect()

@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly Stock App database backup with catch-up after downtime
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=180
+Unit=stock-app-backup.service
+
+[Install]
+WantedBy=timers.target

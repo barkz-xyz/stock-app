@@ -1,3 +1,4 @@
+import { postgresConfig } from './postgres.js'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import { once } from 'node:events'
@@ -12,8 +13,7 @@ import { deploymentTestEnvironment } from '../scripts/test-deploy.js'
 test('PostgreSQL Point restorations lock all products before the inventory revision', { skip: !process.env.TEST_DATABASE_URL, timeout: 300000 }, async t => {
   const schema = `verify_point_locks_${crypto.randomUUID().replaceAll('-', '')}`
   const connectionString = process.env.TEST_DATABASE_URL
-  const ssl = !connectionString.includes('railway.internal') && process.env.PGSSLMODE !== 'disable' ? { rejectUnauthorized: false } : false
-  const admin = new pg.Client({ connectionString, ssl })
+  const admin = new pg.Client(postgresConfig(connectionString))
   const previousUrl = process.env.DATABASE_URL
   let store, monitor, controller, server
   const operations = new Map()
@@ -26,8 +26,8 @@ test('PostgreSQL Point restorations lock all products before the inventory revis
     process.env.DATABASE_URL = isolated.href
     store = await import(`./store.js?pointLocks=${crypto.randomUUID()}`)
     await store.initializeStore()
-    monitor = new pg.Client({ connectionString: isolated.href, ssl })
-    controller = new pg.Client({ connectionString: isolated.href, ssl })
+    monitor = new pg.Client(postgresConfig(isolated.href))
+    controller = new pg.Client(postgresConfig(isolated.href))
     await monitor.connect(); await controller.connect()
     const controllerPid = (await controller.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
     const gateKey = (await controller.query('SELECT hashtextextended($1,17) AS key', [schema])).rows[0].key

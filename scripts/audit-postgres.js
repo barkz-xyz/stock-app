@@ -1,3 +1,4 @@
+import { postgresConfig } from '../server/postgres.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import pg from 'pg'
@@ -5,8 +6,7 @@ import pg from 'pg'
 const connectionString = process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL
 if (!connectionString) throw new Error('DATABASE_PUBLIC_URL or DATABASE_URL is required.')
 const tables = ['items', 'sales', 'sale_items', 'refunds', 'refund_items', 'tax_documents', 'movements', 'cash_closures']
-const client = new pg.Client({ connectionString, connectionTimeoutMillis: 15000,
-  ssl: !connectionString.includes('railway.internal') && process.env.PGSSLMODE !== 'disable' ? { rejectUnauthorized: false } : false })
+const client = new pg.Client({ ...postgresConfig(connectionString), connectionTimeoutMillis: 15000 })
 try {
   await client.connect()
   await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')

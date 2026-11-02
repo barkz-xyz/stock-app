@@ -13,9 +13,11 @@ const normalize = row => ({ id: row.id, sessionId: row.session_id ?? row.session
   settledAt: row.settled_at || row.settledAt ? new Date(row.settled_at ?? row.settledAt).toISOString() : null })
 const withdrawalSelect = `SELECT w.*,s.user_id AS owner_id,s.operator FROM register_cash_withdrawals w JOIN register_sessions s ON s.id=w.session_id`
 const entrySelect = `SELECT e.*,w.recipient,w.purpose,w.spent_amount,w.document_type,w.document_number,w.supplier,w.detail,w.return_denominations,u.name AS operator
-  FROM register_cash_entries e JOIN register_cash_withdrawals w ON w.id=e.withdrawal_id JOIN app_users u ON u.id=e.created_by`
+  FROM register_cash_entries e LEFT JOIN register_cash_withdrawals w ON w.id=e.withdrawal_id JOIN app_users u ON u.id=e.created_by`
 const normalizeEntry = row => ({ id: row.id, sessionId: row.session_id ?? row.sessionId,
   withdrawalId: row.withdrawal_id ?? row.withdrawalId, kind: row.kind, amount: Number(row.amount),
+  refundId: row.refund_id ?? row.refundId ?? null, saleId: row.sale_id ?? row.saleId ?? null,
+  createdBy: row.created_by ?? row.createdBy ?? null,
   recipient: row.recipient, purpose: row.purpose, operator: row.operator,
   spentAmount: row.spent_amount == null && row.spentAmount == null ? null : Number(row.spent_amount ?? row.spentAmount),
   documentType: row.document_type ?? row.documentType ?? null, documentNumber: row.document_number ?? row.documentNumber ?? '',
@@ -41,7 +43,7 @@ export function createRegisterCashStore({ pool, readFileData, mutateFileData, no
     return (await queryable.query(entrySelect + (conditions.length ? ' WHERE '+conditions.join(' AND ') : '') + ' ORDER BY e.created_at,e.id', params)).rows.map(normalizeEntry)
   }
   const available = async (session, db, data) => {
-    const sales = pool ? await sessionSales(session.id, db) : data.sales.filter(s => s.registerSessionId === session.id)
+    const sales = pool ? await sessionSales(session.id, db) : data.sales
     const ledger = pool ? await entries(session.id, db) : fileEntries(data, session.id)
     return { balance: session.openingCash + sessionSummary(sales, session).cash.net + withCashLedger({}, ledger).cashLedger.net, entries: ledger }
   }

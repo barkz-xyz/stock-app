@@ -4,7 +4,10 @@ import { assertAllTestsPassed, deploymentTestEnvironment } from '../scripts/test
 
 test('deployment gate refuses missing integration credentials and removes live application credentials', () => {
   assert.throws(() => deploymentTestEnvironment({}), /cannot be skipped/)
-  const env = deploymentTestEnvironment({ PATH: 'system-path', DATABASE_URL: 'postgresql://isolated-test',
+  assert.throws(() => deploymentTestEnvironment({ DATABASE_URL:'postgresql://production/live' }), /TEST_DATABASE_URL/)
+  assert.throws(() => deploymentTestEnvironment({ NODE_ENV:'production', DATABASE_URL:'postgresql://runtime@production/live',TEST_DATABASE_URL:'postgresql://tester@production:5432/live?options=test' }), /separate test database/)
+  const env = deploymentTestEnvironment({ PATH: 'system-path', TEST_DATABASE_URL: 'postgresql://isolated-test', DATABASE_URL: 'postgresql://production/live',
+    MIGRATION_DATABASE_URL:'private-admin', RUNTIME_DATABASE_PASSWORD:'private', BACKUP_DATABASE_URL:'private', RESTORE_DATABASE_URL:'private',
     DATA_PATH: '/production/inventory.json', STAFF_PIN: 'private', APP_USERNAME:'private', APP_PASSWORD:'private', SESSION_SECRET: 'private',
     MERCADOPAGO_ACCESS_TOKEN: 'private', MERCADOPAGO_POINT_TERMINAL_ID: 'private', INVENTORY_API_ENABLED: 'true', INVENTORY_API_ENVIRONMENT: 'production',
     INVENTORY_RESERVATIONS_ENABLED: 'true', INVENTORY_RESERVATION_TTL_SECONDS: '900',
@@ -18,7 +21,7 @@ test('deployment gate refuses missing integration credentials and removes live a
   assert.equal(env.INVENTORY_API_ENVIRONMENT, undefined)
   assert.equal(env.INVENTORY_RESERVATIONS_ENABLED, undefined)
   assert.equal(env.INVENTORY_RESERVATION_TTL_SECONDS, undefined)
-  for (const key of ['DATABASE_URL', 'DATA_PATH', 'STAFF_PIN', 'APP_USERNAME', 'APP_PASSWORD', 'SESSION_SECRET', 'MERCADOPAGO_ACCESS_TOKEN', 'MERCADOPAGO_POINT_TERMINAL_ID', 'POINT_PILOT_BUSINESS_RUT', 'RAILWAY_TOKEN', 'RAILWAY_ENVIRONMENT_ID', 'PGOPTIONS']) assert.equal(key in env, false)
+  for (const key of ['DATABASE_URL', 'MIGRATION_DATABASE_URL', 'RUNTIME_DATABASE_PASSWORD', 'BACKUP_DATABASE_URL', 'RESTORE_DATABASE_URL', 'DATA_PATH', 'STAFF_PIN', 'APP_USERNAME', 'APP_PASSWORD', 'SESSION_SECRET', 'MERCADOPAGO_ACCESS_TOKEN', 'MERCADOPAGO_POINT_TERMINAL_ID', 'POINT_PILOT_BUSINESS_RUT', 'RAILWAY_TOKEN', 'RAILWAY_ENVIRONMENT_ID', 'PGOPTIONS']) assert.equal(key in env, false)
 })
 
 test('deployment gate blocks failed, skipped, cancelled, pending, or missing test results', () => {

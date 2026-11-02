@@ -81,11 +81,11 @@ Cash carry-over, withdrawal settlement, local POS shortfalls, additive migration
 
 ### Production deployment gate
 
-GitHub Actions runs `npm run validate` on every push to `main`, every pull request, and manual dispatch, using an isolated PostgreSQL 17 service. This checks syntax, builds the app, and runs every test. Railway's production trigger has **Wait for CI** enabled. No workflow paths or concurrency cancellation can skip the required run.
+GitHub Actions runs `npm run validate` on every push to `main`, every pull request, and manual dispatch, using an isolated PostgreSQL 17 service. It also runs the local-only role-provisioning, full backup/restore, and real TLS certificate tests. Railway's production trigger has **Wait for CI** enabled. No workflow paths or concurrency cancellation can skip the required run.
 
-Railway also enforces the gate independently: `npm run build:deploy` must succeed while building, and `npm run test:deploy` runs before the new release starts. The pre-deploy gate requires a database connection, verifies the built HTML exists, and rejects failed, skipped, cancelled, pending, or missing test results. A failure leaves the existing healthy release serving traffic. This protects manual redeploys as well as GitHub deployments.
+Railway also enforces the gate independently: `npm run build:deploy` must succeed while building, then `npm run test:deploy` and `npm run check:database` run before the new release starts. Tests require an explicit, separate `TEST_DATABASE_URL`, verify the built HTML exists, and reject failed, skipped, cancelled, pending, or missing results. The runtime check requires current migrations and a limited database role. A failure prevents the new release from starting.
 
-The test runner strips live payment, staff-session, Railway, and application database settings from its child process. Only `TEST_DATABASE_URL` reaches the PostgreSQL integration test, which creates and removes a fresh isolated schema. When running in Railway's private network, the pre-deploy gate takes this test connection from `DATABASE_URL`; business tables are untouched. For local validation set `TEST_DATABASE_URL` (and `PGSSLMODE=disable` for a local non-TLS database) before running `npm run validate`. Plain `npm test` remains available for local unit tests, where PostgreSQL integration may be skipped; production gating never allows skips.
+The test runner strips live payment, staff-session, Railway, migration, backup and application database settings from its child process. PostgreSQL tests create and remove fresh isolated schemas in the explicit test database. There is no production `DATABASE_URL` fallback. For local validation set `TEST_DATABASE_URL` before running `npm run validate`; loopback databases may use plaintext. Plain `npm test` remains available for unit tests, where PostgreSQL integration may be skipped; production gating never allows skips. The privileged role, backup and TLS fixtures run separately in CI and locally through `test:roles`, `test:backup` and `test:tls`.
 
 ### Daily totals, checkout recovery, and live stock
 
@@ -94,6 +94,8 @@ The bootstrap snapshot includes `dailySummary`, aggregated over the whole busine
 The register stores an unresolved checkout key and its frozen cart in tab session storage. Cash/card creation sends that UUID in `Idempotency-Key`. The database serializes matching keys, persists a unique key and cart/payment fingerprint, and returns the original sale on replay even after stock is depleted. Changing the cart or payment method with the same key returns `409 CHECKOUT_CONFLICT`. Card replays recover the existing reservation without creating another Point order. `GET /api/checkouts/:key` recovers a lost result without issuing a payment; writes are never automatically retried. Older tabs without a key remain compatible, so reload open registers after deployment.
 
 A durable 30-second Point-order lease prevents overlapping terminal requests when a tab reloads during order creation. An active lease returns the existing pending sale; after an interrupted server request the reservation can be retried with the same sale/provider idempotency key once the lease expires.
+
+Provider HTTP 5xx, interrupted responses, unconfirmed refunds and local persistence failures after accepted writes remain pending. A rejected retry cannot prove an earlier attempt failed. Stock is released only after a definitive initial rejection or an authoritative terminal failure status. Processing refunds retain their provider refund ID and recover through exact-ID order reads. JSON request compression is unsupported on staff routes; compressed bodies return `415` before decompression.
 
 `GET /api/events` is an authenticated, uncompressed, private SSE signal stream. It carries no product, session, or sales payload. PostgreSQL statement triggers notify only after committed changes, and a dedicated reconnecting listener supports multiple app instances and external database updates. Local JSON writes publish the same signal after saving. Streams close when authentication expires or the server shuts down. No extra message broker is needed.
 
@@ -113,12 +115,12 @@ Enable with `railway cdn enable --service stock-app`, then configure `railway cd
 
 1. Deploy this GitHub repository as a Railway service.
 2. Add PostgreSQL to the same Railway project.
-3. In the app service, add `DATABASE_URL=${{Postgres.DATABASE_URL}}`.
-4. Add the security and Mercado Pago variables listed below.
-5. Redeploy the app and generate a public domain.
+3. From a separate migration runner, set `MIGRATION_DATABASE_URL` to the administrative database connection and run `npm run migrate:postgres`. Then provision a limited application login with `npm run provision:postgres`; see [database roles](docs/database-roles.md).
+4. Set the app's `DATABASE_URL` to that limited login using the private database hostname. Set `DATABASE_AUTO_MIGRATE=false`, configure a separate `TEST_DATABASE_URL`, and add the security and Mercado Pago variables below. Keep `MIGRATION_DATABASE_URL` out of the running app environment.
+5. Review and activate complete backups from a separate worker using [the backup and recovery procedure](docs/database-backups.md), then redeploy the app and generate a public domain.
 6. Open `/api/health`; a healthy deployment returns `{ "ok": true }`.
 
-Database tables and non-destructive schema additions are created automatically on startup.
+Production starts only after the separate migration command has applied the current schema. Local development can initialize schemas automatically; set `DATABASE_AUTO_MIGRATE=false` to exercise the production separation. No repository command changes Railway roles, variables, backup schedules or deployments automatically.
 
 To replace a connected PostgreSQL database with the generated one-week presentation dataset, run this only from an environment that supplies the intended `DATABASE_URL`:
 
@@ -160,17 +162,24 @@ Official references:
 | Variable | Purpose |
 | --- | --- |
 | `PORT` | HTTP port; Railway supplies this automatically. |
-| `DATABASE_URL` | PostgreSQL connection string. |
+| `DATABASE_URL` | Limited runtime PostgreSQL connection; use the private hostname in Railway. |
+| `DATABASE_AUTO_MIGRATE` | Set `false` for production-style local testing; production always requires separate migrations. |
+| `TEST_DATABASE_URL` | Separate integration-test database; required by the deployment gate, never inferred from production. |
+| `MIGRATION_DATABASE_URL` | Administrative connection for the separate migration/provisioning runner; never supply to the running production app. |
+| `RUNTIME_DATABASE_ROLE` | Limited role to provision and refresh after migrations. |
 | `DATA_PATH` | JSON storage path when PostgreSQL is not configured. |
 | `SEED_DEMO_DATA` | Set to `true` only for a new local demo database. |
 | `STAFF_PIN` | One-time bootstrap code for the first `admin` account. The existing shared PIN is accepted until that account changes its password. It does not recreate or reset an existing account. |
-| `SESSION_SECRET` | Long random value used to sign sessions. Required whenever `STAFF_PIN` is set. |
+| `SESSION_SECRET` | Long random deployment security value, required with the bootstrap code and live Point. Staff sessions use random opaque cookies stored as hashes. |
 | `MERCADOPAGO_ACCESS_TOKEN` | Private production or test Access Token. Server-side only. |
 | `MERCADOPAGO_POINT_TERMINAL_ID` | Full ID returned by Mercado Pago's terminal list. |
 | `MERCADOPAGO_WEBHOOK_SECRET` | Secret generated by the Mercado Pago Webhooks configuration. |
 | `MERCADOPAGO_MOCK` | Local-only Point simulator when set to `true`. |
 | `MERCADOPAGO_API_BASE` | Optional API base override for controlled testing. |
-| `PGSSLMODE` | Optional PostgreSQL SSL override. |
+| `PGSSLMODE` | Public connections always verify TLS and hostname; `disable` is permitted only for loopback/private Railway hosts. |
+| `PGSSLROOTCERT` | Trusted CA file for database TLS, including self-signed/private certificate authorities. |
+| `PGSSLCERT`, `PGSSLKEY` | Optional client certificate and key files. |
+| `BACKUP_DIRECTORY` | Protected persistent backup directory outside the application checkout. |
 
 Never put Access Tokens, database passwords, PINs, or webhook secrets in GitHub. Store them as Railway variables.
 
@@ -210,7 +219,7 @@ Production migrates the existing staff PIN to the first username `admin`, with a
 
 Each user opens a register session with an opening cash amount before selling. Signing out leaves that cash session open, so signing back in resumes it. Closing requires resolving pending payments; a row lock serializes new sales against closing. The server fixes the session owner and opening cash, ignores client-supplied identity, records new sales with cashier/session IDs, and saves a compressed close PDF. A cashier's closed session is read-only. Administrators can view all sessions, correct a saved close with a versioned explanation, and still access the general daily close. Sessions can span midnight. Historical sales stay unassigned; no past sale is relabeled as a new user's sale.
 
-Cart drafts and pending checkout recovery are separated by user in the browser. For authenticated CLI measurements/checks, supply `APP_USERNAME` (default `admin`) and `APP_PASSWORD`; the original `STAFF_PIN` only works during initial migration and cannot bypass a required password change. Backups include user password hashes and register-session snapshots, but exclude login-session tokens; keep backups private.
+Cart drafts and pending checkout recovery are separated by user in the browser. For authenticated CLI measurements/checks, supply `APP_USERNAME` (default `admin`) and `APP_PASSWORD`; the original `STAFF_PIN` only works during initial provisioning and cannot bypass a required password change. Remove that bootstrap variable after the initial account exists; it cannot rotate an existing password. Full backups contain user/integration/session hashes and register snapshots; keep them private. Restore invalidates recovered login sessions before reporting success.
 
 ## Daily cash close
 
@@ -239,6 +248,14 @@ npm run check
 npm test
 npm run build
 npm run audit:postgres
+npm run migrate:postgres
+npm run provision:postgres
+npm run check:database
+npm run backup:postgres
+npm run restore:postgres -- /protected/path/backup.dump
+npm run test:roles
+npm run test:backup
+npm run test:tls
 npm run smoke:production
 npm run seed:week -- --yes
 npm start

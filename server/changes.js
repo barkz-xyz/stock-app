@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import pg from 'pg'
+import { postgresConfig } from './postgres.js'
 
 const changes = new EventEmitter()
 changes.setMaxListeners(0)
@@ -18,10 +19,7 @@ export async function listenForDatabaseChanges(connectionString) {
   stopped = false
   const connect = async () => {
     if (stopped) return
-    const client = new pg.Client({ connectionString,
-      ssl: !connectionString.includes('railway.internal') && process.env.PGSSLMODE !== 'disable' ? { rejectUnauthorized: false } : false,
-      connectionTimeoutMillis: 10000,
-    })
+    const client = new pg.Client(postgresConfig(connectionString))
     listener = client
     let disconnected = false
     const reconnect = () => {

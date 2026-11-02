@@ -30,6 +30,7 @@ jobs:
           --health-retries 10
     env:
       TEST_DATABASE_URL: postgresql://postgres:ci-only-password@localhost:5432/bakery_test
+      BACKUP_TEST_DATABASE_URL: postgresql://postgres:ci-only-password@localhost:5432/bakery_test
       PGSSLMODE: disable
     steps:
       - uses: actions/checkout@v6
@@ -38,5 +39,39 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Install matching PostgreSQL client tools
+        run: |
+          . /etc/os-release
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail --silent --show-error --location https://www.postgresql.org/media/keys/ACCC4CF8.asc --output /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          cat <<EOF | sudo tee /etc/apt/sources.list.d/pgdg.sources > /dev/null
+          Types: deb
+          URIs: https://apt.postgresql.org/pub/repos/apt
+          Suites: ${VERSION_CODENAME}-pgdg
+          Components: main
+          Signed-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          EOF
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
       - name: Check source, build, and run every test
         run: npm run validate
+      - name: Verify complete backup and restore
+        run: npm run test:backup
+      - name: Verify limited production runtime role
+        run: npm run test:roles
+      - name: Configure disposable PostgreSQL TLS fixture
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          openssl req -x509 -newkey rsa:2048 -noenc -days 1 -subj /CN=localhost -addext subjectAltName=DNS:localhost -keyout "$RUNNER_TEMP/postgres-test.key" -out "$RUNNER_TEMP/postgres-test.crt"
+          docker cp "$RUNNER_TEMP/postgres-test.key" "$POSTGRES_CONTAINER:/var/lib/postgresql/server.key"
+          docker cp "$RUNNER_TEMP/postgres-test.crt" "$POSTGRES_CONTAINER:/var/lib/postgresql/server.crt"
+          docker exec -u root "$POSTGRES_CONTAINER" chown postgres:postgres /var/lib/postgresql/server.key /var/lib/postgresql/server.crt
+          docker exec -u root "$POSTGRES_CONTAINER" chmod 600 /var/lib/postgresql/server.key
+          docker exec -u postgres "$POSTGRES_CONTAINER" psql -U postgres -d bakery_test -c "ALTER SYSTEM SET ssl_cert_file='/var/lib/postgresql/server.crt'" -c "ALTER SYSTEM SET ssl_key_file='/var/lib/postgresql/server.key'" -c "ALTER SYSTEM SET ssl=on" -c "SELECT pg_reload_conf()"
+      - name: Verify TLS certificates and server identities
+        env:
+          POSTGRES_TLS_TEST_URL: postgresql://postgres:ci-only-password@localhost:5432/bakery_test?sslmode=verify-full
+          POSTGRES_TLS_TEST_CA: ${{ runner.temp }}/postgres-test.crt
+        run: npm run test:tls

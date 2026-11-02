@@ -35,6 +35,8 @@ export function cleanSettlement(body) {
 }
 export const cashFingerprint = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export function withCashLedger(summary, entries = [], legacy = {}) {
+  // Refund payouts are represented in summary.cash.refunds for their paying
+  // register (or processing day). Keep the entry for audit, never subtract twice.
   const legacyCashIn = Number(legacy.legacyCashIn ?? legacy.cashIn ?? 0), legacyCashOut = Number(legacy.legacyCashOut ?? legacy.cashOut ?? 0)
   const cashIn = legacyCashIn + entries.filter(e => e.kind === 'return').reduce((sum, e) => sum + e.amount, 0)
   const cashOut = legacyCashOut + entries.filter(e => e.kind === 'withdrawal').reduce((sum, e) => sum + e.amount, 0)
@@ -69,6 +71,29 @@ export async function initializeCashLedger(pool) {
     );
     CREATE INDEX IF NOT EXISTS cash_entries_session_idx ON register_cash_entries(session_id,created_at);
     CREATE INDEX IF NOT EXISTS cash_entries_date_idx ON register_cash_entries(created_at);
+    ALTER TABLE register_cash_entries ALTER COLUMN withdrawal_id DROP NOT NULL;
+    ALTER TABLE register_cash_entries ADD COLUMN IF NOT EXISTS refund_id UUID REFERENCES refunds(id);
+    ALTER TABLE register_cash_entries ADD COLUMN IF NOT EXISTS sale_id UUID REFERENCES sales(id);
+    ALTER TABLE register_cash_entries DROP CONSTRAINT IF EXISTS register_cash_entries_kind_check;
+    ALTER TABLE register_cash_entries ADD CONSTRAINT register_cash_entries_kind_check CHECK(kind IN ('withdrawal','return','refund'));
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='register_cash_entries'::regclass AND conname='register_cash_entries_source_check') THEN
+        ALTER TABLE register_cash_entries ADD CONSTRAINT register_cash_entries_source_check CHECK(
+          (kind IN ('withdrawal','return') AND withdrawal_id IS NOT NULL AND refund_id IS NULL AND sale_id IS NULL)
+          OR (kind='refund' AND withdrawal_id IS NULL AND refund_id IS NOT NULL AND sale_id IS NOT NULL AND amount>0));
+      END IF;
+    END $$;
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_entries_refund_idx ON register_cash_entries(refund_id) WHERE refund_id IS NOT NULL;
+    CREATE OR REPLACE FUNCTION bakery_protect_cash_refund_entry() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF OLD.kind='refund' THEN RAISE EXCEPTION 'Cash refund payouts are immutable'; END IF;
+      IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+      RETURN NEW;
+    END $$;
+    DO $$ BEGIN
+      IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='register_cash_entries'::regclass AND tgname='protect_cash_refund_entry') THEN
+        CREATE TRIGGER protect_cash_refund_entry BEFORE UPDATE OR DELETE ON register_cash_entries FOR EACH ROW EXECUTE FUNCTION bakery_protect_cash_refund_entry();
+      END IF;
+    END $$;
     CREATE TABLE IF NOT EXISTS register_cash_operations (
       id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES app_users(id), kind TEXT NOT NULL,
       fingerprint TEXT NOT NULL, result_id UUID NOT NULL REFERENCES register_cash_withdrawals(id)

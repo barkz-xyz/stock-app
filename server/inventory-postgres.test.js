@@ -1,3 +1,4 @@
+import { postgresConfig } from './postgres.js'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import test from 'node:test'
@@ -8,8 +9,7 @@ import { inventoryRepresentation } from './inventory-api.js'
 test('PostgreSQL inventory credentials and quotas work across independent pools without changing business rows', { skip: !process.env.TEST_DATABASE_URL }, async () => {
   const schema = `verify_inventory_${crypto.randomUUID().replaceAll('-', '')}`
   const connectionString = process.env.TEST_DATABASE_URL
-  const ssl = !connectionString.includes('railway.internal') && process.env.PGSSLMODE !== 'disable' ? { rejectUnauthorized: false } : false
-  const admin = new pg.Client({ connectionString, ssl })
+  const admin = new pg.Client(postgresConfig(connectionString))
   const previous = process.env.DATABASE_URL
   let store, secondPool
   try {
@@ -22,7 +22,7 @@ test('PostgreSQL inventory credentials and quotas work across independent pools 
     await store.initializeStore()
     const integration = store.getInventoryIntegrationStore()
     await integration.initialize()
-    secondPool = new pg.Pool({ connectionString: isolated.href, ssl })
+    secondPool = new pg.Pool(postgresConfig(isolated.href))
     const other = createIntegrationStore({ pool: secondPool })
     await other.initialize()
     const item = await store.createItem({ name: 'Raw decimal', category: 'Bread', unit: 'kg', quantity: 12.25, price: 1200, sellable: true, sku: '', lowStockThreshold: 0, expiryDate: '2026-12-31' })

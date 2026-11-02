@@ -1,3 +1,4 @@
+import { postgresConfig } from '../server/postgres.js'
 import crypto from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
@@ -31,8 +32,7 @@ execFileSync(process.execPath, [path.join(workspace, 'scripts', 'seed-week-demo.
 })
 
 const demo = JSON.parse(await fs.readFile(demoPath, 'utf8'))
-const useSsl = !databaseUrl.includes('railway.internal') && process.env.PGSSLMODE !== 'disable'
-const pool = new Pool({ connectionString: databaseUrl, ssl: useSsl ? { rejectUnauthorized: false } : false })
+const pool = new Pool(postgresConfig(databaseUrl))
 const client = await pool.connect()
 let transactionStarted = false
 

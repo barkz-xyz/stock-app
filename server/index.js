@@ -6,6 +6,7 @@ import express from 'express'
 import { createInventoryRouter, createIntegrationAdminRouter, inventoryApiConfiguration } from './inventory-api.js'
 import { createReservationRouter, createReservationAdminRouter } from './reservation-api.js'
 import { parseCalendarDate } from '../src/dates.js'
+import { saleUsesPoint } from '../src/pointPayments.js'
 import { authStatus, login, logout, setupAdmin, changePassword, pointAccessIsProtected, requireAuth, requireAdmin, cashierBoundary } from './auth.js'
 import {
   buildPointManagement, cancelPointOrder, createPointOrder, createPointPos, createPointStore, deletePointPos, deletePointStore,
@@ -17,7 +18,7 @@ import {
   adjustItem, saveInventoryBatch, searchSales, attachPointOrder, closeStore, completeRefund,
   claimPointOrder, createItem, createSale, deleteItem, failRefund, getSale,
   getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales, getInventoryIntegrationStore, getStockReservationStore,
-  markCardSaleFailed, prepareRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
+  markCardSaleFailed, prepareRefund, rememberPendingRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
   updateItem, updateSaleFromPoint, updateSalePaymentDetails,
   listUsers, createUser, updateUser, listRegisterSessions, getActiveRegisterSession, getRegisterOpening, getRegisterCashStore, openRegisterSession, getRegisterClosure, saveRegisterClosure, getRegisterClosureRevision,
 } from './store.js'
@@ -44,7 +45,7 @@ app.use('/api', (_req, res, next) => {
 })
 app.use('/api/integrations/v1/reservations', createReservationRouter({ getIntegrations: () => inventoryIntegrations, getReservations: () => stockReservations, config: inventoryApiConfig }))
 app.use('/api/integrations/v1', createInventoryRouter({ getStore: () => inventoryIntegrations, config: inventoryApiConfig }))
-app.use(express.json({ limit: '200kb' }))
+app.use(express.json({ limit: '200kb', inflate: false }))
 
 function badRequest(message) {
   return Object.assign(new Error(message), { status: 400 })
@@ -222,6 +223,8 @@ function cleanPointPosInput(body = {}) {
 }
 
 async function enrichPointPayment(sale, order) {
+  // Cash remains in the merchant's drawer; it is not a card settlement.
+  if (sale?.paymentMethod === 'cash') return sale
   const paymentReference = order?.transactions?.payments?.[0]?.reference_id
   if (!sale || !paymentReference) return sale
   try {
@@ -454,6 +457,7 @@ app.get('/api/sales', async (req, res, next) => {
 })
 app.post('/api/sales/cash', async (req, res, next) => {
   try {
+    if (pointConfiguration().cashEnabled) return startPointSale(req, res, next, 'cash')
     const sale = await createSale(cleanCart(req.body), 'cash', checkoutKey(req.headers['idempotency-key']), req.body.cashReceived ?? null,await saleActor(req))
     res.status(sale.checkoutReplayed ? 200 : 201).json(sale)
   } catch (error) { next(error) }
@@ -461,22 +465,28 @@ app.post('/api/sales/cash', async (req, res, next) => {
 app.get('/api/sales/history', async (req, res, next) => {
   try { res.json(await searchSales(req.query,req.user)) } catch (error) { next(error) }
 })
-app.post('/api/sales/card', async (req, res, next) => {
+async function startPointSale(req, res, next, paymentMethod = 'card') {
   let sale
+  let providerAccepted = false
+  let providerAttempted = false
   const requestId = crypto.randomUUID()
   const requestStartedAt = performance.now()
   const timings = {}
   try {
     requireProtectedPoint()
     const reserveStartedAt = performance.now()
-    sale = await createSale(cleanCart(req.body), 'card', checkoutKey(req.headers['idempotency-key']),null,await saleActor(req))
+    sale = await createSale(cleanCart(req.body), paymentMethod, checkoutKey(req.headers['idempotency-key']),
+      paymentMethod === 'cash' ? req.body.cashReceived ?? null : null, await saleActor(req),
+      { pointPayment: true, pointTaxCondition: paymentMethod === 'cash' ? pointConfiguration().cashTaxCondition : null })
     // A replay only recovers the original sale, including uncertain reservations.
     // It must not send a second terminal order or fail another request's sale.
     if (sale.checkoutReplayed) return res.json(sale)
     if (!await claimPointOrder(sale.id)) return res.status(202).json(await getSale(sale.id))
     timings.reserve = elapsedMilliseconds(reserveStartedAt)
     const mercadoPagoStartedAt = performance.now()
+    providerAttempted = true
     const order = await createPointOrder(sale)
+    providerAccepted = true
     timings.mercadopago = elapsedMilliseconds(mercadoPagoStartedAt)
     const persistStartedAt = performance.now()
     const attachedSale = await attachPointOrder(sale.id, order, sale)
@@ -486,16 +496,20 @@ app.post('/api/sales/card', async (req, res, next) => {
     logPointTiming(requestId, attachedSale, 'created', timings)
     res.status(201).json({ ...attachedSale, pointTiming: timings, requestId })
   } catch (error) {
-    if (sale && !error.uncertain) await markCardSaleFailed(sale.id, error.mercadoPagoCode || 'order_creation_failed').catch(console.error)
+    if (providerAccepted) { error.uncertain = true; error.status = 502 }
+    if (sale && providerAttempted && !error.uncertain) await markCardSaleFailed(sale.id, error.mercadoPagoCode || 'order_creation_failed').catch(console.error)
     if (sale) error.saleId = sale.id
     timings.total = elapsedMilliseconds(requestStartedAt)
     sendPointTiming(res, requestId, timings)
     logPointTiming(requestId, sale, error.uncertain ? 'uncertain' : 'failed', timings)
     next(error)
   }
-})
-app.post('/api/sales/:id/retry-card', async (req, res, next) => {
+}
+app.post('/api/sales/card', startPointSale)
+app.post(['/api/sales/:id/retry-point', '/api/sales/:id/retry-card'], async (req, res, next) => {
   let sale
+  let providerAccepted = false
+  let providerAttempted = false
   const requestId = crypto.randomUUID()
   const requestStartedAt = performance.now()
   const timings = {}
@@ -505,11 +519,13 @@ app.post('/api/sales/:id/retry-card', async (req, res, next) => {
     sale = await getSale(req.params.id)
     timings.lookup = elapsedMilliseconds(lookupStartedAt)
     if (!sale) return res.status(404).json({ error: 'Sale not found.' })
-    if (sale.paymentMethod !== 'card' || sale.status !== 'pending') throw Object.assign(new Error('This card sale cannot be retried.'), { status: 409 })
+    if (!saleUsesPoint(sale) || sale.status !== 'pending') throw Object.assign(new Error('This Point sale cannot be retried.'), { status: 409 })
     if (sale.mpOrderId) return res.json(sale)
     if (!await claimPointOrder(sale.id)) return res.status(202).json(await getSale(sale.id))
     const mercadoPagoStartedAt = performance.now()
+    providerAttempted = true
     const order = await createPointOrder(sale)
+    providerAccepted = true
     timings.mercadopago = elapsedMilliseconds(mercadoPagoStartedAt)
     const persistStartedAt = performance.now()
     const attachedSale = await attachPointOrder(sale.id, order, sale)
@@ -519,7 +535,9 @@ app.post('/api/sales/:id/retry-card', async (req, res, next) => {
     logPointTiming(requestId, attachedSale, 'created_after_retry', timings)
     res.json({ ...attachedSale, pointTiming: timings, requestId })
   } catch (error) {
-    if (sale && !error.uncertain) await markCardSaleFailed(sale.id, error.mercadoPagoCode || 'order_creation_failed').catch(console.error)
+    // A previous attempt may have reached the terminal. A rejected retry cannot
+    // prove that original outcome; only an authoritative order status can release stock.
+    if (providerAttempted || providerAccepted) { error.uncertain = true; error.status = 502 }
     if (sale) error.saleId = sale.id
     timings.total = elapsedMilliseconds(requestStartedAt)
     sendPointTiming(res, requestId, timings)
@@ -531,7 +549,7 @@ app.get('/api/sales/:id', async (req, res, next) => {
   try {
     let sale = await getSale(req.params.id)
     if (!sale) return res.status(404).json({ error: 'Sale not found.' })
-    if (req.query.refresh === 'true' && sale.paymentMethod === 'card' && sale.status === 'pending' && sale.mpOrderId && pointConfiguration().configured) {
+    if (req.query.refresh === 'true' && saleUsesPoint(sale) && sale.status === 'pending' && sale.mpOrderId && pointConfiguration().configured) {
       const previousPointStatus = sale.mpStatus
       const refreshStartedAt = performance.now()
       const mercadoPagoStartedAt = performance.now()
@@ -574,7 +592,7 @@ app.post('/api/sales/:id/reconcile-point', async (req, res, next) => {
     requireProtectedPoint()
     const sale = req.sale || await getSale(req.params.id)
     if (!sale) return res.status(404).json({ error: 'Sale not found.' })
-    if (sale.paymentMethod !== 'card' || !sale.mpOrderId) {
+    if (!saleUsesPoint(sale) || !sale.mpOrderId) {
       throw Object.assign(new Error('This sale has no Point order to synchronize.'), { status: 409 })
     }
     res.json(await reconcilePointSale(sale))
@@ -584,7 +602,7 @@ app.post('/api/sales/:id/cancel', async (req, res, next) => {
   try {
     const sale = req.sale || await getSale(req.params.id)
     if (!sale) return res.status(404).json({ error: 'Sale not found.' })
-    if (sale.paymentMethod !== 'card' || sale.status !== 'pending') throw Object.assign(new Error('Only a pending card sale can be cancelled.'), { status: 409 })
+    if (!saleUsesPoint(sale) || sale.status !== 'pending') throw Object.assign(new Error('Only a pending Point sale can be cancelled.'), { status: 409 })
     if (!sale.mpOrderId) throw Object.assign(new Error('Retry the Mercado Pago connection before cancelling this sale.'), { status: 409 })
     const order = await cancelPointOrder(sale.mpOrderId, sale)
     res.json(await updateSaleFromPoint(order))
@@ -592,26 +610,46 @@ app.post('/api/sales/:id/cancel', async (req, res, next) => {
 })
 app.post('/api/sales/:id/refunds', async (req, res, next) => {
   let prepared
+  let providerAccepted = false
+  let providerAttempted = false
+  let providerRefundId
   try {
+    const requestKey = checkoutKey(req.headers['idempotency-key'])
+    if (!requestKey) throw Object.assign(new Error('Falta la referencia de la devolución. Actualiza la página e intenta de nuevo.'), { status: 400, code: 'IDEMPOTENCY_REQUIRED' })
     const existing = await getSale(req.params.id)
     if (!existing) return res.status(404).json({ error: 'Sale not found.' })
     if (existing.paymentMethod === 'card') requireProtectedPoint()
-    prepared = await prepareRefund(existing.id, cleanRefund(req.body))
+    prepared = await prepareRefund(existing.id, cleanRefund(req.body), { key: requestKey, actor: req.user })
     if (!prepared) return res.status(404).json({ error: 'Sale not found.' })
+    if (prepared.replayed && prepared.refund.status !== 'pending') return res.json(prepared.sale)
+    if (prepared.replayed && existing.paymentMethod === 'card') return res.status(202).json(prepared.sale)
 
     if (existing.paymentMethod === 'cash') {
-      return res.status(201).json(await completeRefund(prepared.refund.id))
+      const session = await getActiveRegisterSession(req.user)
+      if (!session) throw Object.assign(new Error('Abre una sesión de caja para devolver efectivo.'), { status: 409, code: 'SESSION_REQUIRED' })
+      const actor = { ...req.user, sessionId: session.id }
+      return res.status(201).json(await completeRefund(prepared.refund.id, null, actor))
     }
     if (!existing.mpOrderId) throw Object.assign(new Error('This card sale has no Mercado Pago order to refund.'), { status: 409 })
-    const order = await refundPointOrder(existing.mpOrderId, existing, { ...prepared.refund, full: prepared.full })
+    providerAttempted = true
+    const order = await refundPointOrder(existing.mpOrderId, existing, { ...prepared.refund, full: prepared.refund.providerFull ?? prepared.full })
+    providerAccepted = true
+    providerRefundId = order.transactions.refunds.at(-1).id
     res.status(201).json(await completeRefund(prepared.refund.id, order))
   } catch (error) {
+    if (providerAccepted || prepared?.replayed && providerAttempted) { error.uncertain = true; error.status = 502 }
+    if (prepared?.refund && (error.pointRefundId || providerRefundId)) await rememberPendingRefund(prepared.refund.id, {
+      pointRefundId: error.pointRefundId || providerRefundId, pointStatus: error.pointStatus || 'pending',
+    }).catch(() => console.error('Could not persist the pending provider refund reference.'))
     if (prepared?.refund && !error.uncertain) await failRefund(prepared.refund.id, error.mercadoPagoCode || error.message).catch(console.error)
     if (prepared?.refund) error.refundId = prepared.refund.id
     next(error)
   }
 })
 app.post('/api/sales/:saleId/refunds/:refundId/retry', async (req, res, next) => {
+  let providerAccepted = false
+  let providerAttempted = false
+  let providerRefundId
   try {
     requireProtectedPoint()
     const sale = await getSale(req.params.saleId)
@@ -621,12 +659,22 @@ app.post('/api/sales/:saleId/refunds/:refundId/retry', async (req, res, next) =>
     if (sale.paymentMethod !== 'card' || refund.status !== 'pending' || !sale.mpOrderId) {
       throw Object.assign(new Error('This refund cannot be retried.'), { status: 409 })
     }
+    providerAttempted = true
     const order = await refundPointOrder(sale.mpOrderId, sale, {
       ...refund,
-      full: sale.refundedTotal + refund.amount >= sale.total,
+      full: refund.providerFull ?? refund.amount >= sale.total,
     })
+    providerAccepted = true
+    providerRefundId = order.transactions.refunds.at(-1).id
     res.json(await completeRefund(refund.id, order))
-  } catch (error) { next(error) }
+  } catch (error) {
+    if (providerAttempted || providerAccepted) { error.uncertain = true; error.status = 502 }
+    if (error.pointRefundId || providerRefundId) await rememberPendingRefund(req.params.refundId, {
+      pointRefundId: error.pointRefundId || providerRefundId, pointStatus: error.pointStatus || 'pending',
+    }).catch(() => console.error('Could not persist the pending provider refund reference.'))
+    error.refundId = req.params.refundId
+    next(error)
+  }
 })
 app.patch('/api/sales/:saleId/refunds/:refundId/credit-note', async (req, res, next) => {
   try {
@@ -782,7 +830,6 @@ app.use((error, _req, res, _next) => {
 await initializeStore()
 inventoryIntegrations = getInventoryIntegrationStore()
 if (inventoryApiConfig.enabled && inventoryApiConfig.production && !inventoryIntegrations.persistent) throw new Error('The production inventory API requires PostgreSQL.')
-await inventoryIntegrations.initialize()
 stockReservations = getStockReservationStore({ ttlSeconds: inventoryApiConfig.reservationTtlSeconds })
 if (inventoryApiConfig.reservationsEnabled && (!inventoryApiConfig.enabled || !stockReservations.persistent)) throw new Error('Stock reservations require the inventory API and PostgreSQL.')
 if (stockReservations.persistent) {
@@ -805,7 +852,7 @@ console.info(JSON.stringify({
   webhookSignatureValidation: pointSecurity.webhookSignatureValidation,
   webhookAuthoritativeOrderLookup: pointSecurity.webhookAuthoritativeOrderLookup,
 }))
-const server = app.listen(port, '0.0.0.0', () => console.log(`Bakery POS listening on port ${server.address().port}`))
+const server = app.listen(port, process.env.HOST || '0.0.0.0', () => console.log(`Bakery POS listening on port ${server.address().port}`))
 
 async function shutdown() {
   clearInterval(reservationCleanup)

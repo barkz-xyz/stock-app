@@ -1,3 +1,4 @@
+import { postgresConfig } from './postgres.js'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import test from 'node:test'
@@ -12,8 +13,7 @@ import { readInventorySnapshot } from './inventory-snapshot.js'
 test('PostgreSQL snapshot revisions stay coherent across commits, rollback, replicas and process restarts', { skip: !process.env.TEST_DATABASE_URL }, async t => {
   const schema = `verify_snapshots_${crypto.randomUUID().replaceAll('-', '')}`
   const connectionString = process.env.TEST_DATABASE_URL
-  const ssl = !connectionString.includes('railway.internal') && process.env.PGSSLMODE !== 'disable' ? { rejectUnauthorized: false } : false
-  const admin = new pg.Client({ connectionString, ssl })
+  const admin = new pg.Client(postgresConfig(connectionString))
   const previousUrl = process.env.DATABASE_URL
   let store, otherPool
   const servers = []
@@ -22,7 +22,7 @@ test('PostgreSQL snapshot revisions stay coherent across commits, rollback, repl
     const isolated = new URL(connectionString); isolated.searchParams.set('options', `-c search_path=${schema}`)
     process.env.DATABASE_URL = isolated.href
     store = await import(`./store.js?snapshots=${crypto.randomUUID()}`); await store.initializeStore()
-    otherPool = new pg.Pool({ connectionString: isolated.href, ssl })
+    otherPool = new pg.Pool(postgresConfig(isolated.href))
     const integration = store.getInventoryIntegrationStore(); await integration.initialize()
     const issued = await integration.createClient({ name: 'Snapshot tests', environment: 'test', expiresInDays: 1 })
     const item = await store.createItem({ name: 'Pan decimal', category: 'Bread', unit: 'kg', quantity: 1.25, price: 1000, sellable: true, lowStockThreshold: 0, sku: '', expiryDate: null })
@@ -102,7 +102,7 @@ test('PostgreSQL snapshot revisions stay coherent across commits, rollback, repl
       const child = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
         import pg from 'pg'; import {readInventorySnapshot} from './server/inventory-snapshot.js';
         import {inventoryRepresentation} from './server/inventory-api.js';
-        const pool=new pg.Pool({connectionString:process.env.SNAPSHOT_TEST_URL,ssl:${JSON.stringify(ssl)}});
+        const {postgresConfig}=await import('./server/postgres.js'); const pool=new pg.Pool(postgresConfig(process.env.SNAPSHOT_TEST_URL));
         console.log(JSON.stringify(inventoryRepresentation((await readInventorySnapshot(pool)).rows))); await pool.end();
       `], { env: { ...process.env, SNAPSHOT_TEST_URL: isolated.href }, windowsHide: true, timeout: 15000 })
       assert.deepEqual(JSON.parse(child.stdout), { body: old.body, etag: old.etag })

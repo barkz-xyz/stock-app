@@ -1,0 +1,22 @@
+[Unit]
+Description=Create, encrypt and verify an offsite Stock App PostgreSQL backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=stock-backup
+Group=stock-backup
+WorkingDirectory=/opt/stock-app
+EnvironmentFile=/etc/stock-app/backup.env
+ExecStart=/usr/bin/bash /opt/stock-app/scripts/backup-postgres-offsite.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/stock-app
+TimeoutStartSec=1h
+
+# Attach the operator's existing service-failure alert here after provisioning.
+# Do not treat a timer firing as success: the upload AND verification must pass.

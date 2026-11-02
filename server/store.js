@@ -3,16 +3,20 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import pg from 'pg'
 import { dateOnly } from '../src/dates.js'
+import { saleUsesPoint } from '../src/pointPayments.js'
 import { publishChange } from './changes.js'
 import { cleanInventoryBatch, inventoryBatchChanges } from './inventory-batch.js'
 import { cleanHistoryQuery, historyMatches } from './sales-history.js'
 import { publicUser, cleanUser, hashPassword, userError } from './user-security.js'
-import { initializeCashLedger, cashAmount, withCashLedger } from './cash-ledger.js'
+import { cashAmount, withCashLedger, isCashId, cashFingerprint } from './cash-ledger.js'
 import { createRegisterCashStore } from './register-cash-store.js'
 import { createIntegrationStore } from './integration-store.js'
-import { initializeInventoryRevision, readInventorySnapshot } from './inventory-snapshot.js'
-import { initializeStockReservations, createStockReservationStore, assertNoStockHolds } from './stock-reservations.js'
+import { readInventorySnapshot } from './inventory-snapshot.js'
+import { createStockReservationStore, assertNoStockHolds } from './stock-reservations.js'
 import { closurePeriod, buildClosureSummary, cleanClosureInput, createClosure, closureError, businessDateAt } from './cash-closure.js'
+
+import { postgresConfig, isProductionDatabaseEnvironment, assertLimitedRuntimeRole } from './postgres.js'
+import { migrateDatabase, assertDatabaseSchema } from './schema.js'
 
 const { Pool } = pg
 const databaseUrl = process.env.DATABASE_URL
@@ -105,6 +109,11 @@ function normalizeRefund(row, items = row.items || [], creditNote = row.creditNo
     mpRefundId: row.mp_refund_id ?? row.mpRefundId ?? null,
     mpReferenceId: row.mp_reference_id ?? row.mpReferenceId ?? null,
     mpStatus: row.mp_status ?? row.mpStatus ?? null,
+    cashRegisterSessionId: row.cash_register_session_id ?? row.cashRegisterSessionId ?? null,
+    processedBy: row.processed_by ?? row.processedBy ?? null,
+    requestKey: row.request_key ?? row.requestKey ?? null,
+    requestedBy: row.requested_by ?? row.requestedBy ?? null,
+    providerFull: row.provider_full ?? row.providerFull ?? null,
     source: row.source || 'pos',
     inventoryReviewStatus: row.inventory_review_status ?? row.inventoryReviewStatus ?? 'resolved',
     errorDetail: row.error_detail ?? row.errorDetail ?? '',
@@ -135,6 +144,8 @@ function normalizeSale(row, items = row.items || [], refunds = row.refunds || []
     checkoutKey: row.checkout_key ?? row.checkoutKey ?? null,
     status: row.status,
     paymentMethod: row.payment_method ?? row.paymentMethod,
+    pointPayment: Boolean(row.point_payment ?? row.pointPayment) || (row.payment_method ?? row.paymentMethod) === 'card',
+    pointTaxCondition: row.point_tax_condition ?? row.pointTaxCondition ?? null,
     total: Number(row.total),
     cashReceived: row.cash_received == null && row.cashReceived == null ? null : Number(row.cash_received ?? row.cashReceived),
     cashChange: row.cash_received == null && row.cashReceived == null ? null : Number(row.cash_received ?? row.cashReceived) - Number(row.total),
@@ -229,228 +240,12 @@ function ensureFileShape(data) {
 
 export async function initializeStore() {
   if (databaseUrl) {
-    const useSsl = !databaseUrl.includes('railway.internal') && process.env.PGSSLMODE !== 'disable'
-    pool = new Pool({ connectionString: databaseUrl, ssl: useSsl ? { rejectUnauthorized: false } : false })
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS items (
-        id UUID PRIMARY KEY,
-        name TEXT NOT NULL,
-        category TEXT NOT NULL,
-        unit TEXT NOT NULL,
-        quantity NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (quantity >= 0),
-        low_stock_threshold NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (low_stock_threshold >= 0),
-        sku TEXT NOT NULL DEFAULT '',
-        expiry_date DATE,
-        price NUMERIC(12,0) NOT NULL DEFAULT 0 CHECK (price >= 0),
-        sellable BOOLEAN NOT NULL DEFAULT FALSE,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-      ALTER TABLE items ADD COLUMN IF NOT EXISTS price NUMERIC(12,0) NOT NULL DEFAULT 0 CHECK (price >= 0);
-      ALTER TABLE items ADD COLUMN IF NOT EXISTS sellable BOOLEAN NOT NULL DEFAULT FALSE;
-
-      CREATE TABLE IF NOT EXISTS sales (
-        id UUID PRIMARY KEY,
-        status TEXT NOT NULL CHECK (status IN ('pending','paid','failed','cancelled','expired','refunded')),
-        payment_method TEXT NOT NULL CHECK (payment_method IN ('cash','card')),
-        total NUMERIC(12,0) NOT NULL CHECK (total >= 0),
-        mp_order_id TEXT UNIQUE,
-        mp_payment_id TEXT,
-        mp_status TEXT,
-        mp_status_detail TEXT,
-        mp_external_reference TEXT UNIQUE,
-        mp_operation_id TEXT,
-        mp_authorization_code TEXT NOT NULL DEFAULT '',
-        mp_card_brand TEXT NOT NULL DEFAULT '',
-        mp_card_last_four TEXT NOT NULL DEFAULT '',
-        mp_payment_type TEXT NOT NULL DEFAULT '',
-        mp_fee_amount NUMERIC(12,0) NOT NULL DEFAULT 0,
-        mp_net_received_amount NUMERIC(12,0),
-        mp_terminal_serial TEXT NOT NULL DEFAULT '',
-        mp_tax_setting TEXT NOT NULL DEFAULT '',
-        mp_reconciled_at TIMESTAMPTZ,
-        inventory_applied BOOLEAN NOT NULL DEFAULT FALSE,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        paid_at TIMESTAMPTZ
-      );
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS checkout_key UUID;
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS cashier_id UUID;
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS cashier_name TEXT NOT NULL DEFAULT '';
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS register_session_id UUID;
-      CREATE INDEX IF NOT EXISTS sales_cashier_session_idx ON sales(cashier_id,register_session_id,created_at DESC);
-      CREATE TABLE IF NOT EXISTS app_users (
-        id UUID PRIMARY KEY, username TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
-        role TEXT NOT NULL CHECK(role IN ('admin','cashier')), active BOOLEAN NOT NULL DEFAULT TRUE,
-        password_hash TEXT NOT NULL, must_change_password BOOLEAN NOT NULL DEFAULT TRUE,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-      CREATE TABLE IF NOT EXISTS auth_sessions (
-        token_hash TEXT PRIMARY KEY, user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-        expires_at TIMESTAMPTZ NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS register_sessions (
-        id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES app_users(id), operator TEXT NOT NULL,
-        opening_cash NUMERIC(12,0) NOT NULL CHECK(opening_cash>=0), opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        closed_at TIMESTAMPTZ, closure JSONB
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS one_open_register_per_user ON register_sessions(user_id) WHERE closed_at IS NULL;
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS cash_received NUMERIC(12,0) CHECK (cash_received IS NULL OR (payment_method='cash' AND cash_received >= total));
-      CREATE TABLE IF NOT EXISTS stock_batches (
-        id UUID PRIMARY KEY, fingerprint TEXT NOT NULL, result JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS checkout_fingerprint TEXT;
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS point_order_lease_until TIMESTAMPTZ;
-      CREATE UNIQUE INDEX IF NOT EXISTS sales_checkout_key_idx ON sales(checkout_key);
-      CREATE TABLE IF NOT EXISTS sale_items (
-        id UUID PRIMARY KEY,
-        sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
-        item_id UUID REFERENCES items(id) ON DELETE SET NULL,
-        item_name TEXT NOT NULL,
-        unit TEXT NOT NULL,
-        quantity NUMERIC(12,2) NOT NULL CHECK (quantity > 0),
-        unit_price NUMERIC(12,0) NOT NULL CHECK (unit_price >= 0),
-        line_total NUMERIC(12,0) NOT NULL CHECK (line_total >= 0)
-      );
-      ALTER TABLE sale_items ADD COLUMN IF NOT EXISTS inventory_quantity NUMERIC(12,2)
-        CHECK(inventory_quantity >= 0 AND inventory_quantity <= quantity);
-      CREATE TABLE IF NOT EXISTS refunds (
-        id UUID PRIMARY KEY,
-        sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
-        status TEXT NOT NULL CHECK (status IN ('pending','processed','failed')),
-        amount NUMERIC(12,0) NOT NULL CHECK (amount > 0),
-        reason TEXT NOT NULL DEFAULT '',
-        restock BOOLEAN NOT NULL DEFAULT TRUE,
-        credit_note_required BOOLEAN NOT NULL DEFAULT FALSE,
-        original_document_type TEXT NOT NULL DEFAULT '',
-        original_folio TEXT NOT NULL DEFAULT '',
-        mp_refund_id TEXT UNIQUE,
-        mp_reference_id TEXT,
-        mp_status TEXT,
-        source TEXT NOT NULL DEFAULT 'pos',
-        inventory_review_status TEXT NOT NULL DEFAULT 'resolved',
-        error_detail TEXT NOT NULL DEFAULT '',
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        processed_at TIMESTAMPTZ
-      );
-      CREATE TABLE IF NOT EXISTS refund_items (
-        id UUID PRIMARY KEY,
-        refund_id UUID NOT NULL REFERENCES refunds(id) ON DELETE CASCADE,
-        sale_item_id UUID REFERENCES sale_items(id) ON DELETE SET NULL,
-        item_id UUID REFERENCES items(id) ON DELETE SET NULL,
-        item_name TEXT NOT NULL,
-        quantity NUMERIC(12,2) NOT NULL CHECK (quantity > 0),
-        unit_price NUMERIC(12,0) NOT NULL CHECK (unit_price >= 0),
-        line_total NUMERIC(12,0) NOT NULL CHECK (line_total >= 0),
-        restocked BOOLEAN NOT NULL DEFAULT FALSE
-      );
-      CREATE TABLE IF NOT EXISTS tax_documents (
-        id UUID PRIMARY KEY,
-        sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
-        refund_id UUID NOT NULL UNIQUE REFERENCES refunds(id) ON DELETE CASCADE,
-        type TEXT NOT NULL CHECK (type IN ('credit_note')),
-        status TEXT NOT NULL CHECK (status IN ('pending','issued','failed')),
-        mode TEXT NOT NULL DEFAULT 'manual' CHECK (mode IN ('manual','sii_own')),
-        original_document_type TEXT NOT NULL DEFAULT '',
-        original_folio TEXT NOT NULL DEFAULT '',
-        folio TEXT NOT NULL DEFAULT '',
-        sii_track_id TEXT NOT NULL DEFAULT '',
-        error_detail TEXT NOT NULL DEFAULT '',
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        issued_at TIMESTAMPTZ
-      );
-      CREATE TABLE IF NOT EXISTS movements (
-        id UUID PRIMARY KEY,
-        item_id UUID REFERENCES items(id) ON DELETE SET NULL,
-        item_name TEXT NOT NULL,
-        type TEXT NOT NULL CHECK (type IN ('stock_in', 'stock_out', 'adjustment')),
-        quantity NUMERIC(12,2) NOT NULL,
-        balance_after NUMERIC(12,2) NOT NULL CHECK (balance_after >= 0),
-        note TEXT NOT NULL DEFAULT '',
-        sale_id UUID REFERENCES sales(id) ON DELETE SET NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-      CREATE TABLE IF NOT EXISTS cash_closures (
-        id UUID PRIMARY KEY,
-        business_date DATE NOT NULL UNIQUE,
-        opening_cash NUMERIC(12,0) NOT NULL DEFAULT 0 CHECK (opening_cash >= 0),
-        cash_adjustments NUMERIC(12,0) NOT NULL DEFAULT 0,
-        counted_cash NUMERIC(12,0) NOT NULL DEFAULT 0 CHECK (counted_cash >= 0),
-        cash_sales NUMERIC(12,0) NOT NULL DEFAULT 0 CHECK (cash_sales >= 0),
-        card_sales NUMERIC(12,0) NOT NULL DEFAULT 0 CHECK (card_sales >= 0),
-        total_sales NUMERIC(12,0) NOT NULL DEFAULT 0 CHECK (total_sales >= 0),
-        expected_cash NUMERIC(12,0) NOT NULL DEFAULT 0,
-        difference NUMERIC(12,0) NOT NULL DEFAULT 0,
-        transaction_count INTEGER NOT NULL DEFAULT 0 CHECK (transaction_count >= 0),
-        note TEXT NOT NULL DEFAULT '',
-        closed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-      ALTER TABLE cash_closures ADD COLUMN IF NOT EXISTS details JSONB;
-      ALTER TABLE cash_closures DROP CONSTRAINT IF EXISTS cash_closures_cash_sales_check;
-      ALTER TABLE cash_closures DROP CONSTRAINT IF EXISTS cash_closures_card_sales_check;
-      ALTER TABLE cash_closures DROP CONSTRAINT IF EXISTS cash_closures_total_sales_check;
-      ALTER TABLE movements ADD COLUMN IF NOT EXISTS sale_id UUID REFERENCES sales(id) ON DELETE SET NULL;
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_external_reference TEXT;
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_operation_id TEXT;
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_authorization_code TEXT NOT NULL DEFAULT '';
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_card_brand TEXT NOT NULL DEFAULT '';
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_card_last_four TEXT NOT NULL DEFAULT '';
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_payment_type TEXT NOT NULL DEFAULT '';
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_fee_amount NUMERIC(12,0) NOT NULL DEFAULT 0;
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_net_received_amount NUMERIC(12,0);
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_terminal_serial TEXT NOT NULL DEFAULT '';
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_tax_setting TEXT NOT NULL DEFAULT '';
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS mp_reconciled_at TIMESTAMPTZ;
-      ALTER TABLE refunds ADD COLUMN IF NOT EXISTS mp_reference_id TEXT;
-      ALTER TABLE refunds ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'pos';
-      ALTER TABLE refunds ADD COLUMN IF NOT EXISTS inventory_review_status TEXT NOT NULL DEFAULT 'resolved';
-      UPDATE sales SET mp_external_reference=CONCAT('VENTA-', UPPER(LEFT(REPLACE(id::text, '-', ''), 12))) WHERE mp_external_reference IS NULL;
-      CREATE UNIQUE INDEX IF NOT EXISTS sales_mp_external_reference_idx ON sales(mp_external_reference);
-      ALTER TABLE sale_items ALTER COLUMN item_id DROP NOT NULL;
-      ALTER TABLE movements ALTER COLUMN item_id DROP NOT NULL;
-      DO $$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM pg_constraint
-          WHERE conrelid = 'sale_items'::regclass AND conname = 'sale_items_item_id_fkey' AND confdeltype <> 'n'
-        ) THEN
-          ALTER TABLE sale_items DROP CONSTRAINT sale_items_item_id_fkey;
-          ALTER TABLE sale_items ADD CONSTRAINT sale_items_item_id_fkey FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE SET NULL;
-        END IF;
-        IF EXISTS (
-          SELECT 1 FROM pg_constraint
-          WHERE conrelid = 'movements'::regclass AND conname = 'movements_item_id_fkey' AND confdeltype <> 'n'
-        ) THEN
-          ALTER TABLE movements DROP CONSTRAINT movements_item_id_fkey;
-          ALTER TABLE movements ADD CONSTRAINT movements_item_id_fkey FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE SET NULL;
-        END IF;
-      END $$;
-      CREATE INDEX IF NOT EXISTS movements_created_at_idx ON movements(created_at DESC);
-      CREATE INDEX IF NOT EXISTS sales_created_at_idx ON sales(created_at DESC);
-      CREATE INDEX IF NOT EXISTS sales_mp_order_id_idx ON sales(mp_order_id);
-      CREATE INDEX IF NOT EXISTS sale_items_sale_id_idx ON sale_items(sale_id);
-      CREATE INDEX IF NOT EXISTS refunds_sale_id_idx ON refunds(sale_id, created_at DESC);
-      CREATE INDEX IF NOT EXISTS refund_items_refund_id_idx ON refund_items(refund_id);
-      CREATE INDEX IF NOT EXISTS tax_documents_sale_id_idx ON tax_documents(sale_id, created_at DESC);
-      CREATE INDEX IF NOT EXISTS cash_closures_business_date_idx ON cash_closures(business_date DESC);
-      CREATE OR REPLACE FUNCTION bakery_notify_change() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN
-        PERFORM pg_notify('bakery_changes', 'changed');
-        RETURN NULL;
-      END $$;
-      DO $$ DECLARE target TEXT; BEGIN
-        FOREACH target IN ARRAY ARRAY['items','sales','sale_items','refunds','refund_items','tax_documents','movements','cash_closures'] LOOP
-          IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass(target) AND tgname='bakery_changed') THEN
-            EXECUTE format('CREATE TRIGGER bakery_changed AFTER INSERT OR UPDATE OR DELETE ON %I FOR EACH STATEMENT EXECUTE FUNCTION bakery_notify_change()', target);
-          END IF;
-        END LOOP;
-      END $$;
-    `)
-    await initializeInventoryRevision(pool)
-    await initializeStockReservations(pool)
-    await initializeCashLedger(pool)
+    pool = new Pool(postgresConfig(databaseUrl))
+    const production = isProductionDatabaseEnvironment()
+    if (production && process.env.MIGRATION_DATABASE_URL) throw new Error('Keep MIGRATION_DATABASE_URL in a separate migration runner; the application must receive only its limited DATABASE_URL.')
+    if (production) await assertLimitedRuntimeRole(pool)
+    if (!production && process.env.DATABASE_AUTO_MIGRATE !== 'false') await migrateDatabase(pool)
+    else await assertDatabaseSchema(pool)
     await seedInitialAdmin()
     return
   }
@@ -771,11 +566,12 @@ function validateSaleLines(items, requested, allowShortfall = false) {
   })
 }
 
-function checkoutFingerprint(requested, paymentMethod, cashReceived = null) {
+function checkoutFingerprint(requested, paymentMethod, cashReceived = null, options = {}) {
   const combined = new Map()
   for (const line of requested) combined.set(line.itemId, (combined.get(line.itemId) || 0) + Number(line.quantity))
   const values = [paymentMethod, [...combined].sort(([a], [b]) => a.localeCompare(b))]
   if (cashReceived != null) values.push(cashReceived)
+  if (paymentMethod === 'cash' && options.pointPayment) values.push('point', options.pointTaxCondition)
   return crypto.createHash('sha256').update(JSON.stringify(values)).digest('hex')
 }
 
@@ -785,8 +581,8 @@ function assertSameCheckout(sale, fingerprint) {
   }
 }
 
-function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashReceived, actor) {
-  const fingerprint = checkoutFingerprint(requested, paymentMethod, cashReceived)
+function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashReceived, actor, options) {
+  const fingerprint = checkoutFingerprint(requested, paymentMethod, cashReceived, options)
   const existing = checkoutKey && data.sales.find(sale => sale.checkoutKey === checkoutKey)
   if (existing) {
     if(actor&&existing.cashierId!==actor.id&&!(actor.role==='admin'&&!existing.cashierId))throw userError('Venta no encontrada.',404)
@@ -803,8 +599,10 @@ function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashRece
     id,
     checkoutKey,
     checkoutFingerprint: fingerprint,
-    status: paymentMethod === 'cash' ? 'paid' : 'pending',
+    status: options.pointPayment ? 'pending' : 'paid',
     paymentMethod,
+    pointPayment: options.pointPayment,
+    pointTaxCondition: options.pointTaxCondition,
     total,
     cashReceived,
     cashierId:actor?.id||null,cashierName:actor?.name||'',registerSessionId:actor?.sessionId||null,
@@ -828,7 +626,7 @@ function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashRece
     inventoryApplied: true,
     createdAt: now,
     updatedAt: now,
-    paidAt: paymentMethod === 'cash' ? now : null,
+    paidAt: options.pointPayment ? null : now,
   }
   for (const line of lines) {
     const item = data.items.find((entry) => entry.id === line.item.id)
@@ -837,7 +635,7 @@ function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashRece
     data.movements.unshift({
       id: crypto.randomUUID(), itemId: item.id, itemName: item.name, saleId: id, type: 'stock_out',
       quantity: -line.inventoryQuantity, balanceAfter: item.quantity,
-      note: `${paymentMethod === 'cash' ? `Sale #${shortId(id)}` : `Reserved for card sale #${shortId(id)}`}${line.quantity > line.inventoryQuantity ? ` · Sin stock registrado: ${Math.round((line.quantity-line.inventoryQuantity)*100)/100}` : ''}`,
+      note: `${options.pointPayment ? `Reserved for Point sale #${shortId(id)}` : `Sale #${shortId(id)}`}${line.quantity > line.inventoryQuantity ? ` · Sin stock registrado: ${Math.round((line.quantity-line.inventoryQuantity)*100)/100}` : ''}`,
       createdAt: now,
     })
   }
@@ -851,13 +649,16 @@ function validateCashReceived(received, method, total) {
   }
 }
 
-export async function createSale(requested, paymentMethod, checkoutKey = null, cashReceived = null, actor = null) {
-  if (!pool) return mutateFileData((data) => reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashReceived, actor))
+export async function createSale(requested, paymentMethod, checkoutKey = null, cashReceived = null, actor = null, options = {}) {
+  options = { pointPayment: paymentMethod === 'card' || options.pointPayment === true,
+    pointTaxCondition: paymentMethod === 'cash' && options.pointPayment === true ? options.pointTaxCondition || 'payment_taxable_iva' : null }
+  if (options.pointTaxCondition && !['payment_taxable_iva', 'payment_exempt_iva'].includes(options.pointTaxCondition)) throw userError('La configuración de IVA para efectivo Point no es válida.', 503)
+  if (!pool) return mutateFileData((data) => reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashReceived, actor, options))
 
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    const fingerprint = checkoutFingerprint(requested, paymentMethod, cashReceived)
+    const fingerprint = checkoutFingerprint(requested, paymentMethod, cashReceived, options)
     if (checkoutKey) {
       // Serialize the same checkout across processes before touching inventory.
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`checkout:${checkoutKey}`])
@@ -877,11 +678,11 @@ export async function createSale(requested, paymentMethod, checkoutKey = null, c
     const id = crypto.randomUUID()
     const total = lines.reduce((sum, line) => sum + line.lineTotal, 0)
     validateCashReceived(cashReceived, paymentMethod, total)
-    const status = paymentMethod === 'cash' ? 'paid' : 'pending'
+    const status = options.pointPayment ? 'pending' : 'paid'
     const saleResult = await client.query(
-      `INSERT INTO sales (id, status, payment_method, total, mp_external_reference, inventory_applied, paid_at, checkout_key, checkout_fingerprint, cash_received,cashier_id,cashier_name,register_session_id)
-       VALUES ($1,$2,$3,$4,$5,TRUE,CASE WHEN $2='paid' THEN NOW() ELSE NULL END,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [id, status, paymentMethod, total, saleExternalReference(id), checkoutKey, fingerprint, cashReceived,actor?.id||null,actor?.name||'',actor?.sessionId||null],
+      `INSERT INTO sales (id, status, payment_method, total, mp_external_reference, inventory_applied, paid_at, checkout_key, checkout_fingerprint, cash_received,cashier_id,cashier_name,register_session_id,point_payment,point_tax_condition)
+       VALUES ($1,$2,$3,$4,$5,TRUE,CASE WHEN $2='paid' THEN NOW() ELSE NULL END,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [id, status, paymentMethod, total, saleExternalReference(id), checkoutKey, fingerprint, cashReceived,actor?.id||null,actor?.name||'',actor?.sessionId||null,options.pointPayment,options.pointTaxCondition],
     )
     const persistedLines = lines.map((line) => ({ ...line, lineId: crypto.randomUUID() }))
     await client.query(
@@ -913,7 +714,7 @@ export async function createSale(requested, paymentMethod, checkoutKey = null, c
       [persistedLines.map((line) => line.item.id), persistedLines.map((line) => line.inventoryQuantity)],
     )
     const balances = new Map(updatedItems.rows.map((item) => [item.id, item.quantity]))
-    const movementNote = paymentMethod === 'cash' ? `Sale #${shortId(id)}` : `Reserved for card sale #${shortId(id)}`
+    const movementNote = options.pointPayment ? `Reserved for Point sale #${shortId(id)}` : `Sale #${shortId(id)}`
     await client.query(
       `INSERT INTO movements (id, item_id, item_name, type, quantity, balance_after, note, sale_id)
        SELECT movement_id, item_id, item_name, 'stock_out', quantity, balance_after, note, sale_id
@@ -990,7 +791,7 @@ function restoreFileSale(data, sale, status, detail) {
       data.movements.unshift({
         id: crypto.randomUUID(), itemId: item.id, itemName: item.name, saleId: sale.id, type: 'stock_in',
         quantity: restored, balanceAfter: item.quantity,
-        note: `Card sale #${shortId(sale.id)} ${status} — stock restored`, createdAt: now,
+        note: `Point sale #${shortId(sale.id)} ${status} — stock restored`, createdAt: now,
       })
     }
     sale.inventoryApplied = false
@@ -1168,7 +969,7 @@ async function updatePostgresSaleStatus(saleId, status, mpStatus, mpStatusDetail
           `INSERT INTO movements (id, item_id, item_name, type, quantity, balance_after, note, sale_id)
            VALUES ($1,$2,$3,'stock_in',$4,$5,$6,$7)`,
           [crypto.randomUUID(), line.item_id, line.item_name, restored, updated.rows[0].quantity,
-            `Card sale #${shortId(saleId)} ${status} — stock restored`, saleId],
+            `Point sale #${shortId(saleId)} ${status} — stock restored`, saleId],
         )
       }
     }
@@ -1297,13 +1098,17 @@ function refundLinesForSale(sale, requested = [], requestedAmount) {
   return { lines, amount, full: sale.refundedTotal + amount >= sale.total }
 }
 
-function refundInputRecord(saleId, input, calculated) {
+function refundInputRecord(saleId, input, calculated, request = {}) {
   const now = new Date().toISOString()
   return {
     id: crypto.randomUUID(),
     saleId,
     status: 'pending',
     amount: calculated.amount,
+    requestKey: request.key || null,
+    requestedBy: request.actor?.id || null,
+    requestFingerprint: request.fingerprint || null,
+    providerFull: calculated.full,
     reason: input.reason,
     restock: input.restock,
     creditNoteRequired: input.creditNoteRequired,
@@ -1320,23 +1125,49 @@ function refundInputRecord(saleId, input, calculated) {
   }
 }
 
-export async function prepareRefund(saleId, input) {
+export async function prepareRefund(saleId, input, { key = null, actor = null } = {}) {
+  if (key && (!isCashId(key) || !isCashId(actor?.id))) throw userError('Falta una referencia válida para la devolución.',400,'IDEMPOTENCY_REQUIRED')
+  key = key?.toLowerCase() || null
+  const combined = new Map()
+  for (const line of input.items || []) combined.set(line.lineId, (combined.get(line.lineId) || 0) + Number(line.quantity))
+  const fingerprint = key ? cashFingerprint({ saleId,actorId:actor.id,amount:Number(input.amount),
+    items:[...combined].sort(([a],[b])=>a.localeCompare(b)),reason:String(input.reason || ''),restock:Boolean(input.restock),
+    creditNoteRequired:Boolean(input.creditNoteRequired),originalDocumentType:input.originalDocumentType || '',originalFolio:input.originalFolio || '' }) : null
+  const verify = refund => {
+    if ((refund.sale_id ?? refund.saleId) !== saleId || (refund.requested_by ?? refund.requestedBy) !== actor.id
+      || (refund.request_fingerprint ?? refund.requestFingerprint) !== fingerprint) throw userError('Esta referencia de devolución ya se utilizó con otros datos.',409,'IDEMPOTENCY_CONFLICT')
+  }
+  const record = (sale, refund, replayed) => ({sale,refund,full:refund.providerFull ?? false,replayed})
   if (!pool) {
     return mutateFileData((data) => {
+      if (key) for (const priorSale of data.sales) {
+        const previous = priorSale.refunds.find(r => r.requestKey === key)
+        if (previous) { verify(previous); return record(normalizeSale(priorSale),normalizeRefund(previous),true) }
+      }
       const storedSale = data.sales.find((entry) => entry.id === saleId)
       if (!storedSale) return null
       const sale = normalizeSale(storedSale)
       const calculated = refundLinesForSale(sale, input.items, input.amount)
-      const refund = refundInputRecord(saleId, input, calculated)
+      const refund = refundInputRecord(saleId, input, calculated, {key,actor,fingerprint})
       storedSale.refunds.unshift(refund)
       storedSale.updatedAt = refund.updatedAt
-      return { sale: normalizeSale(storedSale), refund: normalizeRefund(refund), full: calculated.full }
+      return record(normalizeSale(storedSale),normalizeRefund(refund),false)
     })
   }
 
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+    if (key) {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['refund-request:'+key])
+      const previous = (await client.query('SELECT * FROM refunds WHERE request_key=$1',[key])).rows[0]
+      if (previous) {
+        verify(previous)
+        const [sale] = await hydratePostgresSales((await client.query('SELECT * FROM sales WHERE id=$1',[saleId])).rows,client)
+        await client.query('COMMIT')
+        return record(sale,sale.refunds.find(r=>r.id===previous.id),true)
+      }
+    }
     const saleResult = await client.query('SELECT * FROM sales WHERE id=$1 FOR UPDATE', [saleId])
     if (!saleResult.rows[0]) { await client.query('ROLLBACK'); return null }
     const refundResult = await client.query('SELECT * FROM refunds WHERE sale_id=$1 ORDER BY created_at DESC FOR UPDATE', [saleId])
@@ -1359,14 +1190,14 @@ export async function prepareRefund(saleId, input) {
     }))
     const sale = normalizeSale(saleResult.rows[0], itemResult.rows, refunds)
     const calculated = refundLinesForSale(sale, input.items, input.amount)
-    const refund = refundInputRecord(saleId, input, calculated)
+    const refund = refundInputRecord(saleId, input, calculated, {key,actor,fingerprint})
     await client.query(
       `INSERT INTO refunds (
         id, sale_id, status, amount, reason, restock, credit_note_required,
-        original_document_type, original_folio, created_at, updated_at
-      ) VALUES ($1,$2,'pending',$3,$4,$5,$6,$7,$8,$9,$9)`,
+        original_document_type, original_folio, created_at, updated_at,request_key,requested_by,request_fingerprint,provider_full
+      ) VALUES ($1,$2,'pending',$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13)`,
       [refund.id, saleId, refund.amount, refund.reason, refund.restock, refund.creditNoteRequired,
-        refund.originalDocumentType, refund.originalFolio, refund.createdAt],
+        refund.originalDocumentType, refund.originalFolio, refund.createdAt,refund.requestKey,refund.requestedBy,refund.requestFingerprint,refund.providerFull],
     )
     for (const line of refund.items) {
       await client.query(
@@ -1378,7 +1209,7 @@ export async function prepareRefund(saleId, input) {
     }
     await client.query('COMMIT')
     const hydrated = await getSale(saleId)
-    return { sale: hydrated, refund: hydrated.refunds.find((entry) => entry.id === refund.id), full: calculated.full }
+    return record(hydrated,hydrated.refunds.find((entry) => entry.id === refund.id),false)
   } catch (error) {
     await client.query('ROLLBACK')
     throw error
@@ -1392,7 +1223,7 @@ function pointRefundIdentifier(order) {
   return refunds.at(-1)?.id || null
 }
 
-export async function completeRefund(refundId, order = null) {
+export async function completeRefund(refundId, order = null, actor = null) {
   const mpRefundId = pointRefundIdentifier(order)
   const mpStatus = order?.transactions?.refunds?.at(-1)?.status || order?.status || 'processed'
   if (!pool) {
@@ -1402,13 +1233,20 @@ export async function completeRefund(refundId, order = null) {
       const refund = sale.refunds.find((entry) => entry.id === refundId)
       if (refund.status === 'processed') return normalizeSale(sale)
       if (refund.status !== 'pending') throw refundConflict('This refund can no longer be completed.')
-      const register = data.registerSessions.find(s=>s.id===sale.registerSessionId&&!s.closedAt)
-      if(sale.paymentMethod==='cash'&&register){
-        const net=sessionSummary(data.sales.filter(s=>s.registerSessionId===register.id).map(s=>normalizeSale(s)),normalizeRegister(register)).cash.net
-        const ledger=data.cashEntries.filter(e=>e.sessionId===register.id).reduce((sum,e)=>sum+(e.kind==='return'?e.amount:-e.amount),0)
+      let register = null
+      if (sale.paymentMethod === 'cash' && (sale.registerSessionId || actor)) {
+        register = data.registerSessions.find(s => s.id === actor?.sessionId && s.userId === actor?.id && !s.closedAt)
+        if (!register) throw userError('Abre tu propia sesión de caja para pagar la devolución.',409,'SESSION_REQUIRED')
+        const net=sessionSummary(data.sales.map(s=>normalizeSale(s)),normalizeRegister(register)).cash.net
+        const ledger=withCashLedger({},data.cashEntries.filter(e=>e.sessionId===register.id)).cashLedger.net
         if(Number(register.openingCash)+net+ledger<refund.amount)throw userError('No hay efectivo disponible para esta devolución.',409,'INSUFFICIENT_CASH')
       }
       const now = new Date().toISOString()
+      if (register) {
+        data.cashEntries.push({ id:crypto.randomUUID(),sessionId:register.id,withdrawalId:null,refundId:refund.id,
+          saleId:sale.id,kind:'refund',amount:Number(refund.amount),createdBy:actor.id,operator:actor.name,createdAt:now })
+        Object.assign(refund,{cashRegisterSessionId:register.id,processedBy:actor.id})
+      }
       if (refund.restock) {
         for (const line of refund.items) {
           const item = data.items.find((entry) => entry.id === line.itemId)
@@ -1447,20 +1285,26 @@ export async function completeRefund(refundId, order = null) {
     await client.query('BEGIN')
     // Discover the immutable parent without locking the child first. All paths
     // that lock both an existing sale and its refunds must acquire the sale first.
-    const parent = (await client.query('SELECT r.sale_id,s.payment_method,s.register_session_id FROM refunds r JOIN sales s ON s.id=r.sale_id WHERE r.id=$1', [refundId])).rows[0]
+    const parent = (await client.query('SELECT r.sale_id,r.status,s.payment_method,s.register_session_id FROM refunds r JOIN sales s ON s.id=r.sale_id WHERE r.id=$1', [refundId])).rows[0]
     if (!parent) { await client.query('ROLLBACK'); return null }
+    if (parent.status === 'processed') { await client.query('COMMIT'); return getSale(parent.sale_id) }
     // Cash refunds and withdrawals share the register mutex, before sale/refund
     // locks. This keeps an expense and a refund from spending the same cash.
-    const cashRegister = parent.payment_method==='cash'&&parent.register_session_id
-      ? (await client.query('SELECT * FROM register_sessions WHERE id=$1 FOR UPDATE',[parent.register_session_id])).rows[0] : null
+    let cashRegister = null
+    if (parent.payment_method === 'cash' && (parent.register_session_id || actor)) {
+      cashRegister = actor?.sessionId ? (await client.query('SELECT * FROM register_sessions WHERE id=$1 FOR UPDATE',[actor.sessionId])).rows[0] : null
+      if (!cashRegister || cashRegister.user_id !== actor?.id || cashRegister.closed_at) throw userError('Abre tu propia sesión de caja para pagar la devolución.',409,'SESSION_REQUIRED')
+    }
     const saleResult = await client.query('SELECT * FROM sales WHERE id=$1 FOR UPDATE', [parent.sale_id])
     const refundResult = await client.query('SELECT * FROM refunds WHERE id=$1 FOR UPDATE', [refundId])
     const refund = refundResult.rows[0]
     if (!refund) { await client.query('ROLLBACK'); return null }
     if (refund.status === 'processed') { await client.query('COMMIT'); return getSale(refund.sale_id) }
     if (refund.status !== 'pending') throw refundConflict('This refund can no longer be completed.')
-    if(cashRegister&&!cashRegister.closed_at&&(await getRegisterCashStore().balance(cashRegister,client)).balance<Number(refund.amount))throw userError('No hay efectivo disponible para esta devolución.',409,'INSUFFICIENT_CASH')
+    if(cashRegister&&(await getRegisterCashStore().balance(cashRegister,client)).balance<Number(refund.amount))throw userError('No hay efectivo disponible para esta devolución.',409,'INSUFFICIENT_CASH')
     const sale = saleResult.rows[0]
+    if (cashRegister) await client.query(`INSERT INTO register_cash_entries(id,session_id,refund_id,sale_id,kind,amount,created_by)
+      VALUES($1,$2,$3,$4,'refund',$5,$6)`,[crypto.randomUUID(),cashRegister.id,refundId,sale.id,refund.amount,actor.id])
     if (refund.restock) await lockPostgresRefundProducts(client, refundId)
     const itemResult = await client.query('SELECT * FROM refund_items WHERE refund_id=$1 ORDER BY item_name FOR UPDATE', [refundId])
     if (refund.restock) {
@@ -1591,6 +1435,26 @@ export async function resolveRefundInventoryReview(saleId, refundId, restock) {
   }
 }
 
+export async function rememberPendingRefund(refundId, { pointRefundId = null, pointStatus = null } = {}) {
+  const reference = pointRefundId == null ? null : String(pointRefundId).slice(0, 200)
+  const status = pointStatus == null ? null : String(pointStatus).slice(0, 100)
+  if (!pool) return mutateFileData(data => {
+    const sale = data.sales.find(s => s.refunds.some(r => r.id === refundId))
+    if (!sale) return null
+    const refund = sale.refunds.find(r => r.id === refundId)
+    if (refund.status === 'pending' && (!refund.mpRefundId || !reference || refund.mpRefundId === reference)) {
+      refund.mpRefundId ||= reference
+      refund.mpStatus = status ?? refund.mpStatus
+      refund.updatedAt = new Date().toISOString()
+    }
+    return normalizeSale(sale)
+  })
+  const result = await pool.query(`UPDATE refunds SET mp_refund_id=COALESCE(mp_refund_id,$2),mp_status=COALESCE($3,mp_status),updated_at=NOW()
+    WHERE id=$1 AND status='pending' AND (mp_refund_id IS NULL OR $2::text IS NULL OR mp_refund_id=$2) RETURNING sale_id`,[refundId,reference,status])
+  const saleId = result.rows[0]?.sale_id ?? (await pool.query('SELECT sale_id FROM refunds WHERE id=$1',[refundId])).rows[0]?.sale_id
+  return saleId ? getSale(saleId) : null
+}
+
 export async function failRefund(refundId, detail) {
   const message = String(detail || 'refund_failed').slice(0, 500)
   if (!pool) {
@@ -1662,7 +1526,8 @@ async function hydratePostgresSales(rows, queryable = pool) {
   const saleIds = rows.map((row) => row.id)
   const queries = [
     'SELECT * FROM sale_items WHERE sale_id = ANY($1::uuid[]) ORDER BY item_name',
-    'SELECT * FROM refunds WHERE sale_id = ANY($1::uuid[]) ORDER BY created_at DESC',
+    `SELECT r.*,e.session_id AS cash_register_session_id,e.created_by AS processed_by FROM refunds r
+     LEFT JOIN register_cash_entries e ON e.refund_id=r.id WHERE r.sale_id = ANY($1::uuid[]) ORDER BY r.created_at DESC`,
     'SELECT * FROM tax_documents WHERE sale_id = ANY($1::uuid[]) ORDER BY created_at DESC',
   ]
   const results = queryable === pool ? await Promise.all(queries.map(sql => queryable.query(sql, [saleIds]))) : []
@@ -1714,12 +1579,12 @@ export async function claimPointOrder(saleId, now = Date.now()) {
   // An abandoned reservation can be recovered after 30 seconds with the same sale id.
   if (!pool) return mutateFileData(data => {
     const sale = data.sales.find(sale => sale.id === saleId)
-    if (!sale || sale.status !== 'pending' || sale.mpOrderId || Number(sale.pointOrderLeaseUntil || 0) > now) return false
+    if (!saleUsesPoint(sale) || sale.status !== 'pending' || sale.mpOrderId || Number(sale.pointOrderLeaseUntil || 0) > now) return false
     sale.pointOrderLeaseUntil = now + 30000
     return true
   })
   const result = await pool.query(`UPDATE sales SET point_order_lease_until=NOW()+INTERVAL '30 seconds'
-    WHERE id=$1 AND status='pending' AND payment_method='card' AND mp_order_id IS NULL
+    WHERE id=$1 AND status='pending' AND (payment_method='card' OR point_payment) AND mp_order_id IS NULL
       AND (point_order_lease_until IS NULL OR point_order_lease_until<=NOW()) RETURNING id`, [saleId])
   return result.rowCount === 1
 }
@@ -1937,7 +1802,7 @@ export function buildSalesMetrics(sales, { from, to, previousFrom, previousTo, t
       ...summary,
       previousRevenue: previous.revenue,
       revenueChangePct: previous.revenue > 0 ? Number((((summary.revenue - previous.revenue) / previous.revenue) * 100).toFixed(1)) : null,
-      pendingPoint: currentSales.filter((sale) => sale.paymentMethod === 'card' && sale.status === 'pending').length,
+      pendingPoint: currentSales.filter((sale) => saleUsesPoint(sale) && sale.status === 'pending').length,
       failedPayments: currentSales.filter((sale) => ['failed', 'cancelled', 'expired'].includes(sale.status)).length,
       refundedTotal: currentRefunds.reduce((sum, refund) => sum + refund.amount, 0),
     },
@@ -2148,13 +2013,14 @@ export async function openRegisterSession(user,input) {
 function ownedRegister(row,user) {const s=normalizeRegister(row);if(!s||(user.role!=='admin'&&s.userId!==user.id))throw userError('Sesión de caja no encontrada.',404);return s}
 function sessionSummary(sales,session) {
   const period={businessDate:businessDateAt(session.openedAt),timeZone:process.env.BAKERY_TIME_ZONE||'America/Santiago',from:new Date(session.openedAt),to:new Date('9999-12-31T23:59:59Z')}
-  const summary=buildClosureSummary(sales,period)
+  const summary=buildClosureSummary(sales,period,{registerSessionId:session.id})
   summary.to=session.closedAt||null;summary.scope='session';summary.registerSessionId=session.id
   const {fingerprint,...values}=summary
   summary.fingerprint=crypto.createHash('sha256').update(JSON.stringify(values)).digest('hex')
   return summary
 }
-async function sessionSales(id,client=pool) {return hydratePostgresSales((await client.query('SELECT * FROM sales WHERE register_session_id=$1 ORDER BY id',[id])).rows,client)}
+async function sessionSales(id,client=pool) {return hydratePostgresSales((await client.query(`SELECT s.* FROM sales s WHERE s.register_session_id=$1
+  OR EXISTS (SELECT 1 FROM register_cash_entries e WHERE e.sale_id=s.id AND e.session_id=$1 AND e.kind='refund') ORDER BY s.id`,[id])).rows,client)}
 export function getRegisterCashStore() {
   return createRegisterCashStore({pool,readFileData,mutateFileData,normalizeRegister,sessionSales,sessionSummary})
 }
@@ -2164,7 +2030,7 @@ export async function getRegisterClosure(user,id,full=false) {
     if(reader)await reader.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
     const data=reader?null:await readFileData()
     const session=ownedRegister(reader?(await reader.query('SELECT * FROM register_sessions WHERE id=$1',[id])).rows[0]:data.registerSessions.find(s=>s.id===id),user)
-    const sales=session.closedAt?[]:reader?await sessionSales(id,reader):data.sales.filter(s=>s.registerSessionId===id).map(s=>normalizeSale(s))
+    const sales=session.closedAt?[]:reader?await sessionSales(id,reader):data.sales.map(s=>normalizeSale(s))
     const live=session.closedAt?session.closure.snapshot:withCashLedger(sessionSummary(sales,session),await getRegisterCashStore().entries(id,reader||data))
     const {history=[],snapshot,...fields}=session.closure||{}
     if(reader)await reader.query('COMMIT')
@@ -2184,7 +2050,7 @@ export async function saveRegisterClosure(user,id,body) {
     result.history=session.closure?[...(session.closure.history||[]),Object.fromEntries(Object.entries(session.closure).filter(([k])=>k!=='history'))]:[]
     return result
   }
-  if(!pool)return mutateFileData(async data=>{const s=ownedRegister(data.registerSessions.find(s=>s.id===id),user),closure=make(s,data.sales.filter(s=>s.registerSessionId===id).map(s=>normalizeSale(s)),await getRegisterCashStore().entries(id));const row=data.registerSessions.find(s=>s.id===id);row.closedAt ||= closure.closedAt;row.closure=closure;return closure})
+  if(!pool)return mutateFileData(async data=>{const s=ownedRegister(data.registerSessions.find(s=>s.id===id),user),closure=make(s,data.sales.map(s=>normalizeSale(s)),await getRegisterCashStore().entries(id,data));const row=data.registerSessions.find(s=>s.id===id);row.closedAt ||= closure.closedAt;row.closure=closure;return closure})
   const client=await pool.connect()
   try {await client.query('BEGIN');const session=ownedRegister((await client.query('SELECT * FROM register_sessions WHERE id=$1 FOR UPDATE',[id])).rows[0],user),closure=make(session,await sessionSales(id,client),await getRegisterCashStore().entries(id,client));await client.query('UPDATE register_sessions SET closed_at=COALESCE(closed_at,$2),closure=$3 WHERE id=$1',[id,closure.closedAt,JSON.stringify(closure)]);await client.query('COMMIT');return closure}catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 }

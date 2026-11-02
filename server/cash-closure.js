@@ -34,7 +34,7 @@ export function closurePeriod(date) {
 }
 const instant = value => value ? new Date(value).toISOString() : null
 const refundDate = r => r.processedAt || r.updatedAt || r.createdAt
-export function buildClosureSummary(sales, period) {
+export function buildClosureSummary(sales, period, { registerSessionId = null } = {}) {
   const within = value => value && new Date(value) >= period.from && new Date(value) < period.to
   const cash = { gross: 0, refunds: 0, net: 0, transactions: 0, refundCount: 0 }
   const card = { ...cash, recordedFees: 0, recordedSettlement: 0, reconciledTransactions: 0, unreconciledTransactions: 0 }
@@ -44,7 +44,8 @@ export function buildClosureSummary(sales, period) {
     if (!['cash', 'card'].includes(method)) continue
     const totals = method === 'cash' ? cash : card
     const paidAt = sale.paidAt || sale.createdAt
-    if (within(paidAt)) {
+    const originalSession = !registerSessionId || sale.registerSessionId === registerSessionId
+    if (originalSession && within(paidAt)) {
       if (['paid', 'refunded'].includes(sale.status)) {
         totals.gross += sale.total
         totals.transactions++
@@ -64,12 +65,15 @@ export function buildClosureSummary(sales, period) {
       } else excluded.push({ id: sale.id, shortId: sale.shortId, type: 'sale', method, at: instant(paidAt), status: sale.status, amount: sale.total })
     }
     for (const refund of sale.refunds) {
+      const refundSession = method === 'cash' && refund.cashRegisterSessionId ? refund.cashRegisterSessionId : sale.registerSessionId
+      if (registerSessionId && refundSession !== registerSessionId) continue
       if (refund.status === 'processed' && within(refundDate(refund))) {
         totals.refunds += refund.amount
         totals.refundCount++
         operations.push({ id: refund.id, saleId: sale.id, shortId: sale.shortId, type: 'refund', method,
           at: instant(refundDate(refund)), amount: -refund.amount, reference: refund.mpRefundId || refund.mpReferenceId || '',
           reason: refund.reason, originalSaleAt: instant(paidAt),
+          cashRegisterSessionId: refund.cashRegisterSessionId || null, processedBy: refund.processedBy || null,
           items: refund.items.map(i => ({ name: i.name, quantity: i.quantity, unitPrice: i.unitPrice, lineTotal: -i.lineTotal })) })
       } else if (refund.status !== 'processed' && within(refund.createdAt)) {
         excluded.push({ id: refund.id, shortId: sale.shortId, type: 'refund', method, at: instant(refund.createdAt), status: refund.status, amount: refund.amount })

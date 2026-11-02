@@ -1,3 +1,4 @@
+import { postgresConfig } from './postgres.js'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import test from 'node:test'
@@ -30,8 +31,7 @@ test('PostgreSQL reservations serialize with Caja, survive retries and never rel
   const schema = `verify_reservations_${key().replaceAll('-', '')}`
   const originalDatabase = process.env.DATABASE_URL
   const connectionString = process.env.TEST_DATABASE_URL
-  const ssl = !connectionString.includes('railway.internal') && process.env.PGSSLMODE !== 'disable' ? { rejectUnauthorized: false } : false
-  const admin = new pg.Client({ connectionString, ssl })
+  const admin = new pg.Client(postgresConfig(connectionString))
   let store, otherPool, server
   try {
     await admin.connect(); await admin.query(`CREATE SCHEMA "${schema}"`)
@@ -40,7 +40,7 @@ test('PostgreSQL reservations serialize with Caja, survive retries and never rel
     store = await import(`./store.js?reservations=${key()}`)
     await store.initializeStore()
     const integrations = store.getInventoryIntegrationStore(); await integrations.initialize()
-    otherPool = new pg.Pool({ connectionString: isolated.href, ssl })
+    otherPool = new pg.Pool(postgresConfig(isolated.href))
     const otherIntegrations = createIntegrationStore({ pool: otherPool })
     const reservations = store.getStockReservationStore(), other = createStockReservationStore({ pool: otherPool })
     const first = await integrations.createClient({ name: 'Checkout', environment: 'test', expiresInDays: 90, reservationsEnabled: true })

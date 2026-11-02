@@ -254,8 +254,8 @@ function Movement({ movement }) {
   const { t, formatTime } = useI18n()
   const positive = movement.quantity >= 0
   const cashSale = movement.note.match(/^Sale #(\w+)/)
-  const reservedSale = movement.note.match(/^Reserved for card sale #(\w+)/)
-  const restoredSale = movement.note.match(/^Card sale #(\w+).+stock restored$/)
+  const reservedSale = movement.note.match(/^Reserved for (?:card|Point) sale #(\w+)/)
+  const restoredSale = movement.note.match(/^(?:Card|Point) sale #(\w+).+stock restored$/)
   const note = movement.note === 'Opening stock' ? t('openingStock')
     : cashSale ? t('saleMovement', { id: cashSale[1] })
       : reservedSale ? t('cardStockReserved', { id: reservedSale[1] })

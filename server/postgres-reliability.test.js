@@ -1,3 +1,4 @@
+import { postgresConfig } from './postgres.js'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import test from 'node:test'
@@ -9,8 +10,7 @@ import { closeChangeListener, listenForDatabaseChanges, subscribeToChanges } fro
 test('PostgreSQL serializes checkout retries and aggregates the full business day', { skip: !process.env.TEST_DATABASE_URL }, async () => {
   const schema = `verify_checkout_${crypto.randomUUID().replaceAll('-', '')}`
   const connectionString = process.env.TEST_DATABASE_URL
-  const ssl = !connectionString.includes('railway.internal') && process.env.PGSSLMODE !== 'disable' ? { rejectUnauthorized: false } : false
-  const admin = new pg.Client({ connectionString, ssl })
+  const admin = new pg.Client(postgresConfig(connectionString))
   let store
   const previousUrl = process.env.DATABASE_URL
   try {

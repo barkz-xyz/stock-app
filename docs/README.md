@@ -12,6 +12,8 @@ Use the [project README](../README.md) for setup, deployment and commands.
 - [Point, stock and refund locking](point-stock-locking.md)
 - [Inventory performance and reproducible measurements](inventory-performance.md)
 - [Mercado Pago integration evidence](mercado-pago-quality-evidence.md): dated evidence, not a live service-health report.
+- [Database backup and recovery](database-backups.md)
+- [Separate migration and runtime roles](database-roles.md)
 
 ## Planning and research
 

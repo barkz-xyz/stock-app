@@ -128,7 +128,7 @@ for(const postgres of [false,true])test(`cash ledger, carry-over and POS shortfa
       const sale=await store.createSale([{itemId:item.id,quantity:1}],'cash',key(),1000,actor)
       await issue(u,s,900)
       const {refund}=await store.prepareRefund(sale.id,{amount:1000,items:[{lineId:sale.items[0].lineId,quantity:1}],reason:'Ficticio',restock:false,creditNoteRequired:false,originalDocumentType:'',originalFolio:''})
-      await assert.rejects(store.completeRefund(refund.id),{code:'INSUFFICIENT_CASH'})
+      await assert.rejects(store.completeRefund(refund.id,null,actor),{code:'INSUFFICIENT_CASH'})
       assert.equal((await cash.workspace(u)).availableCash,100)
     })
     await t.test('POS records unstocked quantities without negative stock; Point failures restore only allocated units',async()=>{
@@ -147,7 +147,7 @@ for(const postgres of [false,true])test(`cash ledger, carry-over and POS shortfa
       const {u,s,actor}=await open(0),item=await product(1)
       const sale=await store.createSale([{itemId:item.id,quantity:1}],'cash',key(),1000,actor)
       const {refund}=await store.prepareRefund(sale.id,{amount:1000,items:[{lineId:sale.items[0].lineId,quantity:1}],reason:'Ficticio',restock:true,creditNoteRequired:false,originalDocumentType:'',originalFolio:''})
-      const race=await Promise.allSettled([store.completeRefund(refund.id),issue(u,s,900)])
+      const race=await Promise.allSettled([store.completeRefund(refund.id,null,actor),issue(u,s,900)])
       assert.equal(race.filter(r=>r.status==='fulfilled').length,1)
       assert.equal(race.find(r=>r.status==='rejected').reason.code,'INSUFFICIENT_CASH')
       assert.ok([0,100].includes((await cash.workspace(u)).availableCash))

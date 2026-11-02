@@ -1,3 +1,4 @@
+import { postgresConfig } from '../server/postgres.js'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import pg from 'pg'
@@ -7,8 +8,7 @@ const connectionString = process.env.DATABASE_PUBLIC_URL || process.env.DATABASE
 
 if (!connectionString) throw new Error('DATABASE_PUBLIC_URL or DATABASE_URL is required.')
 
-const useSsl = !connectionString.includes('railway.internal') && process.env.PGSSLMODE !== 'disable'
-const client = new Client({ connectionString, ssl: useSsl ? { rejectUnauthorized: false } : false })
+const client = new Client(postgresConfig(connectionString))
 
 try {
   await client.connect()

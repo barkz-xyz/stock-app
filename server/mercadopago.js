@@ -37,9 +37,18 @@ function accountConfigurationError() {
   return Object.assign(new Error('Mercado Pago account management is not configured. Add the server-side access token in Railway.'), { status: 503 })
 }
 
-async function mercadoPagoRequest(endpoint, { method = 'GET', body, idempotencyKey, uncertainMessage } = {}) {
+async function mercadoPagoRequest(endpoint, { method = 'GET', body, idempotencyKey, uncertainMessage, validateResponse } = {}) {
   const { accessToken } = credentials()
   if (!accessToken) throw configurationError()
+  const mutating = !['GET', 'HEAD'].includes(method)
+  const unconfirmed = (cause, mercadoPagoStatus) => Object.assign(new Error(mutating
+    ? uncertainMessage || 'Mercado Pago did not confirm the charge. The sale is still reserved; retry the connection before cancelling it.'
+    : 'Mercado Pago did not return a valid response. Refresh its status before taking another action.'), {
+    status: 502,
+    ...(mutating ? { uncertain: true } : {}),
+    ...(mercadoPagoStatus ? { mercadoPagoStatus } : {}),
+    cause,
+  })
 
   let response
   try {
@@ -54,14 +63,18 @@ async function mercadoPagoRequest(endpoint, { method = 'GET', body, idempotencyK
       signal: AbortSignal.timeout(12000),
     })
   } catch (error) {
-    throw Object.assign(new Error(uncertainMessage || 'Mercado Pago could not be reached. The sale is still reserved; retry the connection before cancelling it.'), {
-      status: 502,
-      uncertain: true,
-      cause: error,
-    })
+    throw unconfirmed(error)
   }
 
-  const data = await response.json().catch(() => ({}))
+  let data
+  try {
+    data = response.status === 204 && !validateResponse ? {} : await response.json()
+  } catch (error) {
+    // A successful header can arrive before the body is lost or truncated. A
+    // write may already be accepted; only the same idempotent operation is safe.
+    if (response.ok) throw unconfirmed(error, response.status)
+    data = {}
+  }
   if (!response.ok) {
     const detail = data?.errors?.[0]?.message || data?.message || data?.error || `Request failed with status ${response.status}`
     throw Object.assign(new Error(`Mercado Pago: ${detail}`), {
@@ -69,9 +82,23 @@ async function mercadoPagoRequest(endpoint, { method = 'GET', body, idempotencyK
       mercadoPagoStatus: response.status,
       mercadoPagoCode: data?.code || data?.errors?.[0]?.code || '',
       mercadoPagoDetail: detail,
+      ...(mutating && response.status >= 500 ? { uncertain: true } : {}),
     })
   }
+  if (validateResponse && !validateResponse(data)) throw unconfirmed(undefined, response.status)
   return data
+}
+
+const pointOrderStatuses = new Set(['created', 'at_terminal', 'action_required', 'processed', 'canceled', 'failed', 'expired', 'refunded'])
+
+function validIdentifier(value) {
+  return (typeof value === 'string' && value.trim() !== '') || (typeof value === 'number' && Number.isFinite(value))
+}
+
+function validPointOrder(order, expectedId) {
+  return order !== null && typeof order === 'object' && !Array.isArray(order)
+    && validIdentifier(order.id) && (!expectedId || String(order.id) === String(expectedId))
+    && pointOrderStatuses.has(order.status)
 }
 
 function accountIdFromMe(account) {
@@ -323,7 +350,7 @@ function mockOrder(sale, status = 'created') {
         paid_amount: processed ? String(sale.total) : undefined,
         status,
         status_detail: processed ? 'accredited' : status,
-        payment_method: processed ? { id: 'visa', type: 'credit_card', installments: 1 } : undefined,
+        payment_method: processed ? (sale.paymentMethod === 'cash' ? { id: 'cash', type: 'cash' } : { id: 'visa', type: 'credit_card', installments: 1 }) : undefined,
       }],
     },
   }
@@ -355,6 +382,8 @@ export function pointConfiguration() {
   return {
     configured: mockMode || Boolean(accessToken && terminalId),
     mockMode,
+    cashEnabled: process.env.MERCADOPAGO_CASH_ENABLED === 'true',
+    cashTaxCondition: process.env.MERCADOPAGO_CASH_TAX_CONDITION || 'payment_taxable_iva',
     terminalConfigured: Boolean(terminalId),
     ...pointIntegrationConfiguration(),
     terminalLabel: terminalId ? terminalId.split('__').at(-1)?.slice(-8) || '' : '',
@@ -369,6 +398,8 @@ export async function createPointOrder(sale) {
   return mercadoPagoRequest('/v1/orders', {
     method: 'POST',
     idempotencyKey: sale.id,
+    validateResponse: (order) => validPointOrder(order)
+      && (!order.external_reference || order.external_reference === (sale.mpExternalReference || `VENTA-${sale.shortId}`)),
     body: {
       type: 'point',
       external_reference: sale.mpExternalReference || `VENTA-${sale.shortId}`,
@@ -380,7 +411,9 @@ export async function createPointOrder(sale) {
           terminal_id: terminalId,
           print_on_terminal: 'seller_ticket',
         },
+        ...(sale.paymentMethod === 'cash' ? { payment_method: { default_type: 'cash' } } : {}),
       },
+      ...(sale.paymentMethod === 'cash' ? { taxes: [{ payer_condition: sale.pointTaxCondition || 'payment_taxable_iva' }] } : {}),
     },
   })
 }
@@ -390,7 +423,9 @@ export async function getPointOrder(orderId, sale) {
     const age = Date.now() - new Date(sale.createdAt).getTime()
     return mockOrder(sale, age > 1200 ? 'processed' : 'at_terminal')
   }
-  return mercadoPagoRequest(`/v1/orders/${encodeURIComponent(orderId)}`)
+  return mercadoPagoRequest(`/v1/orders/${encodeURIComponent(orderId)}`, {
+    validateResponse: (order) => validPointOrder(order, orderId),
+  })
 }
 
 export async function getPointPayment(paymentId) {
@@ -417,10 +452,11 @@ export async function cancelPointOrder(orderId, sale) {
     return await mercadoPagoRequest(`/v1/orders/${encodeURIComponent(orderId)}/cancel`, {
       method: 'POST',
       idempotencyKey: crypto.randomUUID(),
+      validateResponse: (order) => validPointOrder(order, orderId),
     })
   } catch (error) {
     const detail = String(error.mercadoPagoDetail || error.message || '').toLowerCase()
-    if (detail.includes('doesn\'t allow cancellation') || detail.includes('must be in \'created\' status')) {
+    if (!error.uncertain && (detail.includes('doesn\'t allow cancellation') || detail.includes('must be in \'created\' status'))) {
       const inferredStatus = detail.includes('at_terminal') ? 'at_terminal' : knownStatus
       throw pointCancellationError(inferredStatus)
     }
@@ -439,16 +475,55 @@ function pointCancellationError(pointStatus = '') {
   })
 }
 
+function unconfirmedPointRefund(pointRefundId) {
+  return Object.assign(new Error('Mercado Pago did not confirm the refund. Refresh this refund before taking another action.'), {
+    status: 502,
+    uncertain: true,
+    ...(pointRefundId ? { pointRefundId } : {}),
+  })
+}
+
+function confirmedPointRefundOrder(order, sale, refund) {
+  const providerRefunds = Array.isArray(order.transactions?.refunds) ? order.transactions.refunds : []
+  const otherRefundIds = new Set((sale.refunds || []).filter((entry) => entry.id !== refund.id && entry.mpRefundId).map((entry) => String(entry.mpRefundId)))
+  const candidates = providerRefunds.filter((entry) => validIdentifier(entry?.id) && (refund.mpRefundId
+    ? String(entry.id) === String(refund.mpRefundId)
+    : !otherRefundIds.has(String(entry.id))))
+  // A POST response belongs to the stable request key. Once a provider refund
+  // ID is known, an authoritative read must match that exact identity, never an
+  // amount that could also belong to another partial refund.
+  if (candidates.length !== 1) throw unconfirmedPointRefund(refund.mpRefundId)
+  const confirmed = candidates[0]
+  if (Number(confirmed.amount) !== Math.round(refund.amount)
+    || (confirmed.transaction_id && String(confirmed.transaction_id) !== String(sale.mpPaymentId))) {
+    throw unconfirmedPointRefund(refund.mpRefundId)
+  }
+  if (confirmed.status !== 'processed') throw unconfirmedPointRefund(String(confirmed.id))
+  return { ...order, transactions: { ...order.transactions, refunds: [confirmed] } }
+}
+
 export async function refundPointOrder(orderId, sale, refund) {
   if (mockMode) return mockRefundOrder(sale, refund)
   if (!sale.mpPaymentId) {
     throw Object.assign(new Error('Mercado Pago did not return a payment ID for this sale.'), { status: 409 })
   }
 
-  return mercadoPagoRequest(`/v1/orders/${encodeURIComponent(orderId)}/refund`, {
+  if (refund.mpRefundId) {
+    let order
+    try {
+      order = await getPointOrder(orderId, sale)
+    } catch (error) {
+      // Reads cannot reject the earlier accepted refund or justify another one.
+      throw Object.assign(error, { uncertain: true, pointRefundId: refund.mpRefundId })
+    }
+    return confirmedPointRefundOrder(order, sale, refund)
+  }
+
+  const order = await mercadoPagoRequest(`/v1/orders/${encodeURIComponent(orderId)}/refund`, {
     method: 'POST',
     idempotencyKey: refund.id,
     uncertainMessage: 'Mercado Pago did not confirm the refund. Retry it with the same request before taking another action.',
+    validateResponse: (data) => validPointOrder(data, orderId),
     body: refund.full ? undefined : {
       transactions: [{
         id: sale.mpPaymentId,
@@ -456,6 +531,7 @@ export async function refundPointOrder(orderId, sale, refund) {
       }],
     },
   })
+  return confirmedPointRefundOrder(order, sale, refund)
 }
 
 export async function printPointRefundCopy(sale, refund) {

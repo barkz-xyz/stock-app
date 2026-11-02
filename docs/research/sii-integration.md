@@ -1,5 +1,12 @@
 # Integración SII
 
+> Actualización de implementación, 2026-11-02: se añadió una opción para enviar
+> efectivo al Point mediante Orders API (`default_type=cash`, modo PDV),
+> usando el documento nativo y el servicio contratado por el comercio.
+> No constituye el motor SII propio investigado en este documento y aún requiere
+> validar la emisión con folio en un comercio habilitado.
+> Ver [operación y configuración de efectivo Point](../mercadopago-pos-admin.md#efectivo-enviado-al-point-chile).
+
 > Estado: investigación histórica del 2026-08-08 para un servicio tributario separado, `sii-dte-service`. No implementa ni activa emisión tributaria.
 >
 > Las cuentas, terminales, precios, fuentes normativas y evidencias descritos corresponden a esa investigación; deben verificarse de nuevo antes de una implementación o decisión de producción.

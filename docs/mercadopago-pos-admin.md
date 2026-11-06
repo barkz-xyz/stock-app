@@ -40,14 +40,21 @@ antiguos y no reemplaza la configuracion de Webhooks del panel.
 
 ## Efectivo enviado al Point (Chile)
 
-Activar `MERCADOPAGO_CASH_ENABLED=true` en el servidor para enviar tambien
-las ventas en efectivo a `POST /v1/orders`, con
+El formulario **Efectivo** envía la venta a Point por defecto mediante
+`POST /api/sales/cash/point`. Requiere `MERCADOPAGO_CASH_ENABLED=true`, un Point
+configurado y la confirmación del efectivo en el terminal. Al marcar
+**Registrar solo en Caja**, el formulario usa `POST /api/sales/cash/local` y
+registra la venta en la caja abierta sin enviar una orden ni emitir documentos
+fiscales. La casilla empieza desmarcada en cada venta.
+
+El endpoint anterior `POST /api/sales/cash` conserva el envío opcional a
+Point. Con `MERCADOPAGO_CASH_ENABLED=true` envía una orden a `POST /v1/orders`, con
 `config.payment_method.default_type=cash` y
 `config.point.print_on_terminal=seller_ticket`. Requiere terminal en modo PDV.
-Sin esta opcion, el efectivo sigue registrandose directamente en la caja local.
+El endpoint anterior registra el efectivo en la caja local cuando la opción está desactivada.
 
-El cajero ingresa el recibido y el vuelto en la app, y completa la confirmacion
-del efectivo en el Point. Solo se envia el total vendido: el dinero permanece
+En el flujo de Point, se completa la confirmación del efectivo en el terminal.
+Solo se envia el total vendido: el dinero permanece
 en el cajon, no se registra como un abono o un cobro a tarjeta. La venta queda
 pendiente hasta la confirmacion autoritativa del Point; reserva el stock y
 bloquea el cierre de caja mientras esta pendiente. Cancelacion, rechazo o
@@ -61,7 +68,7 @@ La condicion se guarda con la venta y no cambia al reintentar. El catalogo aun
 no distingue impuestos por producto: no usar este flujo para una venta mixta
 de productos afectos y exentos. Cambiar la configuracion requiere reiniciar
 el servidor; las ventas pendientes se recuperan con su configuracion guardada.
-PostgreSQL requiere ejecutar las migraciones (version 2) antes del reinicio.
+PostgreSQL requiere ejecutar las migraciones vigentes antes del reinicio.
 
 La impresion usa el documento nativo del Point. No se envia XML propio ni se
 genera un folio desde la app. El servicio de Boletas del comercio y su

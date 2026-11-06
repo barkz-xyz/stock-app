@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowDownLeft, ArrowUpRight, Banknote, Check, Plus, RotateCw } from 'lucide-react'
+import { ArrowDownLeft, ArrowRight, ArrowUpRight, Banknote, Check, Plus, RotateCw } from 'lucide-react'
 import { api } from './api.js'
 import { useI18n } from './i18n.js'
 import { Modal, LoadingSkeleton } from './ui.jsx'
@@ -59,8 +59,12 @@ export default function CashMovementsPage({ user, refreshToken, onRefresh, onNav
     {error&&<div className="inline-error" role="alert">{error}</div>}
     {pending&&<div className="card cash-recovery"><span>{tx('Operación por verificar','Operation awaiting verification')}</span><button className="button primary" disabled={busy} onClick={()=>submit(pending)}><RotateCw size={16}/>{tx('Recuperar operación','Recover operation')}</button></div>}
     {!data?<LoadingSkeleton/>:<>
-      <section className="card cash-available"><div><span>{tx('Efectivo disponible','Available cash')}</span><strong>{money(data.availableCash)}</strong></div><button className="button primary" disabled={!data.session||data.availableCash<=0||busy||Boolean(pending)} onClick={()=>{setError('');setModal('new')}}><Plus size={17}/>{tx('Nuevo retiro','New withdrawal')}</button></section>
-      {!data.session&&<button className="button secondary" onClick={()=>onNavigate('/caja')}>{tx('Abrir caja','Open register')}</button>}
+      <section className="card cash-available">
+        <div><span>{tx('Efectivo disponible','Available cash')}</span><strong>{money(data.availableCash)}</strong></div>
+        {data.session
+          ? <button className="button primary" disabled={data.availableCash<=0||busy||Boolean(pending)} onClick={()=>{setError('');setModal('new')}}><Plus size={17}/>{tx('Nuevo retiro','New withdrawal')}</button>
+          : <button className="button primary" onClick={()=>onNavigate('/caja')}>{tx('Abrir caja','Open register')}<ArrowRight size={17}/></button>}
+      </section>
       <div className="cash-view-tabs" role="tablist" aria-label={tx('Retiros de caja','Cash withdrawals')}>
         {[['pending',tx('Por rendir','Pending')],['settled',tx('Rendidos · 30 días','Settled · 30 days')]].map(([id,label])=><button role="tab" aria-selected={view===id} key={id} className={view===id?'active':''} onClick={()=>setView(id)}>{label}<small>{data.withdrawals.filter(w=>w.status===id).length}</small></button>)}
       </div>

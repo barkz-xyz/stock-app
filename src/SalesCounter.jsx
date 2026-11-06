@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, Check, ChevronRight, C
 import { api } from './api.js'
 import { beginCheckout, clearCheckout, pendingCheckout } from './checkoutAttempts.js'
 import { saleUsesPoint } from './pointPayments.js'
+import { businessDayKey } from './registerDay.js'
 import { beginRefund, clearRefund, pendingRefund } from './refundAttempts.js'
 import { useI18n } from './i18n.js'
 import { categories, CategoryIcon, categoryClass, formatQuantity, Modal } from './ui.jsx'
@@ -49,7 +50,12 @@ function saleState(status, t) {
 function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelSale, onClose, busy }) {
   const { t, formatCurrency } = useI18n()
   const [cashMode, setCashMode] = useState(false), [received, setReceived] = useState('')
+  const [registerOnly, setRegisterOnly] = useState(false)
   const tender = cashTender(checkout.total, received)
+  const cashPointAvailable = posConfig.configured && posConfig.cashEnabled
+  const canSubmitCash = tender.valid && !busy && (registerOnly || cashPointAvailable)
+  const cashHint = registerOnly ? 'cashInRegister'
+    : cashPointAvailable ? 'confirmCashAtPoint' : posConfig.configured ? 'cashPointDisabled' : 'pointNotConfigured'
   const sale = checkout.sale
   const pointCash = sale?.paymentMethod === 'cash' || checkout.paymentMethod === 'cash'
   const pending = checkout.stage === 'processing' || checkout.stage === 'connecting'
@@ -67,19 +73,26 @@ function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelS
     {checkout.stage === 'method' && !cashMode && <div className="checkout-body">
       <div className="checkout-total"><span>{t('totalToPay')}</span><strong>{formatCurrency(checkout.total)}</strong></div>
       <div className="payment-options">
-        <button onClick={() => setCashMode(true)} disabled={busy || posConfig.cashEnabled && !posConfig.configured}><div className="payment-icon cash"><Banknote size={25} /></div><span><strong>{t('cash')}</strong>{posConfig.cashEnabled && <small>{t('cashViaPoint')}</small>}</span><ChevronRight size={20} /></button>
+        <button onClick={() => setCashMode(true)} disabled={busy}><div className="payment-icon cash"><Banknote size={25} /></div><span><strong>{t('cash')}</strong></span><ChevronRight size={20} /></button>
         <button onClick={onCard} disabled={busy || !posConfig.configured}><div className="payment-icon card"><CreditCard size={25} /></div><span><strong>{t('card')}</strong><small>{posConfig.configured ? t('pointSmart2Description') : t('pointNotConfigured')}</small></span><ChevronRight size={20} /></button>
       </div>
       {!posConfig.configured && <div className="setup-hint"><AlertTriangle size={17} /><span>{t('pointSetupHint')}</span></div>}
     </div>}
-    {checkout.stage === 'method' && cashMode && <form className="checkout-body cash-tender" onSubmit={e => { e.preventDefault(); if (tender.valid && !busy) onCash(Number(received)) }}>
+    {checkout.stage === 'method' && cashMode && <form className="checkout-body cash-tender" onSubmit={e => {
+      e.preventDefault()
+      if (canSubmitCash) onCash(Number(received), registerOnly ? 'local' : 'point')
+    }}>
       <div className="cash-total"><span>{t('totalToPay')}</span><strong>{formatCurrency(checkout.total)}</strong></div>
-      {posConfig.cashEnabled && <p>{t('cashPointDescription')}</p>}
       <label className="field cash-received"><span>{t('receivedCash')}</span><div className="money-input"><span aria-hidden="true">$</span><input autoFocus required type="number" inputMode="numeric" min={checkout.total} max="999999999999" step="1" value={received} disabled={busy} onChange={e => setReceived(e.target.value)} aria-invalid={received !== '' && !tender.valid} aria-describedby={received !== '' && !tender.valid ? 'cash-tender-error' : undefined} /></div></label>
       <div className="cash-shortcuts"><button type="button" disabled={busy} aria-pressed={received === String(checkout.total)} onClick={() => setReceived(String(checkout.total))}>{t('exactAmount')}</button>{[1000,2000,5000,10000,20000].filter(n => n > checkout.total).slice(0,4).map(n => <button key={n} type="button" disabled={busy} aria-pressed={received === String(n)} onClick={() => setReceived(String(n))}>{formatCurrency(n)}</button>)}</div>
       <div className={`tender-change ${tender.valid ? 'is-ready' : ''}`} aria-live="polite"><span>{t('cashChange')}</span><strong>{tender.valid ? formatCurrency(tender.change) : '—'}</strong></div>
       {received !== '' && !tender.valid && <p className="inline-error" id="cash-tender-error" role="alert">{t('cashInsufficient')}</p>}
-      <div className="tender-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => setCashMode(false)}>{t('back')}</button><button className="button primary" disabled={busy || !tender.valid}>{busy ? t('saving') : t('confirmCash')}<Check size={18} /></button></div>
+      <label className="cash-register-choice">
+        <input type="checkbox" checked={registerOnly} disabled={busy} onChange={e => setRegisterOnly(e.target.checked)}
+          aria-labelledby="cash-register-label" aria-describedby="cash-channel-hint" />
+        <span><strong id="cash-register-label">{t('cashRegisterOnly')}</strong><small id="cash-channel-hint">{t(cashHint)}</small></span>
+      </label>
+      <div className="tender-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => setCashMode(false)}>{t('back')}</button><button className="button primary" disabled={!canSubmitCash}>{busy ? t('saving') : t(registerOnly ? 'confirmCash' : 'sendCashToPoint')}<Check size={18} /></button></div>
     </form>}
     {(checkout.stage === 'connecting' || checkout.stage === 'processing') && <div className="payment-progress">
       <div className="terminal-animation">{pointCash ? <Banknote size={31} /> : <CreditCard size={31} />}<i /><i /><i /></div>
@@ -238,29 +251,38 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
   </Modal>
 }
 
-function SalesHistory({ refreshToken, onResume, onSelect, showOperator }) {
+function SalesHistory({ refreshToken, onResume, onSelect, showOperator, businessDate }) {
   const { t, formatCurrency, language } = useI18n()
   const dateFormat = new Intl.DateTimeFormat(language === 'es' ? 'es-CL' : 'en-US', { timeZone: 'America/Santiago', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  const [filters, setFilters] = useState({ search: '', from: '', to: '', method: '', status: '' }), [offset, setOffset] = useState(0)
+  const [filters, setFilters] = useState({ search: '', method: '', status: '' }), [offset, setOffset] = useState(0)
+  // A null range follows today; an explicit range stays put while browsing older sales.
+  const [dateRange, setDateRange] = useState(null)
+  const untilToday = value => value > businessDate ? businessDate : value
+  const from = untilToday(dateRange?.from ?? businessDate), to = untilToday(dateRange?.to ?? businessDate)
   const [data, setData] = useState(null), [loading, setLoading] = useState(true), [error, setError] = useState(''), [retry, setRetry] = useState(0)
   const size = 40
+  useEffect(() => { setOffset(0) }, [from, to])
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true); setError('')
     const timer = setTimeout(() => {
-      api.salesHistory({ ...filters, offset, limit: size }, { signal: controller.signal })
+      api.salesHistory({ ...filters, from, to, offset, limit: size }, { signal: controller.signal })
         .then(next => { if (!controller.signal.aborted) setData(next) })
         .catch(e => { if (!controller.signal.aborted) setError(e.message) })
         .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     }, filters.search ? 250 : 0)
     return () => { clearTimeout(timer); controller.abort() }
-  }, [filters, offset, refreshToken, retry])
+  }, [filters, from, to, offset, refreshToken, retry])
   const update = key => e => { setOffset(0); setFilters(f => ({ ...f, [key]: e.target.value })) }
-  const reset = () => { setOffset(0); setFilters({ search: '', from: '', to: '', method: '', status: '' }) }
+  const updateDate = key => e => {
+    if (e.target.value > businessDate) return
+    setOffset(0); setDateRange({ from, to, [key]: e.target.value })
+  }
+  const reset = () => { setOffset(0); setFilters({ search: '', method: '', status: '' }); setDateRange({ from: '', to: '' }) }
   return <section className="card register-history" id="caja-history-panel" role="tabpanel" aria-labelledby="caja-history-tab" aria-busy={loading}>
     <div className="history-filters">
-      <label className="search-box"><Search size={17} /><input value={filters.search} onChange={update('search')} placeholder={t('searchSale')} aria-label={t('searchSale')} /></label>
-      <div className="history-filter-row"><label><span>{t('fromDate')}</span><input type="date" value={filters.from} onChange={update('from')} /></label><label><span>{t('toDate')}</span><input type="date" value={filters.to} min={filters.from || undefined} onChange={update('to')} /></label><select aria-label={t('payment')} value={filters.method} onChange={update('method')}><option value="">{t('allMethods')}</option><option value="cash">{t('cash')}</option><option value="card">{t('card')}</option></select><select aria-label={t('status')} value={filters.status} onChange={update('status')}><option value="">{t('allStatuses')}</option>{['paid','pending','refunded','failed','cancelled','expired'].map(s => <option key={s} value={s}>{saleState(s, t).label}</option>)}</select><button type="button" className="icon-button" onClick={reset} aria-label={t('clearFilters')} title={t('clearFilters')}><X size={17} /></button></div>
+      <div className="history-search-row"><label className="search-box"><Search size={17} /><input value={filters.search} onChange={update('search')} placeholder={t('searchSale')} aria-label={t('searchSale')} /></label><button type="button" className="button secondary compact history-today" aria-pressed={dateRange === null} onClick={() => { setOffset(0); setDateRange(null) }}>{t('today')}</button></div>
+      <div className="history-filter-row"><label><span>{t('fromDate')}</span><input type="date" value={from} max={businessDate} onChange={updateDate('from')} /></label><label><span>{t('toDate')}</span><input type="date" value={to} min={from || undefined} max={businessDate} onChange={updateDate('to')} /></label><select aria-label={t('payment')} value={filters.method} onChange={update('method')}><option value="">{t('allMethods')}</option><option value="cash">{t('cash')}</option><option value="card">{t('card')}</option></select><select aria-label={t('status')} value={filters.status} onChange={update('status')}><option value="">{t('allStatuses')}</option>{['paid','pending','refunded','failed','cancelled','expired'].map(s => <option key={s} value={s}>{saleState(s, t).label}</option>)}</select><button type="button" className="icon-button" onClick={reset} aria-label={t('clearFilters')} title={t('clearFilters')}><X size={17} /></button></div>
     </div>
     {error && <div className="inline-error" role="alert"><AlertTriangle size={16} />{error}<button className="text-button" onClick={() => setRetry(n => n + 1)}>{t('retryConnection')}</button></div>}
     <div className={`history-ledger ${loading ? 'is-updating' : ''}`}>
@@ -278,7 +300,7 @@ function SalesHistory({ refreshToken, onResume, onSelect, showOperator }) {
   </section>
 }
 
-const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRefresh, setToast, onNavigate, registerView = 'cart', historyRevision, onRegisterViewChange, serverAvailable = true, user, registerOpening, registerSession, onOpenRegister }) {
+const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRefresh, setToast, onNavigate, registerView = 'cart', historyRevision, onRegisterViewChange, serverAvailable = true, businessDate = businessDayKey(), user, registerOpening, registerSession, onOpenRegister }) {
   const { t, categoryLabel, unitLabel, formatCurrency, language } = useI18n()
   const tx=(es,en)=>language==='es'?es:en
   const [openingCash,setOpeningCash]=useState(''),[opening,setOpening]=useState(false),[openError,setOpenError]=useState('')
@@ -296,6 +318,9 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
   const [cart, setCart] = useState(() => pendingCheckout()?.items || loadCartDraft())
   const [favorites, setFavorites] = useState(loadFavorites), [cartExpanded, setCartExpanded] = useState(false)
   const [checkout, setCheckout] = useState(null)
+  useEffect(() => {
+    if (!registerSession) setCheckout(current => current?.stage === 'method' ? null : current)
+  }, [registerSession?.id])
   const [selectedSale, setSelectedSale] = useState(null)
   const [refundAttempt, setRefundAttempt] = useState(() => pendingRefund(user.id))
   const refundSubmitting = useRef(false)
@@ -350,15 +375,17 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
       error: sale.mpOrderId ? '' : t('reservedSaleRecovery') })
     await onRefresh().catch(() => {})
   }
-  const pay = async (paymentMethod, cashReceived = null) => {
+  const pay = async (paymentMethod, cashReceived = null, cashChannel = 'local') => {
     if (submitting.current) return
     submitting.current = true
-    const pending = beginCheckout(payload(), paymentMethod, total, cashReceived)
+    const pending = beginCheckout(payload(), paymentMethod, total, cashReceived, cashChannel)
     setAttempt(pending)
     setBusy(true)
-    if (pending.paymentMethod === 'card' || posConfig.cashEnabled) setCheckout(current => ({ ...current, stage: 'connecting', paymentMethod: pending.paymentMethod }))
+    const cashViaPoint = pending.paymentMethod === 'cash' && pending.cashChannel === 'point'
+    if (pending.paymentMethod === 'card' || cashViaPoint) setCheckout(current => ({ ...current, stage: 'connecting', paymentMethod: pending.paymentMethod }))
     try {
-      const sale = await (pending.paymentMethod === 'cash' ? api.cashSale : api.cardSale)(pending.items, pending.key, pending.cashReceived)
+      const submitSale = cashViaPoint ? api.cashPointSale : pending.paymentMethod === 'cash' ? api.cashSale : api.cardSale
+      const sale = await submitSale(pending.items, pending.key, pending.cashReceived)
       await acceptSale(sale)
     } catch (error) {
       const uncertain = error.uncertain || !error.status || error.status >= 500 || error.code === 'CHECKOUT_CONFLICT'
@@ -368,14 +395,15 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
         error: uncertain ? t('checkoutUncertain') : error.message }))
     } finally { setBusy(false); submitting.current = false }
   }
-  const payCash = received => pay('cash', received)
+  const payCash = (received, cashChannel) => pay('cash', received, cashChannel)
   const payCard = () => pay('card')
-  const recoverCheckout = async () => {
+  const recoverCheckout = async ({ retryIfMissing = false } = {}) => {
     const pending = pendingCheckout()
     if (!pending) return
     setBusy(true)
     try { await acceptSale(await api.checkout(pending.key)) }
-    catch {
+    catch (error) {
+      if (retryIfMissing && error.status === 404) return await pay(pending.paymentMethod)
       setCheckout({ stage: 'connection-error', total: pending.total, error: t('checkoutUncertain') })
     } finally { setBusy(false) }
   }
@@ -383,7 +411,7 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
     if (recoveryKey.current) { recoveryKey.current = null; recoverCheckout() }
   }, [])
   const retry = async () => {
-    if (!checkout.sale?.id) return pay(pendingCheckout()?.paymentMethod || 'cash')
+    if (!checkout.sale?.id) return recoverCheckout({ retryIfMissing: true })
     setBusy(true)
     try { await acceptSale(await api.retryPointSale(checkout.sale.id)) }
     catch (error) { setCheckout((current) => ({ ...current, stage: error.uncertain || !error.status || error.status >= 500 ? 'connection-error' : 'error', error: error.message })) }
@@ -565,7 +593,7 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
       </section>
     </CajaHeader>
     {refundAttempt&&<div className="card cash-recovery" role="status"><span>{t('refundPending')}</span><button className="button secondary" disabled={busy||!serverAvailable} onClick={recoverRefund}><RotateCw size={16}/>{tx('Recuperar devolución','Recover refund')}</button></div>}
-    {registerView==='cart'&&!registerSession&&!attempt&&<form className="card open-register" aria-label={tx('Abrir caja','Open register')} onSubmit={async e=>{e.preventDefault();setOpening(true);setOpenError('');try{await onOpenRegister({openingCash:Number(openingCash),additionalCash:Number(additionalCash||0),previousSessionId:registerOpening.previousSessionId,previousRevision:registerOpening.previousRevision})}catch(e){setOpenError(e.message)}finally{setOpening(false)}}}><Banknote size={26}/><label className="field"><span>{tx('Fondo anterior · CLP','Previous cash · CLP')}</span><div className="money-input"><span>$</span><input aria-label={tx('Fondo anterior','Previous cash')} type="number" inputMode="numeric" min="0" max="100000000000" step="1" required value={openingCash} onChange={e=>setOpeningCash(e.target.value)}/></div>{registerOpening?.previousClosedAt&&<small>{tx('Último cierre','Last close')} · {new Date(registerOpening.previousClosedAt).toLocaleDateString(language==='es'?'es-CL':'en-GB')}</small>}</label><details><summary>{tx('Agregar efectivo','Add cash')}</summary><label className="field"><span>{tx('Efectivo adicional · CLP','Additional cash · CLP')}</span><div className="money-input"><span>$</span><input aria-label={tx('Efectivo adicional','Additional cash')} type="number" inputMode="numeric" min="0" max="100000000000" step="1" value={additionalCash} placeholder="0" onChange={e=>setAdditionalCash(e.target.value)}/></div></label></details><div className="cash-operation-total"><span>{tx('Fondo inicial','Opening cash')}</span><strong>{formatCurrency(Number(openingCash||0)+Number(additionalCash||0))}</strong></div>{openError&&<div className="inline-error" role="alert">{openError}</div>}<button className="button primary" disabled={opening||!serverAvailable||!registerOpening}>{opening?t('saving'):tx('Abrir caja','Open register')}<ArrowRight size={18}/></button></form>}
+    {registerView==='cart'&&!registerSession&&<form className="card open-register" aria-label={tx('Abrir caja','Open register')} onSubmit={async e=>{e.preventDefault();if(!registerOpening||opening||!serverAvailable)return;setOpening(true);setOpenError('');try{await onOpenRegister({openingCash:Number(openingCash),additionalCash:Number(additionalCash||0),businessDate:registerOpening.businessDate,previousSessionId:registerOpening.previousSessionId,previousRevision:registerOpening.previousRevision})}catch(e){setOpenError(e.message)}finally{setOpening(false)}}}><Banknote size={26}/><div className="register-day-label"><strong>{tx('Abrir caja de hoy','Open today’s register')}</strong><span>{registerOpening?.businessDate}</span></div><label className="field"><span>{tx('Fondo inicial · CLP','Opening cash · CLP')}</span><div className="money-input"><span>$</span><input aria-label={tx('Fondo anterior','Previous cash')} type="number" inputMode="numeric" min="0" max="100000000000" step="1" required value={openingCash} onChange={e=>setOpeningCash(e.target.value)}/></div>{registerOpening?.previousClosedAt&&<small>{tx('Último cierre','Last close')} · {new Date(registerOpening.previousClosedAt).toLocaleDateString(language==='es'?'es-CL':'en-GB')}</small>}</label><details><summary>{tx('Agregar efectivo','Add cash')}</summary><label className="field"><span>{tx('Efectivo adicional · CLP','Additional cash · CLP')}</span><div className="money-input"><span>$</span><input aria-label={tx('Efectivo adicional','Additional cash')} type="number" inputMode="numeric" min="0" max="100000000000" step="1" value={additionalCash} placeholder="0" onChange={e=>setAdditionalCash(e.target.value)}/></div></label></details><div className="cash-operation-total"><span>{tx('Fondo inicial','Opening cash')}</span><strong>{formatCurrency(Number(openingCash||0)+Number(additionalCash||0))}</strong></div>{openError&&<div className="inline-error" role="alert">{openError}</div>}<button className="button primary" disabled={opening||!serverAvailable||!registerOpening}>{opening?t('saving'):tx('Abrir caja','Open register')}<ArrowRight size={18}/></button></form>}
     {registerView === 'cart' ? <section className={`pos-layout ${!registerSession&&!attempt?'session-locked':''}`} id="caja-cart-panel" role="tabpanel" aria-labelledby="caja-cart-tab">
       <div className="catalog-panel">
         <div className="toolbar pos-toolbar">
@@ -592,7 +620,7 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
         </div>
         <footer><button type="button" className="cart-summary-toggle" onClick={() => setCartExpanded(v => !v)} aria-expanded={cartExpanded} aria-controls="cart-detail" aria-label={t(cartExpanded ? 'hideCart' : 'cartDetails')}><span>{t('productsCount', { count: formatQuantity(count) })}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong>{cartExpanded ? <ChevronDown size={17} /> : <ChevronUp size={17} />}</button><div className="cart-summary"><div><span>{t('total')}</span><strong>{formatCurrency(attempt?.total ?? total)}</strong></div></div><button className="button primary pay-button" disabled={busy || !serverAvailable || (!attempt && (!registerSession || !cartLines.length || cartInvalid))} onClick={() => attempt ? recoverCheckout() : setCheckout({ stage: 'method', total })}>{t(!serverAvailable ? 'serverOffline' : attempt ? 'reviewPendingCheckout' : 'charge')}<ArrowRight size={19} /></button></footer>
       </aside>
-    </section> : <SalesHistory showOperator={user?.role==='admin'} refreshToken={historyRevision} onResume={resumeSale} onSelect={setSelectedSale} />}
+    </section> : <SalesHistory businessDate={businessDate} showOperator={user?.role==='admin'} refreshToken={historyRevision} onResume={resumeSale} onSelect={setSelectedSale} />}
     {checkout && <CheckoutModal checkout={checkout} posConfig={posConfig} onCash={payCash} onCard={payCard} onRetry={retry} onCancelSale={cancelSale} onClose={() => setCheckout(null)} busy={busy || !serverAvailable} />}
     {selectedSale && <SaleDetailsModal canManage={user?.role==='admin'} sale={selectedSale} onClose={() => setSelectedSale(null)} onRefund={refundSale} onRetryRefund={retryRefund} onPrintRefundCopy={printRefundCopy} onCreditNote={recordCreditNote} onReconcilePoint={reconcilePointSale} onResolveInventory={resolveRefundInventory} busy={busy} refundAttempt={refundAttempt} onRecoverRefund={recoverRefund} />}
   </div>

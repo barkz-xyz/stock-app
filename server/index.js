@@ -7,11 +7,13 @@ import { createInventoryRouter, createIntegrationAdminRouter, inventoryApiConfig
 import { createReservationRouter, createReservationAdminRouter } from './reservation-api.js'
 import { parseCalendarDate } from '../src/dates.js'
 import { saleUsesPoint } from '../src/pointPayments.js'
+import { registerIsActive } from '../src/registerDay.js'
+import { closurePeriod } from './cash-closure.js'
 import { authStatus, login, logout, setupAdmin, changePassword, pointAccessIsProtected, requireAuth, requireAdmin, cashierBoundary } from './auth.js'
 import {
   buildPointManagement, cancelPointOrder, createPointOrder, createPointPos, createPointStore, deletePointPos, deletePointStore,
   getConfiguredTerminal, getMercadoPagoAccount, getPointOrder, getPointPayment, getPointPos, getPointStore,
-  listPointPos, listPointStores, listPointTerminals, pointConfiguration, printPointRefundCopy, refundPointOrder,
+  listPointPos, listPointStores, listPointTerminals, pointConfiguration, printPointCashClosure, printPointRefundCopy, refundPointOrder,
   setupPointTerminal, updatePointPos, updatePointStore, validatePointWebhook,
 } from './mercadopago.js'
 import {
@@ -20,7 +22,7 @@ import {
   getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales, getInventoryIntegrationStore, getStockReservationStore,
   markCardSaleFailed, prepareRefund, rememberPendingRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
   updateItem, updateSaleFromPoint, updateSalePaymentDetails,
-  listUsers, createUser, updateUser, listRegisterSessions, getActiveRegisterSession, getRegisterOpening, getRegisterCashStore, openRegisterSession, getRegisterClosure, saveRegisterClosure, getRegisterClosureRevision,
+  listUsers, createUser, updateUser, listRegisterSessions, listClosureHistory, getActiveRegisterSession, getRegisterOpening, getRegisterCashStore, openRegisterSession, getRegisterClosure, saveRegisterClosure, getRegisterClosureRevision,
 } from './store.js'
 import { createDailyReport } from './report.js'
 import { createCashClosurePdf } from './cash-closure-pdf.js'
@@ -316,8 +318,11 @@ app.get('/api/bootstrap', async (req, res, next) => {
     const dataPromise=auth.user.role==='admin'?getBootstrapData():Promise.all([listItems(),searchSales({limit:50},auth.user)]).then(([items,history])=>({items,movements:[],sales:history.sales,dailySummary:null}))
     const [registerSessions,registerSession,data]=await Promise.all([listRegisterSessions(auth.user),getActiveRegisterSession(auth.user),dataPromise])
     res.setHeader('Server-Timing', `data;dur=${elapsedMilliseconds(startedAt)}`)
-    const registerOpening = registerSession ? null : await getRegisterOpening(auth.user)
-    res.json({ auth, ...data, registerSessions,registerSession,registerOpening, posConfig: pointConfiguration() })
+    const period=closurePeriod()
+    const currentSession=registerIsActive(registerSession,period.businessDate,period.timeZone)?registerSession:null
+    const registerOpening = currentSession ? null : await getRegisterOpening(auth.user)
+    const registerCalendar={businessDate:period.businessDate,timeZone:period.timeZone,nextDayAt:period.to.toISOString(),serverNow:new Date().toISOString()}
+    res.json({ auth, ...data, registerSessions,registerSession:currentSession,registerOpening,registerCalendar, posConfig: pointConfiguration() })
   } catch (error) { next(error) }
 })
 app.use('/api', requireAuth, cashierBoundary)
@@ -333,6 +338,7 @@ app.get('/api/users',requireAdmin,async(_req,res)=>res.json(await listUsers()))
 app.post('/api/users',requireAdmin,async(req,res)=>res.status(201).json(await createUser(req.body)))
 app.patch('/api/users/:id',requireAdmin,async(req,res)=>res.json(await updateUser(req.params.id,req.body)))
 app.get('/api/register-sessions',async(req,res)=>res.json(await listRegisterSessions(req.user)))
+app.get('/api/closure-history', async (req, res) => res.json(await listClosureHistory(req.user, req.query)))
 app.post('/api/register-sessions',async(req,res)=>res.json(await openRegisterSession(req.user,req.body)))
 app.get('/api/register-cash',async(req,res)=>res.json(await getRegisterCashStore().workspace(req.user)))
 app.post('/api/register-cash/withdrawals',async(req,res)=>{
@@ -341,7 +347,20 @@ app.post('/api/register-cash/withdrawals',async(req,res)=>{
 })
 app.post('/api/register-cash/withdrawals/:id/settle',async(req,res)=>res.json(await getRegisterCashStore().settle(req.user,req.params.id,checkoutKey(req.headers['idempotency-key']),req.body)))
 app.get('/api/register-sessions/:id/closure',async(req,res)=>res.json(await getRegisterClosure(req.user,req.params.id)))
-app.post('/api/register-sessions/:id/closure',async(req,res)=>res.json(await saveRegisterClosure(req.user,req.params.id,req.body)))
+app.post('/api/register-sessions/:id/closure', async (req, res) => {
+  const closure = await saveRegisterClosure(req.user, req.params.id, req.body)
+  if (closure.revision !== 1 || !pointConfiguration().configured) return res.json(closure)
+
+  let pointPrint = 'submitted'
+  try {
+    requireProtectedPoint()
+    await printPointCashClosure(closure)
+  } catch (error) {
+    pointPrint = error.uncertain ? 'uncertain' : 'failed'
+    console.warn('Point cash-close print:', closure.id, pointPrint, error.mercadoPagoStatus || error.status || '')
+  }
+  res.json({ ...closure, pointPrint })
+})
 app.get('/api/register-sessions/:id/closure/pdf',async(req,res)=>{
   const closure=await getRegisterClosureRevision(req.user,req.params.id,req.query.revision)
   res.set({'Content-Type':'application/pdf','Content-Disposition':`attachment; filename="cierre-caja-${req.params.id}.pdf"`}).send(Buffer.from(await createCashClosurePdf(closure)))
@@ -455,12 +474,22 @@ app.get('/api/sales', async (req, res, next) => {
     res.json(req.user.role==='cashier'?(await searchSales({limit:req.query.limit||50},req.user)).sales:await listSales(Math.min(Number(req.query.limit) || 50, 200)))
   } catch (error) { next(error) }
 })
-app.post('/api/sales/cash', async (req, res, next) => {
+async function recordLocalCashSale(req, res, next) {
   try {
-    if (pointConfiguration().cashEnabled) return startPointSale(req, res, next, 'cash')
-    const sale = await createSale(cleanCart(req.body), 'cash', checkoutKey(req.headers['idempotency-key']), req.body.cashReceived ?? null,await saleActor(req))
+    const sale = await createSale(cleanCart(req.body), 'cash', checkoutKey(req.headers['idempotency-key']), req.body.cashReceived ?? null, await saleActor(req))
     res.status(sale.checkoutReplayed ? 200 : 201).json(sale)
   } catch (error) { next(error) }
+}
+app.post('/api/sales/cash/local', recordLocalCashSale)
+app.post('/api/sales/cash/point', (req, res, next) => {
+  if (!pointConfiguration().cashEnabled) {
+    return res.status(409).json({ error: 'El efectivo por Mercado Pago Point está desactivado.', code: 'POINT_CASH_DISABLED' })
+  }
+  return startPointSale(req, res, next, 'cash')
+})
+app.post('/api/sales/cash', (req, res, next) => {
+  if (pointConfiguration().cashEnabled) return startPointSale(req, res, next, 'cash')
+  return recordLocalCashSale(req, res, next)
 })
 app.get('/api/sales/history', async (req, res, next) => {
   try { res.json(await searchSales(req.query,req.user)) } catch (error) { next(error) }

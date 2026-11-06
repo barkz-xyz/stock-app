@@ -1,6 +1,8 @@
 import crypto from 'node:crypto'
 import { cashError, cleanWithdrawal, cleanSettlement, cashFingerprint, isCashId, withCashLedger } from './cash-ledger.js'
 import { cashCountTotal } from '../src/cashCount.js'
+import { registerIsActive } from '../src/registerDay.js'
+import { businessDateAt, closureTimeZone } from './cash-closure.js'
 
 const normalize = row => ({ id: row.id, sessionId: row.session_id ?? row.sessionId,
   ownerId: row.owner_id ?? row.ownerId, operator: row.operator, amount: Number(row.amount),
@@ -27,7 +29,7 @@ export function createRegisterCashStore({ pool, readFileData, mutateFileData, no
   const own = (row, user, open = false) => {
     const session = normalizeRegister(row)
     if (!session || user.role !== 'admin' && session.userId !== user.id) throw cashError('Sesión no encontrada.', 404, 'NOT_FOUND')
-    if (open && (session.closedAt || session.userId !== user.id)) throw cashError('Abre tu propia sesión de caja.', 409, 'SESSION_REQUIRED')
+    if (open && (!registerIsActive(session,businessDateAt(),closureTimeZone) || session.userId !== user.id)) throw cashError('Abre tu propia caja para el día de hoy.', 409, 'SESSION_REQUIRED')
     return session
   }
   const fileEntries = (data, sessionId, period) => data.cashEntries.filter(e => (!sessionId || e.sessionId === sessionId)
@@ -102,10 +104,10 @@ export function createRegisterCashStore({ pool, readFileData, mutateFileData, no
       if(reader)await reader.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
       let session, withdrawals, data
       if (pool) {
-        session = normalizeRegister((await reader.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NULL', [user.id])).rows[0])
+        session = normalizeRegister((await reader.query('SELECT * FROM register_sessions WHERE user_id=$1 AND business_date=$2 AND closed_at IS NULL', [user.id,businessDateAt()])).rows[0])
         withdrawals = (await reader.query(withdrawalSelect + ` WHERE ${user.role === 'admin' ? '' : 's.user_id=$1 AND '}(w.status='pending' OR w.created_at>=NOW()-INTERVAL '30 days') ORDER BY w.created_at DESC,w.id`, user.role === 'admin' ? [] : [user.id])).rows.map(normalize)
       } else {
-        data = await readFileData(); session = normalizeRegister(data.registerSessions.find(s => s.userId === user.id && !s.closedAt))
+        data = await readFileData(); session = normalizeRegister(data.registerSessions.find(s => s.userId === user.id && registerIsActive(s,businessDateAt(),closureTimeZone)))
         withdrawals = data.cashWithdrawals.map(w => fileWithdrawal(data, w.id)).filter(w => (user.role === 'admin' || w.ownerId === user.id)
           && (w.status === 'pending' || Date.now()-new Date(w.createdAt).getTime() <= 30*86400000)).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))
       }

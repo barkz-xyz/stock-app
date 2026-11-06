@@ -74,8 +74,14 @@ test('checkout retries carry a stable key and never retry a write automatically'
   await assert.rejects(api.cashSale([{ itemId: 'item', quantity: 1 }], 'key'), /Lost response/)
   assert.equal(calls.length, 1)
   await api.cashSale([{ itemId: 'item', quantity: 1 }], 'key')
+  assert.ok(calls.every(call => call.url === '/api/sales/cash/local'))
   assert.ok(calls.every(call => call.options.headers.get('Idempotency-Key') === 'key'))
   assert.equal(calls[0].options.body, calls[1].options.body)
+
+  await api.cashPointSale([{ itemId: 'item', quantity: 1 }], 'point-key', 5000)
+  assert.equal(calls[2].url, '/api/sales/cash/point')
+  assert.equal(calls[2].options.headers.get('Idempotency-Key'), 'point-key')
+  assert.equal(JSON.parse(calls[2].options.body).cashReceived, 5000)
 })
 
 test('bootstrap retains equal branches and rows through 304, new ETags, and a mutation', async t => {

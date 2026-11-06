@@ -10,10 +10,12 @@ export function pendingCheckout() {
   return memory
 }
 
-export function beginCheckout(items, paymentMethod, total, cashReceived = null) {
+export function beginCheckout(items, paymentMethod, total, cashReceived = null, cashChannel = 'local') {
   const existing = pendingCheckout()
   if (existing) return existing
-  memory = { key: crypto.randomUUID(), items, paymentMethod, total, ...(cashReceived != null ? { cashReceived } : {}) }
+  memory = { key: crypto.randomUUID(), items, paymentMethod, total,
+    ...(paymentMethod === 'cash' ? { cashChannel } : {}),
+    ...(cashReceived != null ? { cashReceived } : {}) }
   try { globalThis.sessionStorage?.setItem(storageKey, JSON.stringify(memory)) } catch { /* Memory still protects retries in this tab. */ }
   return memory
 }

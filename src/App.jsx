@@ -2,6 +2,7 @@ import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo,
 import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, BarChart3, Boxes, CalendarClock, Check, ChevronRight, CirclePlus, Clock3, CloudOff, Croissant, Ellipsis, History, LayoutDashboard, LineChart, LockKeyhole, LogOut, Menu, Minus, Moon, PanelLeftClose, PackageOpen, Pencil, Plus, ReceiptText, Search, ShoppingBasket, Settings, SlidersHorizontal, Sparkles, Sun, Trash2, Undo2, X } from 'lucide-react'
 import { api } from './api.js'
 import { createRefreshCoordinator, watchUpdates } from './liveUpdates.js'
+import { businessDayKey, registerIsActive, scheduleRegisterDay } from './registerDay.js'
 import { createRouter, isPlainNavigation, parseRoute, sectionHref } from './routes.js'
 import { dateOnly, parseCalendarDate } from './dates.js'
 import { useI18n } from './i18n.js'
@@ -297,8 +298,9 @@ export default function App() {
   const [movements, setMovements] = useState([])
   const [sales, setSales] = useState([])
   const [dailySummary, setDailySummary] = useState(null)
-  const [registerSession,setRegisterSession]=useState(null),[registerSessions,setRegisterSessions]=useState([])
+  const [registerSession,setRegisterSession]=useState(null)
   const [registerOpening,setRegisterOpening]=useState(null)
+  const [registerCalendar,setRegisterCalendar]=useState(null)
   const [metricsData, setMetricsData] = useState(null)
   const metricsRange = route.metricsRange
   const setMetricsRange = range => router.navigate(sectionHref('metrics', { range }))
@@ -324,7 +326,9 @@ export default function App() {
   const openEdit = useCallback(item => setModal({ type: 'edit', item }), [])
   const openBatch = useCallback(() => setModal({ type: 'batch' }), [])
   // Memoized stock/expiry views must still advance at local midnight.
-  const dayKey = new Date().toLocaleDateString('en-CA')
+  const dayKey = registerCalendar?.businessDate || businessDayKey()
+  const currentRegisterSession = registerIsActive(registerSession,dayKey,registerCalendar?.timeZone) ? registerSession : null
+  const currentRegisterOpening = registerOpening?.businessDate === dayKey ? registerOpening : null
   useEffect(() => { if (route.canonical) router.navigate(route.canonical, { replace: true }) }, [route.canonical])
   useLayoutEffect(() => {
     if (auth?.authenticated && isCajaPage) window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
@@ -362,8 +366,9 @@ export default function App() {
       setAuth(next.auth); setSyncError(''); setReconciled(current => current + 1)
       if (!next.auth.authenticated || next.auth.user.mustChangePassword) return
       setCheckoutUser(next.auth.user.id,next.auth.user.role==='admin');setWorkspaceUser(next.auth.user.id,next.auth.user.role==='admin')
-      setRegisterSession(next.registerSession);setRegisterSessions(next.registerSessions||[])
+      setRegisterSession(next.registerSession)
       setRegisterOpening(next.registerOpening||null)
+      setRegisterCalendar(next.registerCalendar||null)
       setItems(next.items); setMovements(next.movements); setSales(next.sales); setPosConfig(next.posConfig); setDailySummary(next.dailySummary)
     } catch (error) {
       if (sequence === refreshSequence.current) setSyncError(error.message)
@@ -371,6 +376,13 @@ export default function App() {
     } finally { if (sequence === refreshSequence.current) setSyncing(false) }
   }), [])
   const refreshAfterChange = useCallback(() => refresh({ fresh: true }), [refresh])
+  useEffect(() => {
+    if (!auth?.authenticated) return undefined
+    return scheduleRegisterDay(registerCalendar, () => {
+      setRegisterSession(null); setRegisterOpening(null)
+      refreshAfterChange().catch(() => {})
+    })
+  }, [auth?.authenticated,registerCalendar,refreshAfterChange])
   const openRegister = useCallback(async amount => { await api.openRegister(amount); await refreshAfterChange() }, [refreshAfterChange])
   const loadMetrics = useCallback(async (range = metricsRange) => {
     metricsRequest.current?.abort()
@@ -489,7 +501,7 @@ export default function App() {
   if (auth?.required && (!auth.authenticated||auth.user?.mustChangePassword)) return <LoginScreen auth={auth} onSetup={handleSetup} onPassword={handlePassword} onLogin={handleLogin} theme={theme} onThemeToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} />
 
   if(blockedPage)return <LoadingSkeleton/>
-  const closureSessionId=route.registerSessionId||(!isAdmin?(registerSession?.id||registerSessions[0]?.id||'none'):null)
+  const closureSessionId=route.closureMonth&&route.registerSessionId?route.registerSessionId:isAdmin&&route.closureMonth&&route.closureDate?null:currentRegisterSession?.id||'none'
   return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${isCajaPage ? 'is-caja' : ''}`}>
     <aside className={`sidebar ${mobileMenu ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
       <div className="brand"><button ref={brandLogoRef} className="brand-logo" onClick={toggleSidebar} aria-expanded={!sidebarCollapsed} aria-label={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')} title={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')}><span className="brand-mark"><Croissant size={24} /></span></button><span className="brand-copy"><strong>Bakery POS</strong></span><button className="sidebar-toggle" onClick={toggleSidebar} aria-label={t('collapseSidebar')} title={t('collapseSidebar')}><PanelLeftClose size={17} /></button></div>
@@ -504,9 +516,9 @@ export default function App() {
       {issue && <div className={`operation-banner ${issue.type}`} role="alert"><AlertTriangle size={17} /><span>{issue.message}</span><button onClick={() => setIssue(null)} aria-label={t('close')}><X size={18} /></button></div>}
       {loading ? <LoadingSkeleton /> : <Suspense fallback={<LoadingSkeleton />}>
         {page === 'dashboard' && <Dashboard items={items} movements={movements} dailySummary={dailySummary} onAdd={openAdd} onAdjust={openAdjust} onGoInventory={goInventory} onGoPos={goPos} dayKey={dayKey} />}
-        {page === 'pos' && route.registerView === 'close' && <CashClosurePage user={auth.user} sessionId={closureSessionId} sessions={registerSessions} onSessionChange={id=>router.navigate(id?'/caja/cierre?sesion='+id:'/caja/cierre')} refreshToken={reconciled} date={route.closureDate} onClosed={refreshAfterChange} onNavigate={href => router.navigate(href)} setToast={setToast} />}
+        {page === 'pos' && route.registerView === 'close' && <CashClosurePage user={auth.user} sessionId={closureSessionId} refreshToken={reconciled} date={route.closureDate} view={route.closureView} month={route.closureMonth} onClosed={refreshAfterChange} onNavigate={href => router.navigate(href)} setToast={setToast} />}
         {page === 'pos' && route.registerView === 'cash' && <CashMovementsPage user={auth.user} refreshToken={reconciled} onRefresh={refreshAfterChange} onNavigate={navigate} setToast={setToast}/>}
-        {page === 'pos' && ['cart','history'].includes(route.registerView) && <SalesCounter user={auth.user} registerOpening={registerOpening} registerSession={registerSession} onOpenRegister={openRegister} serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refreshAfterChange} setToast={setToast} onNavigate={navigate} registerView={route.registerView} historyRevision={route.registerView === 'history' ? reconciled : 0} onRegisterViewChange={changeRegisterView} />}
+        {page === 'pos' && ['cart','history'].includes(route.registerView) && <SalesCounter user={auth.user} businessDate={dayKey} registerOpening={currentRegisterOpening} registerSession={currentRegisterSession} onOpenRegister={openRegister} serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refreshAfterChange} setToast={setToast} onNavigate={navigate} registerView={route.registerView} historyRevision={route.registerView === 'history' ? reconciled : 0} onRegisterViewChange={changeRegisterView} />}
         {page === 'inventory' && <Inventory items={items} onBatch={openBatch} onAdd={isAdmin?openAdd:undefined} onAdjust={openAdjust} onEdit={isAdmin?openEdit:undefined} dayKey={dayKey} />}
         {page === 'metrics' && <MetricsPage metrics={metricsData} range={metricsRange} onRangeChange={setMetricsRange} onRefresh={() => loadMetrics(metricsRange)} onExport={exportDailyReport} loading={metricsLoading} exporting={exportingReport} />}
         {page === 'activity' && <Activity movements={movements} dayKey={dayKey} />}

@@ -2,8 +2,9 @@ import { initializeInventoryRevision } from './inventory-snapshot.js'
 import { initializeStockReservations } from './stock-reservations.js'
 import { initializeCashLedger } from './cash-ledger.js'
 import { createIntegrationStore } from './integration-store.js'
+import { closureTimeZone } from './cash-closure.js'
 
-export const databaseSchemaVersion = 2
+export const databaseSchemaVersion = 4
 
 export async function migrateDatabase(pool) {
   const client = await pool.connect()
@@ -75,7 +76,16 @@ export async function migrateDatabase(pool) {
         opening_cash NUMERIC(12,0) NOT NULL CHECK(opening_cash>=0), opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         closed_at TIMESTAMPTZ, closure JSONB
       );
-      CREATE UNIQUE INDEX IF NOT EXISTS one_open_register_per_user ON register_sessions(user_id) WHERE closed_at IS NULL;
+      ALTER TABLE register_sessions ADD COLUMN IF NOT EXISTS business_date DATE;
+      UPDATE register_sessions SET business_date=(opened_at AT TIME ZONE '${closureTimeZone.replaceAll("'", "''")}')::date WHERE business_date IS NULL;
+      ALTER TABLE register_sessions ALTER COLUMN business_date SET DEFAULT ((CURRENT_TIMESTAMP AT TIME ZONE '${closureTimeZone.replaceAll("'", "''")}')::date);
+      ALTER TABLE register_sessions ALTER COLUMN business_date SET NOT NULL;
+      DROP INDEX IF EXISTS one_open_register_per_user;
+      CREATE UNIQUE INDEX IF NOT EXISTS one_open_register_per_user_day ON register_sessions(user_id,business_date) WHERE closed_at IS NULL;
+      CREATE INDEX IF NOT EXISTS register_business_history_idx ON register_sessions(business_date DESC,opened_at DESC,id);
+      CREATE INDEX IF NOT EXISTS register_user_business_history_idx ON register_sessions(user_id,business_date DESC,opened_at DESC,id);
+      CREATE INDEX IF NOT EXISTS register_closed_history_idx ON register_sessions(closed_at DESC,id) WHERE closed_at IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS register_user_closed_history_idx ON register_sessions(user_id,closed_at DESC,id) WHERE closed_at IS NOT NULL;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS cash_received NUMERIC(12,0) CHECK (cash_received IS NULL OR (payment_method='cash' AND cash_received >= total));
       CREATE TABLE IF NOT EXISTS stock_batches (
         id UUID PRIMARY KEY, fingerprint TEXT NOT NULL, result JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

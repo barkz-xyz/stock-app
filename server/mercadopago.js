@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { WebhookSignatureValidator } from 'mercadopago'
-import { renderPointRefundCopy } from './refund-receipt.js'
+import { renderPointCashClosure, renderPointRefundCopy } from './point-receipts.js'
 
 const apiBase = process.env.MERCADOPAGO_API_BASE || 'https://api.mercadopago.com'
 const mockMode = process.env.MERCADOPAGO_MOCK === 'true'
@@ -534,18 +534,9 @@ export async function refundPointOrder(orderId, sale, refund) {
   return confirmedPointRefundOrder(order, sale, refund)
 }
 
-export async function printPointRefundCopy(sale, refund) {
+async function printPointTicket({ requestId, externalReference, content, uncertainMessage, validateResponse }) {
   const { terminalId } = credentials()
   if (!terminalId && !mockMode) throw configurationError()
-  if (sale.paymentMethod !== 'card' || refund.status !== 'processed') {
-    throw Object.assign(new Error('Only a processed Point refund can be printed.'), { status: 409 })
-  }
-
-  const requestId = crypto.randomUUID()
-  const saleReference = String(sale.shortId || sale.id || 'SALE').replace(/[^a-z0-9_-]/gi, '').slice(0, 16).replace(/[-_]+$/g, '') || 'SALE'
-  const refundReference = String(refund.id || 'REFUND').replace(/[^a-z0-9_-]/gi, '').slice(0, 12).replace(/[-_]+$/g, '') || 'REFUND'
-  const externalReference = `REFUND-${saleReference}-${refundReference}-${requestId.slice(0, 8)}`.slice(0, 64)
-  const content = renderPointRefundCopy(sale, refund)
 
   if (mockMode) {
     return {
@@ -559,13 +550,39 @@ export async function printPointRefundCopy(sale, refund) {
   return mercadoPagoRequest('/terminals/v1/actions', {
     method: 'POST',
     idempotencyKey: requestId,
-    uncertainMessage: 'Mercado Pago did not confirm the refund-copy print. Check the terminal before trying again.',
+    uncertainMessage,
+    validateResponse,
     body: {
       type: 'print',
       external_reference: externalReference,
       config: { point: { terminal_id: terminalId, subtype: 'custom' } },
       content,
     },
+  })
+}
+
+export async function printPointRefundCopy(sale, refund) {
+  if (sale.paymentMethod !== 'card' || refund.status !== 'processed') {
+    throw Object.assign(new Error('Only a processed Point refund can be printed.'), { status: 409 })
+  }
+  const requestId = crypto.randomUUID()
+  const saleReference = String(sale.shortId || sale.id || 'SALE').replace(/[^a-z0-9_-]/gi, '').slice(0, 16).replace(/[-_]+$/g, '') || 'SALE'
+  const refundReference = String(refund.id || 'REFUND').replace(/[^a-z0-9_-]/gi, '').slice(0, 12).replace(/[-_]+$/g, '') || 'REFUND'
+  return printPointTicket({
+    requestId,
+    externalReference: `REFUND-${saleReference}-${refundReference}-${requestId.slice(0, 8)}`.slice(0, 64),
+    content: renderPointRefundCopy(sale, refund),
+    uncertainMessage: 'Mercado Pago did not confirm the refund-copy print. Check the terminal before trying again.',
+  })
+}
+
+export async function printPointCashClosure(closure) {
+  return printPointTicket({
+    requestId: closure.id,
+    externalReference: `CIERRE-${closure.id}`,
+    content: renderPointCashClosure(closure),
+    uncertainMessage: 'Mercado Pago did not confirm the cash-close print.',
+    validateResponse: result => validIdentifier(result?.id) && ['created', 'on_terminal', 'processed'].includes(result.status),
   })
 }
 

@@ -1,12 +1,76 @@
 # Fondo inicial, retiros y ventas sin stock
 
-Implementación POS del 26-10-2026. La caja existente es una sesión por usuario; no se han introducido cajas físicas compartidas entre usuarios.
+Implementación POS del 26-10-2026. La caja es una sesión por usuario y día de negocio; no se han introducido cajas físicas compartidas entre usuarios.
 
 ## Apertura
 
 `/api/bootstrap` incluye `registerOpening` cuando el usuario no tiene sesión abierta. Sugiere el efectivo **contado** del último cierre de ese usuario, aunque hayan pasado varios días. La primera apertura sugiere cero. Se permite ajustar ese monto y añadir efectivo por separado. `opening_cash` guarda el total y `opening_extra_cash` el aporte; `opening_source_session_id` enlaza el cierre anterior.
 
-Abrir dos veces recupera la sesión abierta sin sumar el aporte nuevamente. La apertura de la interfaz envía el UUID/revisión del cierre usado como referencia; si cambió, se rechaza con `OPENING_CHANGED` y se actualiza el formulario. Cambiar un cierre antiguo no reescribe las aperturas que ya se hicieron.
+Abrir dos veces en el mismo día recupera la sesión abierta de ese día sin sumar el aporte nuevamente. La apertura de la interfaz envía el UUID/revisión del cierre usado como referencia; si cambió, se rechaza con `OPENING_CHANGED` y se actualiza el formulario. Cambiar un cierre antiguo no reescribe las aperturas que ya se hicieron.
+
+## Cambio de día y caja actual
+
+`register_sessions.business_date` guarda el día de apertura en la zona de negocio
+(`America/Santiago` por defecto). La migración completa ese dato desde `opened_at`
+sin cerrar ni reemplazar cajas existentes. Se permite una caja abierta por usuario
+**y día**, conservando las de días anteriores que aún no tengan cierre.
+
+Al cambiar de día, `getActiveRegisterSession`, ventas nuevas, retiros, rendiciones
+y pagos de devoluciones solo aceptan una caja propia abierta para el día actual.
+La app solicita abrir una nueva caja. El formulario incluye `businessDate`; una
+apertura enviada desde un formulario del día anterior devuelve `OPENING_CHANGED`.
+El fondo sugerido se obtiene del cierre con día de negocio más reciente: cerrar
+una caja antigua tardíamente no desplaza un cierre de un día posterior. El fondo
+se confirma al abrir y las aperturas existentes no se reescriben.
+
+`/caja/cierre` muestra directamente la caja propia del día para cajero y administrador,
+sin selector de sesiones ni cierre general por defecto. El historial permite abrir
+las cajas anteriores pendientes para cerrarlas o corregir cierres guardados. Los
+enlaces históricos conservan `mes` y el identificador de caja; no cambian la caja
+activa del usuario. Los cierres generales anteriores siguen disponibles en el historial.
+
+El bootstrap incluye el día, zona horaria y próxima medianoche calculados por el
+servidor. Un temporizador actualiza la app al cambio de día y vuelve a solicitar
+la apertura, incluso si la pestaña permanece abierta. Se respetan los cambios de
+horario de Chile. Las comprobaciones transaccionales del servidor impiden seguir
+operando sobre la caja anterior aunque un navegador todavía muestre datos viejos.
+
+Los reintentos de operaciones ya creadas conservan su identidad y caja original.
+Un pago Point pendiente iniciado el día anterior puede confirmarse después sin
+trasladarse a la caja nueva. Recuperar una venta, retiro o devolución ya procesada
+no duplica movimientos. No se cierra automáticamente ninguna caja ni se inventa
+un conteo de efectivo al pasar la medianoche.
+
+## Historial mensual de cierres
+
+Dentro de `/caja/cierre`, la sección **Historial de cierres** permite seleccionar
+un mes y abrir un cierre para modificar el conteo, las denominaciones, la
+referencia del terminal y las observaciones. El cajero consulta y corrige sus
+propias sesiones; el administrador puede consultar y corregir todas y también
+los cierres diarios generales. El listado se pagina y no depende de las últimas
+100 sesiones del selector de caja.
+
+`GET /api/closure-history?month=YYYY-MM&offset=0&limit=40` devuelve metadatos de
+cajas abiertas y cierres guardados. Los meses corresponden al día de negocio de
+la caja en Chile; los cierres generales históricos mantienen su día contable.
+Una caja pendiente no declara efectivo contado ni diferencia. Cerrar o corregir
+una caja posteriormente no la traslada a otro día o mes.
+
+Las observaciones son obligatorias solo cuando el efectivo contado difiere del
+esperado, tanto al cerrar como al corregir. Si la caja cuadra, son opcionales,
+incluso cuando hay movimientos o pagos pendientes. Cada corrección crea una nueva
+revisión, conservando los snapshots y PDF anteriores. Se registra el usuario que la guarda. Las ventas
+y movimientos originales, la fecha de cierre de la sesión y los fondos de las
+sesiones abiertas posteriormente permanecen registrados como estaban. La sesión
+corregida continúa cerrada. La revisión y huella esperadas rechazan escrituras
+simultáneas con `CLOSURE_CHANGED`. El esquema 4 guarda el día de negocio de cada caja e incluye índices del
+historial por día y usuario; debe migrarse antes de iniciar el servidor actualizado.
+
+Al confirmar el primer cierre de una sesión con Point configurado, Caja guarda
+el cierre y envía al terminal un ticket con totales de tarjeta, efectivo, retiros,
+vueltos y una diferencia si la hay. El ticket incluye totales, sin el detalle de
+las ventas ni las observaciones. Si el envío falla, Caja avisa y el cierre sigue
+guardado. Las correcciones no generan otro ticket.
 
 ## Retiros y rendiciones
 

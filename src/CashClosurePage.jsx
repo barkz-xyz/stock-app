@@ -6,7 +6,7 @@ import { useI18n } from './i18n.js'
 import { isPlainNavigation, sectionHref } from './routes.js'
 import CajaHeader from './CajaHeader.jsx'
 import CashDenominations from './CashDenominations.jsx'
-import CashClosureHistory, { currentClosureMonth } from './CashClosureHistory.jsx'
+import CashClosureHistory from './CashClosureHistory.jsx'
 import { cashDenominations as denominations, cashCountTotal, cashCountNumbers } from './cashCount.js'
 
 const emptyForm = data => {
@@ -147,10 +147,10 @@ function CashClosureEditor({ date, onNavigate, setToast, refreshToken, sessionId
   </>
 }
 
-export default function CashClosurePage({ view = 'current', month, ...props }) {
+export default function CashClosurePage({ view = 'current', month, currentMonth, ...props }) {
   const { language } = useI18n()
   const tx = (es, en) => language === 'es' ? es : en
-  const historyMonth = month || currentClosureMonth()
+  const historyMonth = month || currentMonth
   const historyHref = sectionHref('pos', { view: 'close', closureView: 'history', month: historyMonth })
   return <div className="page caja-detail-page closure-page">
     <CajaHeader active="close" onNavigate={props.onNavigate} />
@@ -162,7 +162,7 @@ export default function CashClosurePage({ view = 'current', month, ...props }) {
             if (isPlainNavigation(e)) { e.preventDefault(); props.onNavigate(href) }
           }}><Icon size={16} />{label}</a>)}
       </nav>
-      {view === 'history' ? <CashClosureHistory month={historyMonth} user={props.user} refreshToken={props.refreshToken} onNavigate={props.onNavigate} /> : <>
+      {view === 'history' ? <CashClosureHistory month={historyMonth} currentMonth={currentMonth} user={props.user} refreshToken={props.refreshToken} onNavigate={props.onNavigate} /> : <>
         {month && <a className="closure-back-history" href={historyHref} onClick={e => { if (isPlainNavigation(e)) { e.preventDefault(); props.onNavigate(historyHref) } }}><History size={15} />{tx('Volver al historial', 'Back to history')}</a>}
         <CashClosureEditor {...props} />
       </>}

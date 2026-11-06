@@ -6,7 +6,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { inflateSync } from 'node:zlib'
 import { PDFDocument } from 'pdf-lib'
-import { businessDateAt, closurePeriod, buildClosureSummary, cleanClosureInput, createClosure } from './cash-closure.js'
+import { closurePeriod, buildClosureSummary, cleanClosureInput, createClosure } from './cash-closure.js'
 import { createCashClosurePdf } from './cash-closure-pdf.js'
 
 const sale = (method, total, at, refunds = [], extra = {}) => ({ id: crypto.randomUUID(), shortId: 'ABC12345',

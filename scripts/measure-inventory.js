@@ -59,7 +59,7 @@ try {
   app.use('/api/integrations/v1',createInventoryRouter({getStore:()=>integrations,config:{enabled:true,environment:'test'}}))
   app.get('/api/sales/history',async(req,res)=>res.json(await store.searchSales(req.query,user)))
   app.get('/api/cash-closures',async(req,res)=>res.json(await store.getCashClosureWorkspace(req.query.date)))
-  app.get('/api/bootstrap',async(_req,res)=>res.json({auth,...await store.getBootstrapData(),registerSessions:[session],registerSession:session,posConfig:{configured:false,mockMode:false,terminalLabel:''}}))
+  app.get('/api/bootstrap',async(_req,res)=>res.json({auth,...await store.getBootstrapData(),registerSession:session,posConfig:{configured:false,mockMode:false,terminalLabel:''}}))
   if (withUi) {
   vite = await createServer({ configFile:false, envFile:false, plugins:[{name:'local-render-counts',enforce:'pre',transform(code,id){if(!/\/src\/(App|SalesCounter)\.jsx$/.test(id.replaceAll('\\','/')))return; return code.replace(/function (Dashboard|Inventory|InventoryList|Activity|SalesCounter|ProductArtwork)\(([^\n]*)\) \{/g,(m,name)=>m+` globalThis.__renders ||= {}; globalThis.__renders.${name} = (globalThis.__renders.${name} || 0) + 1;`) }},react()],server:{middlewareMode:true,hmr:false,ws:false},appType:'spa' })
   app.use(vite.middlewares)

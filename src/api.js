@@ -1,4 +1,5 @@
 import { shareSnapshot } from './snapshot.js'
+import { dateOnly } from './dates.js'
 
 const pendingReads = new Map()
 const validatedReads = new Map()
@@ -59,13 +60,6 @@ function request(url, options = {}) {
   return pending
 }
 
-function localDateKey(date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 export function metricsPeriod(range = 'today') {
   const now = new Date()
   const todayFrom = new Date(now)
@@ -83,7 +77,7 @@ export function metricsPeriod(range = 'today') {
     previousTo: previousTo.toISOString(),
     todayFrom: todayFrom.toISOString(),
     todayTo: new Date(now.getTime() + 1000).toISOString(),
-    businessDate: localDateKey(now),
+    businessDate: dateOnly(now),
   }
 }
 

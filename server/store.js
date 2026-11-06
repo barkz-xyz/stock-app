@@ -1648,26 +1648,17 @@ function isWithin(sale, from, to) {
   return timestamp >= from.getTime() && timestamp < to.getTime()
 }
 
-const bakeryTimeZone = process.env.BAKERY_TIME_ZONE || 'America/Santiago'
-const datePartsFormatter = new Intl.DateTimeFormat('en-US', {
-  timeZone: bakeryTimeZone, year: 'numeric', month: '2-digit', day: '2-digit',
-})
 const hourFormatter = new Intl.DateTimeFormat('en-US', {
-  timeZone: bakeryTimeZone, hour: '2-digit', hourCycle: 'h23',
+  timeZone: closureTimeZone, hour: '2-digit', hourCycle: 'h23',
 })
-
-function localDateKey(value) {
-  const parts = Object.fromEntries(datePartsFormatter.formatToParts(new Date(value)).map((part) => [part.type, part.value]))
-  return `${parts.year}-${parts.month}-${parts.day}`
-}
 
 function completedSale(sale) {
   return sale.status === 'paid' || sale.status === 'refunded'
 }
 
 function summarizeDay(data, now) {
-  const businessDate = localDateKey(now)
-  const onDay = value => value && localDateKey(value) === businessDate
+  const businessDate = businessDateAt(now)
+  const onDay = value => value && businessDateAt(value) === businessDate
   const paid = data.sales.filter(sale => completedSale(sale) && onDay(sale.paidAt || sale.createdAt))
   const refunds = data.sales.flatMap(sale => sale.refunds || []).filter(refund => refund.status === 'processed' && onDay(refund.processedAt || refund.updatedAt || refund.createdAt))
   const grossRevenue = paid.reduce((sum, sale) => sum + Number(sale.total), 0)
@@ -1677,7 +1668,7 @@ function summarizeDay(data, now) {
 
 export async function getDailySummary(now = new Date()) {
   if (!pool) return summarizeDay(await readFileData(), now)
-  const businessDate = localDateKey(now)
+  const businessDate = businessDateAt(now)
   const { rows: [row] } = await pool.query(`
     WITH bounds AS (
       SELECT $1::date::timestamp AT TIME ZONE $2 AS start_at,
@@ -1691,7 +1682,7 @@ export async function getDailySummary(now = new Date()) {
       WHERE status='processed' AND COALESCE(processed_at, updated_at, created_at) >= start_at
         AND COALESCE(processed_at, updated_at, created_at) < end_at
     ) SELECT paid.transactions, paid.gross, returned.refunded FROM paid CROSS JOIN returned
-  `, [businessDate, bakeryTimeZone])
+  `, [businessDate, closureTimeZone])
   return { businessDate, transactions: Number(row.transactions), grossRevenue: Number(row.gross),
     refundedTotal: Number(row.refunded), revenue: Number(row.gross) - Number(row.refunded) }
 }
@@ -1752,7 +1743,7 @@ export function buildSalesMetrics(sales, { from, to, previousFrom, previousTo, t
   const products = new Map()
 
   for (const sale of currentPaid) {
-    const day = localDateKey(sale.paidAt || sale.createdAt)
+    const day = businessDateAt(sale.paidAt || sale.createdAt)
     const daily = dailyMap.get(day) || { date: day, revenue: 0, transactions: 0 }
     daily.revenue += sale.total
     daily.transactions += 1
@@ -1775,7 +1766,7 @@ export function buildSalesMetrics(sales, { from, to, previousFrom, previousTo, t
 
   for (const refund of currentRefunds) {
     const timestamp = refund.processedAt || refund.updatedAt || refund.createdAt
-    const day = localDateKey(timestamp)
+    const day = businessDateAt(timestamp)
     const daily = dailyMap.get(day) || { date: day, revenue: 0, transactions: 0 }
     daily.revenue -= refund.amount
     dailyMap.set(day, daily)

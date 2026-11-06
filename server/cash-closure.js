@@ -1,15 +1,12 @@
 import crypto from 'node:crypto'
 import { cashCountTotal, cleanCashCount } from '../src/cashCount.js'
+import { businessDayKey } from '../src/registerDay.js'
 export { cashDenominations } from '../src/cashCount.js'
 
 export const closureTimeZone = process.env.BAKERY_TIME_ZONE || 'America/Santiago'
-const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: closureTimeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
 export const closureError = (message, status = 400, code = 'INVALID_CLOSURE') => Object.assign(new Error(message), { status, code })
-export function businessDateAt(value = new Date()) {
-  const parts = Object.fromEntries(formatter.formatToParts(new Date(value)).map(p => [p.type, p.value]))
-  return `${parts.year}-${parts.month}-${parts.day}`
-}
-export function validateClosureDate(value = businessDateAt()) {
+export const businessDateAt = value => businessDayKey(value, closureTimeZone)
+function validateClosureDate(value = businessDateAt()) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
     !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value || value < '2000-01-01' || value > businessDateAt()) {
     throw closureError('Selecciona una fecha válida, hasta el día de hoy en Chile.')

@@ -316,13 +316,13 @@ app.get('/api/bootstrap', async (req, res, next) => {
   try {
     const startedAt = performance.now()
     const dataPromise=auth.user.role==='admin'?getBootstrapData():Promise.all([listItems(),searchSales({limit:50},auth.user)]).then(([items,history])=>({items,movements:[],sales:history.sales,dailySummary:null}))
-    const [registerSessions,registerSession,data]=await Promise.all([listRegisterSessions(auth.user),getActiveRegisterSession(auth.user),dataPromise])
+    const [registerSession, data] = await Promise.all([getActiveRegisterSession(auth.user), dataPromise])
     res.setHeader('Server-Timing', `data;dur=${elapsedMilliseconds(startedAt)}`)
     const period=closurePeriod()
     const currentSession=registerIsActive(registerSession,period.businessDate,period.timeZone)?registerSession:null
     const registerOpening = currentSession ? null : await getRegisterOpening(auth.user)
     const registerCalendar={businessDate:period.businessDate,timeZone:period.timeZone,nextDayAt:period.to.toISOString(),serverNow:new Date().toISOString()}
-    res.json({ auth, ...data, registerSessions,registerSession:currentSession,registerOpening,registerCalendar, posConfig: pointConfiguration() })
+    res.json({ auth, ...data, registerSession:currentSession,registerOpening,registerCalendar, posConfig: pointConfiguration() })
   } catch (error) { next(error) }
 })
 app.use('/api', requireAuth, cashierBoundary)

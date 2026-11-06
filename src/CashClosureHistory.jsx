@@ -1,27 +1,23 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, ArrowRight, CalendarDays, ChevronLeft, ChevronRight, History, RotateCw } from 'lucide-react'
+import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, History, RotateCw } from 'lucide-react'
 import { api } from './api.js'
 import { useI18n } from './i18n.js'
 import { isPlainNavigation, sectionHref } from './routes.js'
-
-export function currentClosureMonth() {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Santiago', year: 'numeric', month: '2-digit' }).formatToParts(new Date())
-  return `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}`
-}
 
 function adjacentMonth(month, delta) {
   const [year, value] = month.split('-').map(Number)
   return new Date(Date.UTC(year, value - 1 + delta, 1)).toISOString().slice(0, 7)
 }
 
-export default function CashClosureHistory({ month, user, onNavigate, refreshToken }) {
+export default function CashClosureHistory({ month, currentMonth, user, onNavigate, refreshToken }) {
   const { language, formatCurrency: money } = useI18n()
   const tx = (es, en) => language === 'es' ? es : en
   const [page, setPage] = useState({ month, offset: 0 })
   const [data, setData] = useState(null), [loading, setLoading] = useState(true), [error, setError] = useState('')
   const [reload, setReload] = useState(0)
   const offset = page.month === month ? page.offset : 0
-  const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(month) && month >= '2000-01' && month <= currentClosureMonth()
+  const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(month) && month >= '2000-01' && month <= currentMonth
+  const dateFormatter = new Intl.DateTimeFormat(language === 'es' ? 'es-CL' : 'en-US', { timeZone: 'UTC', dateStyle: 'medium' })
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true); setError(''); setData(null)
@@ -38,10 +34,10 @@ export default function CashClosureHistory({ month, user, onNavigate, refreshTok
       <span className="closure-history-count">{data ? `${data.total} ${data.total === 1 ? tx('caja', 'register') : tx('cajas', 'registers')}` : '—'}</span>
     </header>
     <div className="closure-history-toolbar">
-      <label><span>{tx('Mes de caja', 'Register month')}</span><div className="closure-month-control"><CalendarDays size={17} aria-hidden="true" /><input type="month" aria-label={tx('Mes del historial', 'History month')} value={validMonth ? month : ''} min="2000-01" max={currentClosureMonth()} onChange={e => e.target.value && changeMonth(e.target.value)} /></div></label>
+      <label><span>{tx('Mes de caja', 'Register month')}</span><div className="closure-month-control"><CalendarDays size={17} aria-hidden="true" /><input type="month" aria-label={tx('Mes del historial', 'History month')} value={validMonth ? month : ''} min="2000-01" max={currentMonth} onChange={e => e.target.value && changeMonth(e.target.value)} /></div></label>
       <div className="closure-month-arrows">
         <button type="button" className="icon-button" aria-label={tx('Mes anterior', 'Previous month')} disabled={!validMonth || month <= '2000-01'} onClick={() => changeMonth(adjacentMonth(month, -1))}><ChevronLeft size={18} /></button>
-        <button type="button" className="icon-button" aria-label={tx('Mes siguiente', 'Next month')} disabled={!validMonth || month >= currentClosureMonth()} onClick={() => changeMonth(adjacentMonth(month, 1))}><ChevronRight size={18} /></button>
+        <button type="button" className="icon-button" aria-label={tx('Mes siguiente', 'Next month')} disabled={!validMonth || month >= currentMonth} onClick={() => changeMonth(adjacentMonth(month, 1))}><ChevronRight size={18} /></button>
       </div>
       <button type="button" className="icon-button closure-history-refresh" aria-label={tx('Actualizar historial de cierres', 'Refresh close history')} disabled={loading} onClick={() => setReload(n => n + 1)}><RotateCw size={17} className={loading ? 'spin' : ''} /></button>
     </div>
@@ -52,7 +48,7 @@ export default function CashClosureHistory({ month, user, onNavigate, refreshTok
         {data.entries.map(entry => {
           const href = sectionHref('pos', { view: 'close', sessionId: entry.registerSessionId,
             date: entry.scope === 'day' ? entry.businessDate : undefined, month })
-          const closedLabel = new Intl.DateTimeFormat(language === 'es' ? 'es-CL' : 'en-US', { timeZone: 'UTC', dateStyle: 'medium' }).format(new Date(`${entry.businessDate}T12:00:00Z`))
+          const closedLabel = dateFormatter.format(new Date(`${entry.businessDate}T12:00:00Z`))
           const isOpen = entry.status === 'open'
           return <a className="closure-history-row" key={`${entry.scope}:${entry.id}`} href={href}
             aria-label={`${isOpen ? tx('Abrir caja pendiente','Open pending register') : tx('Abrir y modificar cierre', 'Open and edit close')} · ${entry.operator || tx('General diario', 'Full daily')} · ${closedLabel}`}

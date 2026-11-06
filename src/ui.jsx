@@ -26,25 +26,30 @@ export function LoadingSkeleton({ full = false }) {
   return <div className={`page section-skeleton ${full ? 'skeleton-full' : ''}`} role="status" aria-label={t('loadingSection')}><span className="sr-only">{t('loadingSection')}</span><i className="skeleton-heading" /><div className="skeleton-cards">{[0,1,2].map(n => <i key={n} />)}</div>{[0,1,2,3].map(n => <i key={n} />)}</div>
 }
 
-export function Modal({ title, eyebrow, onClose, children, wide = false, closeable = true }) {
+export function Modal({ title, eyebrow, onClose, children, wide = false, closeable = true, role = 'dialog', describedBy, initialFocusRef }) {
   const { t } = useI18n()
   const dialogRef = useRef(null), titleId = useId()
   useEffect(() => {
     const previous = document.activeElement
-    if (!dialogRef.current?.contains(previous)) dialogRef.current?.focus()
+    if (!dialogRef.current?.contains(previous)) {
+      const target = initialFocusRef?.current || dialogRef.current
+      target?.focus()
+    }
     return () => { if (previous?.isConnected) previous.focus({ preventScroll: true }) }
-  }, [])
+  }, [initialFocusRef])
   useEffect(() => {
     const onKey = (event) => {
       const top = [...document.querySelectorAll('.modal')].at(-1)
-      if (top !== dialogRef.current || document.querySelector('dialog[open]')) return
+      if (top !== dialogRef.current) return
       if (event.key === 'Escape' && closeable) { event.preventDefault(); onClose() }
       if (event.key === 'Tab') {
         const focusable = [...top.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex="0"]')].filter(el => el.getClientRects().length)
         const first = focusable[0], last = focusable.at(-1)
+        const active = document.activeElement
+        const atBoundary = active === top || !top.contains(active)
         if (!first) { event.preventDefault(); top.focus() }
-        else if (event.shiftKey && (document.activeElement === first || document.activeElement === top)) { event.preventDefault(); last.focus() }
-        else if (!event.shiftKey && (document.activeElement === last || document.activeElement === top)) { event.preventDefault(); first.focus() }
+        else if (event.shiftKey && (active === first || atBoundary)) { event.preventDefault(); last.focus() }
+        else if (!event.shiftKey && (active === last || atBoundary)) { event.preventDefault(); first.focus() }
       }
     }
     document.addEventListener('keydown', onKey)
@@ -58,7 +63,7 @@ export function Modal({ title, eyebrow, onClose, children, wide = false, closeab
   }, [closeable, onClose])
 
   return createPortal(<div className="modal-backdrop" role="presentation" onMouseDown={(event) => closeable && event.target === event.currentTarget && onClose()}>
-    <section ref={dialogRef} tabIndex={-1} className={`modal ${wide ? 'modal-wide' : ''}`} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+    <section ref={dialogRef} tabIndex={-1} className={`modal ${wide ? 'modal-wide' : ''}`} role={role} aria-modal="true" aria-labelledby={titleId} aria-describedby={describedBy}>
       <div className="modal-handle" />
       <header className="modal-header">
         <div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2 id={titleId}>{title}</h2></div>

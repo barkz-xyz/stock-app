@@ -3,8 +3,15 @@ export const sectionPaths = {
   metrics: '/metricas', activity: '/actividad', settings: '/configuracion', users:'/usuarios',
 }
 
-export function sectionHref(page, { view = 'cart', range = 'today', date } = {}) {
-  if (page === 'pos' && view === 'close') return `/caja/cierre${date ? `?fecha=${encodeURIComponent(date)}` : ''}`
+export function sectionHref(page, { view = 'cart', range = 'today', date, sessionId, closureView, month } = {}) {
+  if (page === 'pos' && view === 'close') {
+    const query = new URLSearchParams()
+    if (date) query.set('fecha', date)
+    if (sessionId) query.set('sesion', sessionId)
+    if (closureView === 'history') query.set('vista', 'historial')
+    if (month) query.set('mes', month)
+    return `/caja/cierre${query.size ? `?${query}` : ''}`
+  }
   if (page === 'pos' && view === 'cash') return '/caja/retiros'
   if (page === 'pos' && view === 'history') return '/caja/historial'
   if (page === 'metrics' && ['7d', '30d'].includes(range)) return `/metricas?periodo=${range}`
@@ -19,6 +26,7 @@ export function parseRoute(href) {
   const range = url.searchParams.get('periodo')
   return { page, registerView: path === '/caja/cierre' ? 'close' : path === '/caja/retiros' ? 'cash' : path === '/caja/historial' ? 'history' : 'cart',
     closureDate: url.searchParams.get('fecha') || '', registerSessionId:url.searchParams.get('sesion')||'',
+    closureView: url.searchParams.get('vista') === 'historial' ? 'history' : 'current', closureMonth: url.searchParams.get('mes') || '',
     metricsRange: ['7d', '30d'].includes(range) ? range : 'today',
     settingsTab: url.searchParams.get('tab') === 'inventory-api' ? 'inventory-api' : 'point',
     canonical: path === '/' ? sectionPaths.dashboard : null }

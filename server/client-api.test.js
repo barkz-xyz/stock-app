@@ -74,13 +74,19 @@ test('checkout retries carry a stable key and never retry a write automatically'
   await assert.rejects(api.cashSale([{ itemId: 'item', quantity: 1 }], 'key'), /Lost response/)
   assert.equal(calls.length, 1)
   await api.cashSale([{ itemId: 'item', quantity: 1 }], 'key')
+  assert.ok(calls.every(call => call.url === '/api/sales/cash/local'))
   assert.ok(calls.every(call => call.options.headers.get('Idempotency-Key') === 'key'))
   assert.equal(calls[0].options.body, calls[1].options.body)
+
+  await api.cashPointSale([{ itemId: 'item', quantity: 1 }], 'point-key', 5000)
+  assert.equal(calls[2].url, '/api/sales/cash/point')
+  assert.equal(calls[2].options.headers.get('Idempotency-Key'), 'point-key')
+  assert.equal(JSON.parse(calls[2].options.body).cashReceived, 5000)
 })
 
 test('bootstrap retains equal branches and rows through 304, new ETags, and a mutation', async t => {
   const snapshot = { auth: { authenticated: true, user: { id: 'admin', role: 'admin' } },
-    items: [{ id: 'a', quantity: 1.25 }, { id: 'b', quantity: 3 }], sales: [], registerSessions: [{ id: 'session' }] }
+    items: [{ id: 'a', quantity: 1.25 }, { id: 'b', quantity: 3 }], sales: [], registerSession: { id: 'session' } }
   const changed = { ...snapshot, items: [{ ...snapshot.items[0], quantity: 1 }, snapshot.items[1]] }
   const responses = [json(snapshot, '"one"'), new Response(null, { status: 304 }), json(snapshot, '"different-encoding"'), json({ ok: true }), json(changed, '"two"')]
   const requests = []
@@ -92,7 +98,7 @@ test('bootstrap retains equal branches and rows through 304, new ETags, and a mu
   const next = await api.bootstrap()
   assert.notEqual(next, first); assert.notEqual(next.items, first.items)
   assert.notEqual(next.items[0], first.items[0]); assert.equal(next.items[1], first.items[1])
-  assert.equal(next.auth, first.auth); assert.equal(next.sales, first.sales); assert.equal(next.registerSessions, first.registerSessions)
+  assert.equal(next.auth, first.auth); assert.equal(next.sales, first.sales); assert.equal(next.registerSession, first.registerSession)
   assert.equal(requests[1].headers.get('If-None-Match'), '"one"')
   assert.equal(requests[4].headers.has('If-None-Match'), false, 'A write invalidates HTTP validators')
 })

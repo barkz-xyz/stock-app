@@ -57,11 +57,11 @@ The mock terminal approves a card sale after a short delay. Never set `MERCADOPA
 
 ### Loading and request performance
 
-The app starts with `/api/bootstrap`, which checks the staff session and returns inventory, recent movements, recent sales, and Point configuration together. Locked sessions receive only authentication status. This removes the previous authentication-then-four-requests waterfall. PostgreSQL reads run in parallel; local JSON mode reads and parses one snapshot instead of three. The endpoint exposes its data-loading duration in `Server-Timing`.
+The app starts with `/api/bootstrap`, which checks the staff session and returns inventory, recent movements and sales, Point configuration, and the current register context. Locked sessions receive only authentication status. Register history loads from its own endpoint when opened. PostgreSQL reads run in parallel, and `Server-Timing` reports the data-loading duration.
 
 CAJA, metrics, and Point settings load as separate page modules. React and icons have stable, fingerprinted vendor bundles so ordinary application updates can reuse cached framework code. Product photos remain lazy-loaded and fingerprinted.
 
-Permanent product deletion uses a lazy-loaded Astryx `AlertDialog`. Its styles and language/theme provider stay scoped to the confirmation, preserve the app theme, and provide keyboard focus management. Keep this boundary when changing inventory dialogs; Astryx does not manage application data.
+Permanent product deletion uses the shared confirmation dialog. It focuses the keep-product action first and returns focus to the delete link when dismissed.
 
 Concurrent GETs share one in-flight request. Bootstrap reads revalidate their ETag; an unchanged snapshot returns `304` and reuses the existing data. Mutations and sign-out invalidate read state. Reads time out after 20 seconds. Authenticated server-sent events refresh the full snapshot after changes; bursts coalesce and changes during an in-flight refresh trigger another read. Hidden tabs close the stream, and returning to the tab reconciles missed changes. A one-minute reconciliation handles day rollover or lost events; disconnected streams fall back to 15-second refreshes. Payment/refund writes are never automatically retried or coalesced. Metrics requests are cancelled when changing ranges or leaving the page, and date/currency formatters are reused per language.
 

@@ -4,6 +4,7 @@ import path from 'node:path'
 import pg from 'pg'
 import { dateOnly } from '../src/dates.js'
 import { saleUsesPoint } from '../src/pointPayments.js'
+import { registerBusinessDate, registerIsActive } from '../src/registerDay.js'
 import { publishChange } from './changes.js'
 import { cleanInventoryBatch, inventoryBatchChanges } from './inventory-batch.js'
 import { cleanHistoryQuery, historyMatches } from './sales-history.js'
@@ -13,7 +14,7 @@ import { createRegisterCashStore } from './register-cash-store.js'
 import { createIntegrationStore } from './integration-store.js'
 import { readInventorySnapshot } from './inventory-snapshot.js'
 import { createStockReservationStore, assertNoStockHolds } from './stock-reservations.js'
-import { closurePeriod, buildClosureSummary, cleanClosureInput, createClosure, closureError, businessDateAt } from './cash-closure.js'
+import { closurePeriod, closureHistoryQuery, closureTimeZone, buildClosureSummary, cleanClosureInput, createClosure, closureError, businessDateAt } from './cash-closure.js'
 
 import { postgresConfig, isProductionDatabaseEnvironment, assertLimitedRuntimeRole } from './postgres.js'
 import { migrateDatabase, assertDatabaseSchema } from './schema.js'
@@ -589,7 +590,7 @@ function reserveSaleInFile(data, requested, paymentMethod, checkoutKey, cashRece
     assertSameCheckout(existing, fingerprint)
     return { ...normalizeSale(existing), checkoutReplayed: true }
   }
-  if(actor&&!data.registerSessions.some(s=>s.id===actor.sessionId&&s.userId===actor.id&&!s.closedAt))throw userError('Abre una sesión de caja para vender.',409,'SESSION_REQUIRED')
+  if(actor&&!data.registerSessions.some(s=>s.id===actor.sessionId&&s.userId===actor.id&&registerIsActive(s,businessDateAt(),closureTimeZone)))throw userError('Abre una caja para el día de hoy antes de vender.',409,'SESSION_REQUIRED')
   const lines = validateSaleLines(data.items.map(normalizeItem), requested, Boolean(actor))
   const now = new Date().toISOString()
   const id = crypto.randomUUID()
@@ -671,7 +672,7 @@ export async function createSale(requested, paymentMethod, checkoutKey = null, c
         return { ...sale, checkoutReplayed: true }
       }
     }
-    if(actor){const session=(await client.query('SELECT id FROM register_sessions WHERE id=$1 AND user_id=$2 AND closed_at IS NULL FOR UPDATE',[actor.sessionId,actor.id])).rows[0];if(!session)throw userError('Abre una sesión de caja para vender.',409,'SESSION_REQUIRED')}
+    if(actor){const session=(await client.query('SELECT * FROM register_sessions WHERE id=$1 AND user_id=$2 FOR UPDATE',[actor.sessionId,actor.id])).rows[0];if(!registerIsActive(session,businessDateAt(),closureTimeZone))throw userError('Abre una caja para el día de hoy antes de vender.',409,'SESSION_REQUIRED')}
     const ids = [...new Set(requested.map((line) => line.itemId))].sort()
     const itemResult = await client.query('SELECT * FROM items WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE', [ids])
     const lines = validateSaleLines(itemResult.rows.map(normalizeItem), requested, Boolean(actor))
@@ -1235,7 +1236,7 @@ export async function completeRefund(refundId, order = null, actor = null) {
       if (refund.status !== 'pending') throw refundConflict('This refund can no longer be completed.')
       let register = null
       if (sale.paymentMethod === 'cash' && (sale.registerSessionId || actor)) {
-        register = data.registerSessions.find(s => s.id === actor?.sessionId && s.userId === actor?.id && !s.closedAt)
+        register = data.registerSessions.find(s => s.id === actor?.sessionId && s.userId === actor?.id && registerIsActive(s,businessDateAt(),closureTimeZone))
         if (!register) throw userError('Abre tu propia sesión de caja para pagar la devolución.',409,'SESSION_REQUIRED')
         const net=sessionSummary(data.sales.map(s=>normalizeSale(s)),normalizeRegister(register)).cash.net
         const ledger=withCashLedger({},data.cashEntries.filter(e=>e.sessionId===register.id)).cashLedger.net
@@ -1293,7 +1294,7 @@ export async function completeRefund(refundId, order = null, actor = null) {
     let cashRegister = null
     if (parent.payment_method === 'cash' && (parent.register_session_id || actor)) {
       cashRegister = actor?.sessionId ? (await client.query('SELECT * FROM register_sessions WHERE id=$1 FOR UPDATE',[actor.sessionId])).rows[0] : null
-      if (!cashRegister || cashRegister.user_id !== actor?.id || cashRegister.closed_at) throw userError('Abre tu propia sesión de caja para pagar la devolución.',409,'SESSION_REQUIRED')
+      if (!cashRegister || cashRegister.user_id !== actor?.id || !registerIsActive(cashRegister,businessDateAt(),closureTimeZone)) throw userError('Abre tu propia caja del día para pagar la devolución.',409,'SESSION_REQUIRED')
     }
     const saleResult = await client.query('SELECT * FROM sales WHERE id=$1 FOR UPDATE', [parent.sale_id])
     const refundResult = await client.query('SELECT * FROM refunds WHERE id=$1 FOR UPDATE', [refundId])
@@ -1647,26 +1648,17 @@ function isWithin(sale, from, to) {
   return timestamp >= from.getTime() && timestamp < to.getTime()
 }
 
-const bakeryTimeZone = process.env.BAKERY_TIME_ZONE || 'America/Santiago'
-const datePartsFormatter = new Intl.DateTimeFormat('en-US', {
-  timeZone: bakeryTimeZone, year: 'numeric', month: '2-digit', day: '2-digit',
-})
 const hourFormatter = new Intl.DateTimeFormat('en-US', {
-  timeZone: bakeryTimeZone, hour: '2-digit', hourCycle: 'h23',
+  timeZone: closureTimeZone, hour: '2-digit', hourCycle: 'h23',
 })
-
-function localDateKey(value) {
-  const parts = Object.fromEntries(datePartsFormatter.formatToParts(new Date(value)).map((part) => [part.type, part.value]))
-  return `${parts.year}-${parts.month}-${parts.day}`
-}
 
 function completedSale(sale) {
   return sale.status === 'paid' || sale.status === 'refunded'
 }
 
 function summarizeDay(data, now) {
-  const businessDate = localDateKey(now)
-  const onDay = value => value && localDateKey(value) === businessDate
+  const businessDate = businessDateAt(now)
+  const onDay = value => value && businessDateAt(value) === businessDate
   const paid = data.sales.filter(sale => completedSale(sale) && onDay(sale.paidAt || sale.createdAt))
   const refunds = data.sales.flatMap(sale => sale.refunds || []).filter(refund => refund.status === 'processed' && onDay(refund.processedAt || refund.updatedAt || refund.createdAt))
   const grossRevenue = paid.reduce((sum, sale) => sum + Number(sale.total), 0)
@@ -1676,7 +1668,7 @@ function summarizeDay(data, now) {
 
 export async function getDailySummary(now = new Date()) {
   if (!pool) return summarizeDay(await readFileData(), now)
-  const businessDate = localDateKey(now)
+  const businessDate = businessDateAt(now)
   const { rows: [row] } = await pool.query(`
     WITH bounds AS (
       SELECT $1::date::timestamp AT TIME ZONE $2 AS start_at,
@@ -1690,7 +1682,7 @@ export async function getDailySummary(now = new Date()) {
       WHERE status='processed' AND COALESCE(processed_at, updated_at, created_at) >= start_at
         AND COALESCE(processed_at, updated_at, created_at) < end_at
     ) SELECT paid.transactions, paid.gross, returned.refunded FROM paid CROSS JOIN returned
-  `, [businessDate, bakeryTimeZone])
+  `, [businessDate, closureTimeZone])
   return { businessDate, transactions: Number(row.transactions), grossRevenue: Number(row.gross),
     refundedTotal: Number(row.refunded), revenue: Number(row.gross) - Number(row.refunded) }
 }
@@ -1751,7 +1743,7 @@ export function buildSalesMetrics(sales, { from, to, previousFrom, previousTo, t
   const products = new Map()
 
   for (const sale of currentPaid) {
-    const day = localDateKey(sale.paidAt || sale.createdAt)
+    const day = businessDateAt(sale.paidAt || sale.createdAt)
     const daily = dailyMap.get(day) || { date: day, revenue: 0, transactions: 0 }
     daily.revenue += sale.total
     daily.transactions += 1
@@ -1774,7 +1766,7 @@ export function buildSalesMetrics(sales, { from, to, previousFrom, previousTo, t
 
   for (const refund of currentRefunds) {
     const timestamp = refund.processedAt || refund.updatedAt || refund.createdAt
-    const day = localDateKey(timestamp)
+    const day = businessDateAt(timestamp)
     const daily = dailyMap.get(day) || { date: day, revenue: 0, transactions: 0 }
     daily.revenue -= refund.amount
     dailyMap.set(day, daily)
@@ -1961,39 +1953,90 @@ export async function listMovements(limit = 50) {
 
 function normalizeRegister(row) {
   return row ? { id:row.id,userId:row.user_id??row.userId,operator:row.operator,openingCash:Number(row.opening_cash??row.openingCash),
+    businessDate:registerBusinessDate(row,closureTimeZone),
     additionalCash:Number(row.opening_extra_cash??row.additionalCash??0),sourceSessionId:row.opening_source_session_id??row.sourceSessionId??null,
     openedAt:row.opened_at??row.openedAt,closedAt:row.closed_at??row.closedAt??null,closure:row.closure||null } : null
 }
 export async function listRegisterSessions(user) {
-  const rows=pool?(await pool.query(`SELECT id,user_id,operator,opening_cash,opened_at,closed_at,CASE WHEN closure IS NULL THEN NULL ELSE jsonb_build_object('revision',closure->'revision','closedAt',closure->'closedAt','totalSales',closure->'totalSales') END AS closure FROM register_sessions ${user.role==='admin'?'':'WHERE user_id=$1'} ORDER BY opened_at DESC LIMIT 100`,user.role==='admin'?[]:[user.id])).rows:(await readFileData()).registerSessions.filter(s=>user.role==='admin'||s.userId===user.id).sort((a,b)=>new Date(b.openedAt)-new Date(a.openedAt)).slice(0,100)
+  const rows=pool?(await pool.query(`SELECT id,user_id,operator,business_date,opening_cash,opened_at,closed_at,CASE WHEN closure IS NULL THEN NULL ELSE jsonb_build_object('revision',closure->'revision','closedAt',closure->'closedAt','totalSales',closure->'totalSales') END AS closure FROM register_sessions ${user.role==='admin'?'':'WHERE user_id=$1'} ORDER BY opened_at DESC LIMIT 100`,user.role==='admin'?[]:[user.id])).rows:(await readFileData()).registerSessions.filter(s=>user.role==='admin'||s.userId===user.id).sort((a,b)=>new Date(b.openedAt)-new Date(a.openedAt)).slice(0,100)
   return rows.map(row=>{const s=normalizeRegister(row);return {...s,closure:s.closure?{revision:s.closure.revision,closedAt:s.closure.closedAt,totalSales:s.closure.totalSales}:null}})
 }
+export async function listClosureHistory(user, query = {}) {
+  const period = closureHistoryQuery(query)
+  const normalize = row => ({ id: row.id, scope: row.scope, registerSessionId: row.registerSessionId || null,
+    userId: row.userId || null, operator: row.operator || '', businessDate: dateOnly(row.businessDate),
+    openedAt: row.openedAt || null, closedAt: row.closedAt || null, updatedAt: row.updatedAt || row.closedAt || row.openedAt,
+    status: row.status || (row.closedAt ? 'closed' : 'open'), revision: Number(row.revision || 0),
+    totalSales: row.totalSales == null ? null : Number(row.totalSales), countedCash: row.countedCash == null ? null : Number(row.countedCash),
+    difference: row.difference == null ? null : Number(row.difference) })
+  let entries, total
+  if (!pool) {
+    const data = await readFileData()
+    entries = data.registerSessions.filter(s => (!s.closedAt || s.closure) && (user.role === 'admin' || s.userId === user.id)
+      && registerBusinessDate(s,closureTimeZone) >= period.firstDate && registerBusinessDate(s,closureTimeZone) < period.nextDate).map(s => normalize({
+        ...s.closure, id: s.id, scope: 'session', registerSessionId: s.id, userId: s.userId, operator: s.operator,
+        businessDate:registerBusinessDate(s,closureTimeZone), openedAt: s.openedAt, closedAt: s.closedAt, updatedAt: s.closure?.closedAt }))
+    if (user.role === 'admin') entries.push(...data.cashClosures.map(normalizeCashClosure)
+      .filter(c => c.businessDate >= period.firstDate && c.businessDate < period.nextDate)
+      .map(c => normalize({ ...c, scope: 'day', updatedAt: c.closedAt })))
+    entries.sort((a,b) => b.businessDate.localeCompare(a.businessDate) || Number(!a.openedAt)-Number(!b.openedAt)
+      || (a.openedAt && b.openedAt ? new Date(b.openedAt)-new Date(a.openedAt) : 0) || a.scope.localeCompare(b.scope) || a.id.localeCompare(b.id))
+    total = entries.length
+    entries = entries.slice(period.offset, period.offset + period.limit)
+  } else {
+    const { rows: [result] } = await pool.query(`WITH history AS (
+      SELECT s.id, 'session'::text AS scope, s.id AS "registerSessionId", s.user_id AS "userId", s.operator,
+        s.business_date::text AS "businessDate", s.opened_at AS "openedAt", s.closed_at AS "closedAt",
+        COALESCE((s.closure->>'closedAt')::timestamptz,s.closed_at,s.opened_at) AS "updatedAt",
+        CASE WHEN s.closed_at IS NULL THEN 'open' ELSE 'closed' END AS status,
+        COALESCE((s.closure->>'revision')::integer,0) AS revision,
+        (s.closure->>'totalSales')::numeric AS "totalSales",
+        (s.closure->>'countedCash')::numeric AS "countedCash",
+        (s.closure->>'difference')::numeric AS difference
+      FROM register_sessions s WHERE s.business_date >= $1::date AND s.business_date < $2::date AND (s.closed_at IS NULL OR s.closure IS NOT NULL)
+        AND ($3::boolean OR s.user_id=$4::uuid)
+      UNION ALL
+      SELECT c.id, 'day'::text, NULL::uuid, NULL::uuid, COALESCE(c.details->'current'->>'operator',''),
+        c.business_date::text, NULL::timestamptz, c.closed_at, c.closed_at, 'closed'::text,
+        COALESCE((c.details->'current'->>'revision')::integer,1), c.total_sales, c.counted_cash, c.difference
+      FROM cash_closures c WHERE $3::boolean AND c.business_date >= $1::date AND c.business_date < $2::date
+    ), page AS (SELECT * FROM history ORDER BY "businessDate" DESC,"openedAt" DESC NULLS LAST,scope,id LIMIT $5 OFFSET $6)
+    SELECT (SELECT COUNT(*) FROM history) AS total,
+      COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p."businessDate" DESC,p."openedAt" DESC NULLS LAST,p.scope,p.id) FROM page p),'[]'::jsonb) AS entries`,
+    [period.firstDate, period.nextDate, user.role === 'admin', user.id, period.limit, period.offset])
+    total = Number(result.total); entries = result.entries.map(normalize)
+  }
+  return { month: period.month, timeZone: period.timeZone, entries, total, limit: period.limit, offset: period.offset,
+    hasMore: period.offset + entries.length < total }
+}
 export async function getActiveRegisterSession(user) {
-  return normalizeRegister(pool?(await pool.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NULL',[user.id])).rows[0]:(await readFileData()).registerSessions.find(s=>s.userId===user.id&&!s.closedAt))
+  const day=businessDateAt()
+  return normalizeRegister(pool?(await pool.query('SELECT * FROM register_sessions WHERE user_id=$1 AND business_date=$2 AND closed_at IS NULL',[user.id,day])).rows[0]:(await readFileData()).registerSessions.find(s=>s.userId===user.id&&registerIsActive(s,day,closureTimeZone)))
 }
 function openingFrom(row) {
   const previous = normalizeRegister(row)
-  return { openingCash: Number(previous?.closure?.countedCash ?? 0), previousSessionId: previous?.id || null,
-    previousRevision: previous?.closure?.revision || 0, previousClosedAt: previous?.closedAt || null }
+  return { businessDate:businessDateAt(), timeZone:closureTimeZone, openingCash: Number(previous?.closure?.countedCash ?? 0), previousSessionId: previous?.id || null,
+    previousRevision: previous?.closure?.revision || 0, previousClosedAt: previous?.closedAt || null, previousBusinessDate:previous?.businessDate||null }
 }
 const previousRegister = data => (user => data.registerSessions.filter(s=>s.userId===user.id&&s.closedAt&&s.closure)
-  .sort((a,b)=>new Date(b.closedAt)-new Date(a.closedAt)||b.id.localeCompare(a.id))[0])
+  .sort((a,b)=>registerBusinessDate(b,closureTimeZone).localeCompare(registerBusinessDate(a,closureTimeZone))||new Date(b.closedAt)-new Date(a.closedAt)||b.id.localeCompare(a.id))[0])
 export async function getRegisterOpening(user) {
-  return openingFrom(pool ? (await pool.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NOT NULL AND closure IS NOT NULL ORDER BY closed_at DESC,id DESC LIMIT 1',[user.id])).rows[0]
+  return openingFrom(pool ? (await pool.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NOT NULL AND closure IS NOT NULL ORDER BY business_date DESC,closed_at DESC,id DESC LIMIT 1',[user.id])).rows[0]
     : previousRegister(await readFileData())(user))
 }
 export async function openRegisterSession(user,input) {
   const body = typeof input === 'number' ? { openingCash: input } : input || {}
   const build = previous => {
     const context = openingFrom(previous)
+    if ('businessDate' in body && body.businessDate !== context.businessDate) throw userError('Comenzó un nuevo día. Actualiza el fondo inicial para abrir la caja de hoy.',409,'OPENING_CHANGED')
     if ('previousSessionId' in body && (body.previousSessionId !== context.previousSessionId || body.previousRevision !== context.previousRevision)) throw userError('El cierre anterior cambió. Actualiza el fondo inicial.',409,'OPENING_CHANGED')
     const base = cashAmount(body.openingCash ?? context.openingCash,'el fondo anterior')
     const additionalCash = cashAmount(body.additionalCash ?? 0,'el efectivo adicional')
     const openingCash = cashAmount(base+additionalCash,'el fondo inicial')
-    return {id:crypto.randomUUID(),userId:user.id,operator:user.name,openingCash,additionalCash,sourceSessionId:context.previousSessionId,openedAt:new Date().toISOString(),closedAt:null,closure:null}
+    return {id:crypto.randomUUID(),userId:user.id,operator:user.name,businessDate:context.businessDate,openingCash,additionalCash,sourceSessionId:context.previousSessionId,openedAt:new Date().toISOString(),closedAt:null,closure:null}
   }
   if(!pool)return mutateFileData(data=>{
-    const old=data.registerSessions.find(s=>s.userId===user.id&&!s.closedAt)
+    const old=data.registerSessions.find(s=>s.userId===user.id&&registerIsActive(s,businessDateAt(),closureTimeZone))
     if(old)return normalizeRegister(old)
     const next=build(previousRegister(data)(user));data.registerSessions.unshift(next);return next
   })
@@ -2001,18 +2044,18 @@ export async function openRegisterSession(user,input) {
   try {
     await client.query('BEGIN')
     await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['register:'+user.id])
-    const old=(await client.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NULL',[user.id])).rows[0]
+    const old=(await client.query('SELECT * FROM register_sessions WHERE user_id=$1 AND business_date=$2 AND closed_at IS NULL',[user.id,businessDateAt()])).rows[0]
     if(old){await client.query('COMMIT');return normalizeRegister(old)}
-    const previous=(await client.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NOT NULL AND closure IS NOT NULL ORDER BY closed_at DESC,id DESC LIMIT 1 FOR UPDATE',[user.id])).rows[0]
+    const previous=(await client.query('SELECT * FROM register_sessions WHERE user_id=$1 AND closed_at IS NOT NULL AND closure IS NOT NULL ORDER BY business_date DESC,closed_at DESC,id DESC LIMIT 1 FOR UPDATE',[user.id])).rows[0]
     const next=build(previous)
-    const {rows}=await client.query(`INSERT INTO register_sessions(id,user_id,operator,opening_cash,opening_extra_cash,opening_source_session_id)
-      VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,[next.id,user.id,user.name,next.openingCash,next.additionalCash,next.sourceSessionId])
+    const {rows}=await client.query(`INSERT INTO register_sessions(id,user_id,operator,opening_cash,opening_extra_cash,opening_source_session_id,business_date,opened_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,[next.id,user.id,user.name,next.openingCash,next.additionalCash,next.sourceSessionId,next.businessDate,next.openedAt])
     await client.query('COMMIT');return normalizeRegister(rows[0])
   }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
 }
 function ownedRegister(row,user) {const s=normalizeRegister(row);if(!s||(user.role!=='admin'&&s.userId!==user.id))throw userError('Sesión de caja no encontrada.',404);return s}
 function sessionSummary(sales,session) {
-  const period={businessDate:businessDateAt(session.openedAt),timeZone:process.env.BAKERY_TIME_ZONE||'America/Santiago',from:new Date(session.openedAt),to:new Date('9999-12-31T23:59:59Z')}
+  const period={businessDate:registerBusinessDate(session,closureTimeZone),timeZone:closureTimeZone,from:new Date(session.openedAt),to:new Date('9999-12-31T23:59:59Z')}
   const summary=buildClosureSummary(sales,period,{registerSessionId:session.id})
   summary.to=session.closedAt||null;summary.scope='session';summary.registerSessionId=session.id
   const {fingerprint,...values}=summary
@@ -2035,17 +2078,17 @@ export async function getRegisterClosure(user,id,full=false) {
     const {history=[],snapshot,...fields}=session.closure||{}
     if(reader)await reader.query('COMMIT')
     return {session:full?session:{...session,closure:session.closure?{revision:session.closure.revision}:null},live,closure:session.closure?{...fields,snapshot:{fingerprint:snapshot.fingerprint}}:null,today:businessDateAt(),stale:false,
-      revisions:[...history,...(session.closure?[session.closure]:[])].map(c=>({revision:c.revision,closedAt:c.closedAt,operator:c.operator,note:c.note,exportable:true}))}
+      revisions:[...history,...(session.closure?[session.closure]:[])].map(c=>({revision:c.revision,closedAt:c.closedAt,operator:c.operator,closedByName:c.closedByName||'',note:c.note,exportable:true}))}
   }catch(e){if(reader)await reader.query('ROLLBACK');throw e}finally{reader?.release()}
 }
 export async function saveRegisterClosure(user,id,body) {
   const make=(session,sales,entries)=>{
-    if(session.closedAt&&user.role!=='admin')throw userError('Esta sesión ya está cerrada.',409,'SESSION_CLOSED')
     const summary=session.closedAt?session.closure.snapshot:withCashLedger(sessionSummary(sales,session),entries)
     if(summary.pendingCount)throw userError('Resuelve los cobros pendientes antes de cerrar la sesión.',409,'PENDING_PAYMENTS')
     const input=cleanClosureInput({...body,businessDate:summary.businessDate,openingCash:session.openingCash,operator:session.operator})
     const result=createClosure(summary,input,session.closure)
     result.scope='session';result.registerSessionId=id;result.userId=session.userId;result.openedAt=session.openedAt;result.closedBy=user.id
+    result.closedByName=user.name
     result.additionalCash=session.additionalCash;result.sourceSessionId=session.sourceSessionId
     result.history=session.closure?[...(session.closure.history||[]),Object.fromEntries(Object.entries(session.closure).filter(([k])=>k!=='history'))]:[]
     return result
@@ -2059,7 +2102,8 @@ export async function getRegisterClosureRevision(user,id,revision) {
   if(!latest)throw userError('Guarda el cierre antes de exportar.',404)
   const selected=[...(latest.history||[]),latest].find(c=>c.revision===Number(revision))
   if(!selected)throw userError('Versión no encontrada.',404)
-  return selected
+  const { history, ...closure } = selected
+  return closure
 }
 
 export async function countUsers() {

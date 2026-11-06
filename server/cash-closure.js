@@ -1,15 +1,12 @@
 import crypto from 'node:crypto'
 import { cashCountTotal, cleanCashCount } from '../src/cashCount.js'
+import { businessDayKey } from '../src/registerDay.js'
 export { cashDenominations } from '../src/cashCount.js'
 
 export const closureTimeZone = process.env.BAKERY_TIME_ZONE || 'America/Santiago'
-const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: closureTimeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
 export const closureError = (message, status = 400, code = 'INVALID_CLOSURE') => Object.assign(new Error(message), { status, code })
-export function businessDateAt(value = new Date()) {
-  const parts = Object.fromEntries(formatter.formatToParts(new Date(value)).map(p => [p.type, p.value]))
-  return `${parts.year}-${parts.month}-${parts.day}`
-}
-export function validateClosureDate(value = businessDateAt()) {
+export const businessDateAt = value => businessDayKey(value, closureTimeZone)
+function validateClosureDate(value = businessDateAt()) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
     !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value || value < '2000-01-01' || value > businessDateAt()) {
     throw closureError('Selecciona una fecha válida, hasta el día de hoy en Chile.')
@@ -17,20 +14,35 @@ export function validateClosureDate(value = businessDateAt()) {
   return value
 }
 // Find calendar boundaries in the bakery time zone, including Chile's midnight DST changes.
+function businessDayBoundary(key) {
+  const midnight = Date.parse(`${key}T00:00:00Z`)
+  let low = midnight - 36 * 3600000, high = midnight + 60 * 3600000
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if (businessDateAt(mid) < key) low = mid + 1
+    else high = mid
+  }
+  return new Date(low)
+}
 export function closurePeriod(date) {
   const businessDate = validateClosureDate(date)
-  const midnight = Date.parse(`${businessDate}T00:00:00Z`)
-  const next = new Date(midnight + 86400000).toISOString().slice(0, 10)
-  const boundary = key => {
-    let low = midnight - 36 * 3600000, high = midnight + 60 * 3600000
-    while (low < high) {
-      const mid = Math.floor((low + high) / 2)
-      if (businessDateAt(mid) < key) low = mid + 1
-      else high = mid
-    }
-    return new Date(low)
+  const next = new Date(Date.parse(`${businessDate}T00:00:00Z`) + 86400000).toISOString().slice(0, 10)
+  return { businessDate, timeZone: closureTimeZone, from: businessDayBoundary(businessDate), to: businessDayBoundary(next) }
+}
+export function closureHistoryQuery(query = {}) {
+  const month = query.month ?? businessDateAt().slice(0, 7)
+  if (typeof month !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || month < '2000-01' || month > businessDateAt().slice(0, 7)) {
+    throw closureError('Selecciona un mes válido, hasta el mes actual en Chile.')
   }
-  return { businessDate, timeZone: closureTimeZone, from: boundary(businessDate), to: boundary(next) }
+  const integer = (value, fallback, min, max) => {
+    if (value == null) return fallback
+    if (!['number', 'string'].includes(typeof value) || !/^\d+$/.test(String(value)) || !Number.isSafeInteger(Number(value)) || Number(value) < min || Number(value) > max) throw closureError('Selecciona una página de cierres válida.')
+    return Number(value)
+  }
+  const [year, number] = month.split('-').map(Number)
+  const firstDate = `${month}-01`, nextDate = new Date(Date.UTC(year, number, 1)).toISOString().slice(0, 10)
+  return { month, timeZone: closureTimeZone, firstDate, nextDate, from: businessDayBoundary(firstDate), to: businessDayBoundary(nextDate),
+    limit: integer(query.limit, 40, 1, 100), offset: integer(query.offset, 0, 0, 1000000) }
 }
 const instant = value => value ? new Date(value).toISOString() : null
 const refundDate = r => r.processedAt || r.updatedAt || r.createdAt
@@ -120,8 +132,8 @@ export function createClosure(summary, input, existing) {
   const cashIn = summary.cashLedger?.cashIn ?? input.cashIn, cashOut = summary.cashLedger?.cashOut ?? input.cashOut
   const expectedCash = input.openingCash + summary.cash.net + cashIn - cashOut
   const difference = input.countedCash - expectedCash
-  if ((difference !== 0 || (!summary.cashLedger && (cashIn || cashOut)) || summary.pendingCount || existing) && !input.note) {
-    throw closureError('Agrega una observación para explicar diferencias, movimientos, pendientes o la corrección del cierre.')
+  if (difference !== 0 && !input.note) {
+    throw closureError('Agrega una observación para explicar el faltante o sobrante de efectivo.')
   }
   return { id: existing?.id || crypto.randomUUID(), businessDate: input.businessDate, revision: (existing?.revision || 0) + 1,
     openingCash: input.openingCash, cashAdjustments: cashIn - cashOut, cashIn, cashOut,

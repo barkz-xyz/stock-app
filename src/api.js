@@ -1,4 +1,5 @@
 import { shareSnapshot } from './snapshot.js'
+import { dateOnly } from './dates.js'
 
 const pendingReads = new Map()
 const validatedReads = new Map()
@@ -59,13 +60,6 @@ function request(url, options = {}) {
   return pending
 }
 
-function localDateKey(date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 export function metricsPeriod(range = 'today') {
   const now = new Date()
   const todayFrom = new Date(now)
@@ -83,7 +77,7 @@ export function metricsPeriod(range = 'today') {
     previousTo: previousTo.toISOString(),
     todayFrom: todayFrom.toISOString(),
     todayTo: new Date(now.getTime() + 1000).toISOString(),
-    businessDate: localDateKey(now),
+    businessDate: dateOnly(now),
   }
 }
 
@@ -109,6 +103,7 @@ export const api = {
   withdrawCash: (body,key) => request('/api/register-cash/withdrawals',{method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify(body),signal:AbortSignal.timeout(20000)}),
   settleCash: (id,body,key) => request(`/api/register-cash/withdrawals/${id}/settle`,{method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify(body),signal:AbortSignal.timeout(20000)}),
   registerClosure: (id,options) => request(`/api/register-sessions/${id}/closure`,options),
+  closureHistory: (month, offset = 0, options) => request(`/api/closure-history?${new URLSearchParams({ month, offset })}`, options),
   saveRegisterClosure: (id,body) => request(`/api/register-sessions/${id}/closure`,{method:'POST',body:JSON.stringify(body)}),
   registerPdfUrl: (id,revision) => `/api/register-sessions/${id}/closure/pdf?${new URLSearchParams({revision})}`,
   logout: () => request('/api/auth/logout', { method: 'POST' }),
@@ -132,7 +127,8 @@ export const api = {
   inventoryBatch: (batch, key) => request('/api/inventory/batch', { method: 'POST', body: JSON.stringify(batch), headers: { 'Idempotency-Key': key }, signal: AbortSignal.timeout(20000) }),
   salesHistory: (filters, options) => request(`/api/sales/history?${new URLSearchParams(filters)}`, options),
   checkout: (key) => request(`/api/checkouts/${encodeURIComponent(key)}`),
-  cashSale: (items, key, cashReceived) => request('/api/sales/cash', { method: 'POST', body: JSON.stringify({ items, ...(cashReceived != null ? { cashReceived } : {}) }), ...(key ? { headers: { 'Idempotency-Key': key } } : {}), signal: AbortSignal.timeout(20000) }),
+  cashSale: (items, key, cashReceived) => request('/api/sales/cash/local', { method: 'POST', body: JSON.stringify({ items, ...(cashReceived != null ? { cashReceived } : {}) }), ...(key ? { headers: { 'Idempotency-Key': key } } : {}), signal: AbortSignal.timeout(20000) }),
+  cashPointSale: (items, key, cashReceived) => request('/api/sales/cash/point', { method: 'POST', body: JSON.stringify({ items, cashReceived }), headers: { 'Idempotency-Key': key }, signal: AbortSignal.timeout(20000) }),
   cardSale: (items, key) => request('/api/sales/card', { method: 'POST', body: JSON.stringify({ items }), ...(key ? { headers: { 'Idempotency-Key': key } } : {}), signal: AbortSignal.timeout(20000) }),
   sale: (id, refresh = false) => request(`/api/sales/${id}${refresh ? '?refresh=true' : ''}`),
   retryCardSale: (id) => request(`/api/sales/${id}/retry-card`, { method: 'POST' }),

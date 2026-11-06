@@ -96,7 +96,7 @@ test('SSE refresh errors retain polling recovery; 401 stops it', async () => {
   stop()
 })
 
-test('checkout attempts retain their key and frozen cart through a reload', async (t) => {
+test('checkout attempts retain their key, cart and cash channel through a reload', async (t) => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage')
   const data = new Map()
   Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, value: {
@@ -104,11 +104,13 @@ test('checkout attempts retain their key and frozen cart through a reload', asyn
   } })
   t.after(() => { if (previous) Object.defineProperty(globalThis, 'sessionStorage', previous); else delete globalThis.sessionStorage })
   const first = await import(`../src/checkoutAttempts.js?first=${Math.random()}`)
-  const attempt = first.beginCheckout([{ itemId: 'one', quantity: 2 }], 'cash', 2000, 5000)
+  const attempt = first.beginCheckout([{ itemId: 'one', quantity: 2 }], 'cash', 2000, 5000, 'point')
   assert.match(attempt.key, /^[0-9a-f-]{36}$/)
   const reload = await import(`../src/checkoutAttempts.js?reload=${Math.random()}`)
   assert.deepEqual(reload.pendingCheckout(), attempt)
   assert.equal(reload.pendingCheckout().cashReceived, 5000)
+  assert.equal(reload.pendingCheckout().cashChannel, 'point')
+  assert.deepEqual(reload.beginCheckout(attempt.items, 'cash', 2000, 5000, 'local'), attempt)
   assert.deepEqual(reload.beginCheckout([{ itemId: 'two', quantity: 4 }], 'card', 9999), attempt)
   reload.clearCheckout('another-key')
   assert.deepEqual(reload.pendingCheckout(), attempt)

@@ -1,7 +1,8 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, BarChart3, Boxes, CalendarClock, Check, ChevronRight, CirclePlus, Clock3, CloudOff, Croissant, Ellipsis, History, LayoutDashboard, LineChart, LockKeyhole, LogOut, Menu, Minus, Moon, PanelLeftClose, PackageOpen, Pencil, Plus, ReceiptText, Search, ShoppingBasket, Settings, SlidersHorizontal, Sparkles, Sun, Trash2, Undo2, X } from 'lucide-react'
 import { api } from './api.js'
 import { createRefreshCoordinator, watchUpdates } from './liveUpdates.js'
+import { businessDayKey, registerIsActive, scheduleRegisterDay } from './registerDay.js'
 import { createRouter, isPlainNavigation, parseRoute, sectionHref } from './routes.js'
 import { dateOnly, parseCalendarDate } from './dates.js'
 import { useI18n } from './i18n.js'
@@ -10,7 +11,6 @@ import { saveCartDraft, searchText, setWorkspaceUser } from './posWorkspace.js'
 import { setCheckoutUser } from './checkoutAttempts.js'
 
 const units = ['pieces', 'loaves', 'cakes', 'kg', 'g', 'litres', 'bottles', 'boxes', 'packs']
-const AstryxDeleteDialog = lazy(() => import('./AstryxDeleteDialog.jsx'))
 const SalesCounter = lazy(() => import('./SalesCounter.jsx'))
 const MetricsPage = lazy(() => import('./MetricsPage.jsx'))
 const CashClosurePage = lazy(() => import('./CashClosurePage.jsx'))
@@ -107,11 +107,11 @@ function RefundInventoryPrompt({ sale, refund, onResolve, busy }) {
   </Modal>
 }
 
-function ProductForm({ item, onSubmit, onDelete, onClose, busy, theme }) {
-  const { t, categoryLabel, unitLabel, language } = useI18n()
+function ProductForm({ item, onSubmit, onDelete, onClose, busy }) {
+  const { t, categoryLabel, unitLabel } = useI18n()
   const [confirmingDelete, setConfirmingDelete] = useState(false)
-  const [deleteDialogLoaded, setDeleteDialogLoaded] = useState(false)
-  const deleteButtonRef = useRef(null)
+  const keepProductRef = useRef(null)
+  const deleteDescriptionId = useId()
   const [form, setForm] = useState({
     name: item?.name || '', category: item?.category || 'Bread', unit: item?.unit || 'pieces',
     quantity: item?.quantity ?? '', lowStockThreshold: item?.lowStockThreshold ?? '',
@@ -152,28 +152,19 @@ function ProductForm({ item, onSubmit, onDelete, onClose, busy, theme }) {
       <div className="field"><label htmlFor="expiry">{t('expiryDate')} <span>{t('optional')}</span></label><input id="expiry" type="date" value={form.expiryDate} onChange={update('expiryDate')} /></div>
       <div className="field"><label htmlFor="sku">{t('sku')} <span>{t('optional')}</span></label><input id="sku" value={form.sku} onChange={update('sku')} placeholder={t('skuPlaceholder')} /></div>
     </div>
-    {item && <button ref={deleteButtonRef} type="button" className="delete-product-link" onClick={() => { setDeleteDialogLoaded(true); setConfirmingDelete(true) }}><Trash2 size={16} />{t('deleteProduct')}</button>}
+    {item && <button type="button" className="delete-product-link" onClick={event => { event.currentTarget.focus(); setConfirmingDelete(true) }}><Trash2 size={16} />{t('deleteProduct')}</button>}
       <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>{t('cancel')}</button><button className="button primary" disabled={busy}>{busy ? t('saving') : item ? t('saveChanges') : t('addProduct')}<Check size={18} /></button></div>
     </form>
-    {item && deleteDialogLoaded && <Suspense fallback={null}><AstryxDeleteDialog
-        language={language}
-        mode={theme}
-        className="bakery-alert-dialog"
-        isOpen={confirmingDelete}
-        onOpenChange={(isOpen) => {
-          if (busy) return
-          setConfirmingDelete(isOpen)
-          if (!isOpen) window.requestAnimationFrame(() => window.requestAnimationFrame(() => deleteButtonRef.current?.focus()))
-        }}
-        title={t('deleteProductQuestion')}
-        description={deleteDescription}
-        cancelLabel={t('keepProduct')}
-        actionLabel={busy ? t('deleting') : t('deletePermanently')}
-        actionVariant="destructive"
-        isActionLoading={busy}
-        onAction={onDelete}
-        width="min(480px, calc(100vw - 32px))"
-      /></Suspense>}
+    {item && confirmingDelete && <Modal title={t('deleteProductQuestion')} role="alertdialog" describedBy={deleteDescriptionId}
+      initialFocusRef={keepProductRef} closeable={!busy} onClose={() => setConfirmingDelete(false)}>
+      <div className="form-stack">
+        <p className="modal-description" id={deleteDescriptionId}>{deleteDescription}</p>
+        <div className="modal-actions">
+          <button ref={keepProductRef} type="button" className="button secondary" disabled={busy} onClick={() => setConfirmingDelete(false)}>{t('keepProduct')}</button>
+          <button type="button" className="button danger-button" disabled={busy} onClick={onDelete}>{busy ? t('deleting') : t('deletePermanently')}</button>
+        </div>
+      </div>
+    </Modal>}
   </>
 }
 
@@ -297,8 +288,9 @@ export default function App() {
   const [movements, setMovements] = useState([])
   const [sales, setSales] = useState([])
   const [dailySummary, setDailySummary] = useState(null)
-  const [registerSession,setRegisterSession]=useState(null),[registerSessions,setRegisterSessions]=useState([])
+  const [registerSession,setRegisterSession]=useState(null)
   const [registerOpening,setRegisterOpening]=useState(null)
+  const [registerCalendar,setRegisterCalendar]=useState(null)
   const [metricsData, setMetricsData] = useState(null)
   const metricsRange = route.metricsRange
   const setMetricsRange = range => router.navigate(sectionHref('metrics', { range }))
@@ -324,7 +316,9 @@ export default function App() {
   const openEdit = useCallback(item => setModal({ type: 'edit', item }), [])
   const openBatch = useCallback(() => setModal({ type: 'batch' }), [])
   // Memoized stock/expiry views must still advance at local midnight.
-  const dayKey = new Date().toLocaleDateString('en-CA')
+  const dayKey = registerCalendar?.businessDate || businessDayKey()
+  const currentRegisterSession = registerIsActive(registerSession,dayKey,registerCalendar?.timeZone) ? registerSession : null
+  const currentRegisterOpening = registerOpening?.businessDate === dayKey ? registerOpening : null
   useEffect(() => { if (route.canonical) router.navigate(route.canonical, { replace: true }) }, [route.canonical])
   useLayoutEffect(() => {
     if (auth?.authenticated && isCajaPage) window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
@@ -362,8 +356,9 @@ export default function App() {
       setAuth(next.auth); setSyncError(''); setReconciled(current => current + 1)
       if (!next.auth.authenticated || next.auth.user.mustChangePassword) return
       setCheckoutUser(next.auth.user.id,next.auth.user.role==='admin');setWorkspaceUser(next.auth.user.id,next.auth.user.role==='admin')
-      setRegisterSession(next.registerSession);setRegisterSessions(next.registerSessions||[])
+      setRegisterSession(next.registerSession)
       setRegisterOpening(next.registerOpening||null)
+      setRegisterCalendar(next.registerCalendar||null)
       setItems(next.items); setMovements(next.movements); setSales(next.sales); setPosConfig(next.posConfig); setDailySummary(next.dailySummary)
     } catch (error) {
       if (sequence === refreshSequence.current) setSyncError(error.message)
@@ -371,6 +366,13 @@ export default function App() {
     } finally { if (sequence === refreshSequence.current) setSyncing(false) }
   }), [])
   const refreshAfterChange = useCallback(() => refresh({ fresh: true }), [refresh])
+  useEffect(() => {
+    if (!auth?.authenticated) return undefined
+    return scheduleRegisterDay(registerCalendar, () => {
+      setRegisterSession(null); setRegisterOpening(null)
+      refreshAfterChange().catch(() => {})
+    })
+  }, [auth?.authenticated,registerCalendar,refreshAfterChange])
   const openRegister = useCallback(async amount => { await api.openRegister(amount); await refreshAfterChange() }, [refreshAfterChange])
   const loadMetrics = useCallback(async (range = metricsRange) => {
     metricsRequest.current?.abort()
@@ -421,7 +423,7 @@ export default function App() {
     await api.logout()
     refreshSequence.current += 1
     refresh.invalidate()
-    saveCartDraft([]);setCheckoutUser(null);setWorkspaceUser(null);setRegisterSession(null);setRegisterSessions([]); setIssue(null); setToastState(null)
+    saveCartDraft([]);setCheckoutUser(null);setWorkspaceUser(null);setRegisterSession(null);setRegisterOpening(null);setRegisterCalendar(null); setIssue(null); setToastState(null)
     setAuth({ ...auth, authenticated: false }); setItems([]); setSales([]); setMovements([]); setMetricsData(null); setDailySummary(null)
   }
   const toggleSidebar = () => {
@@ -489,7 +491,7 @@ export default function App() {
   if (auth?.required && (!auth.authenticated||auth.user?.mustChangePassword)) return <LoginScreen auth={auth} onSetup={handleSetup} onPassword={handlePassword} onLogin={handleLogin} theme={theme} onThemeToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} />
 
   if(blockedPage)return <LoadingSkeleton/>
-  const closureSessionId=route.registerSessionId||(!isAdmin?(registerSession?.id||registerSessions[0]?.id||'none'):null)
+  const closureSessionId=route.closureMonth&&route.registerSessionId?route.registerSessionId:isAdmin&&route.closureMonth&&route.closureDate?null:currentRegisterSession?.id||'none'
   return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${isCajaPage ? 'is-caja' : ''}`}>
     <aside className={`sidebar ${mobileMenu ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
       <div className="brand"><button ref={brandLogoRef} className="brand-logo" onClick={toggleSidebar} aria-expanded={!sidebarCollapsed} aria-label={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')} title={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')}><span className="brand-mark"><Croissant size={24} /></span></button><span className="brand-copy"><strong>Bakery POS</strong></span><button className="sidebar-toggle" onClick={toggleSidebar} aria-label={t('collapseSidebar')} title={t('collapseSidebar')}><PanelLeftClose size={17} /></button></div>
@@ -504,9 +506,9 @@ export default function App() {
       {issue && <div className={`operation-banner ${issue.type}`} role="alert"><AlertTriangle size={17} /><span>{issue.message}</span><button onClick={() => setIssue(null)} aria-label={t('close')}><X size={18} /></button></div>}
       {loading ? <LoadingSkeleton /> : <Suspense fallback={<LoadingSkeleton />}>
         {page === 'dashboard' && <Dashboard items={items} movements={movements} dailySummary={dailySummary} onAdd={openAdd} onAdjust={openAdjust} onGoInventory={goInventory} onGoPos={goPos} dayKey={dayKey} />}
-        {page === 'pos' && route.registerView === 'close' && <CashClosurePage user={auth.user} sessionId={closureSessionId} sessions={registerSessions} onSessionChange={id=>router.navigate(id?'/caja/cierre?sesion='+id:'/caja/cierre')} refreshToken={reconciled} date={route.closureDate} onClosed={refreshAfterChange} onNavigate={href => router.navigate(href)} setToast={setToast} />}
+        {page === 'pos' && route.registerView === 'close' && <CashClosurePage user={auth.user} sessionId={closureSessionId} refreshToken={reconciled} date={route.closureDate} view={route.closureView} month={route.closureMonth} currentMonth={dayKey.slice(0, 7)} onClosed={refreshAfterChange} onNavigate={navigate} setToast={setToast} />}
         {page === 'pos' && route.registerView === 'cash' && <CashMovementsPage user={auth.user} refreshToken={reconciled} onRefresh={refreshAfterChange} onNavigate={navigate} setToast={setToast}/>}
-        {page === 'pos' && ['cart','history'].includes(route.registerView) && <SalesCounter user={auth.user} registerOpening={registerOpening} registerSession={registerSession} onOpenRegister={openRegister} serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refreshAfterChange} setToast={setToast} onNavigate={navigate} registerView={route.registerView} historyRevision={route.registerView === 'history' ? reconciled : 0} onRegisterViewChange={changeRegisterView} />}
+        {page === 'pos' && ['cart','history'].includes(route.registerView) && <SalesCounter user={auth.user} businessDate={dayKey} registerOpening={currentRegisterOpening} registerSession={currentRegisterSession} onOpenRegister={openRegister} serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refreshAfterChange} setToast={setToast} onNavigate={navigate} registerView={route.registerView} historyRevision={route.registerView === 'history' ? reconciled : 0} onRegisterViewChange={changeRegisterView} />}
         {page === 'inventory' && <Inventory items={items} onBatch={openBatch} onAdd={isAdmin?openAdd:undefined} onAdjust={openAdjust} onEdit={isAdmin?openEdit:undefined} dayKey={dayKey} />}
         {page === 'metrics' && <MetricsPage metrics={metricsData} range={metricsRange} onRangeChange={setMetricsRange} onRefresh={() => loadMetrics(metricsRange)} onExport={exportDailyReport} loading={metricsLoading} exporting={exportingReport} />}
         {page === 'activity' && <Activity movements={movements} dayKey={dayKey} />}
@@ -517,8 +519,8 @@ export default function App() {
     </main>
     <nav className={`bottom-nav ${isAdmin?'':'cashier-nav'}`} aria-label={t('openMenu')}>{nav.slice(0,3).map(({ id, label, icon: Icon }) => <a key={id} href={sectionHref(id)} aria-current={page === id ? 'page' : undefined} className={page === id ? 'active' : ''} onClick={event => followSection(event, sectionHref(id))}><Icon size={21} /><span>{label}</span></a>)}{isAdmin&&<button className={nav.slice(3).some(n => n.id === page) || mobileMenu ? 'active' : ''} onClick={() => setMobileMenu(v => !v)} aria-expanded={mobileMenu}><Ellipsis size={23} /><span>{t('more')}</span></button>}{!isAdmin&&<button onClick={handleLogout}><LogOut size={20}/><span>{language==='es'?'Salir':'Sign out'}</span></button>}</nav>
     {modal?.type === 'batch' && <Modal title={t('batchInventory')} onClose={() => setModal(null)} wide><Suspense fallback={<LoadingSkeleton />}><InventoryBatch items={items} onClose={() => setModal(null)} onSaved={async () => { await refreshAfterChange(); setModal(null); setToast({ type: 'success', message: t('batchSaved') }) }} /></Suspense></Modal>}
-    {modal?.type === 'add' && <Modal title={t('addProduct')} onClose={() => setModal(null)}><ProductForm onSubmit={addItem} onClose={() => setModal(null)} busy={busy} theme={theme} /></Modal>}
-    {modal?.type === 'edit' && <Modal title={modal.item.name} eyebrow={t('productDetails')} onClose={() => setModal(null)}><ProductForm item={modal.item} onSubmit={(form) => editItem(modal.item, form)} onDelete={() => deleteItem(modal.item)} onClose={() => setModal(null)} busy={busy} theme={theme} /></Modal>}
+    {modal?.type === 'add' && <Modal title={t('addProduct')} onClose={() => setModal(null)}><ProductForm onSubmit={addItem} onClose={() => setModal(null)} busy={busy} /></Modal>}
+    {modal?.type === 'edit' && <Modal title={modal.item.name} eyebrow={t('productDetails')} onClose={() => setModal(null)}><ProductForm item={modal.item} onSubmit={(form) => editItem(modal.item, form)} onDelete={() => deleteItem(modal.item)} onClose={() => setModal(null)} busy={busy} /></Modal>}
     {modal?.type === 'adjust' && <Modal title={modal.item.name} eyebrow={t('updateStock')} onClose={() => setModal(null)}><AdjustForm item={modal.item} onSubmit={(form) => adjustItem(modal.item, form)} onClose={() => setModal(null)} busy={busy} /></Modal>}
     {pendingInventoryReview && <RefundInventoryPrompt sale={pendingInventoryReview.sale} refund={pendingInventoryReview.refund} onResolve={resolvePendingRefundInventory} busy={busy} />}
     {toast && <div className={`toast ${toast.type}`} role="status"><div>{toast.type === 'success' ? <Check size={18} /> : <AlertTriangle size={18} />}</div><span>{toast.message}</span><button onClick={() => setToast(null)} aria-label={t('close')}><X size={16} /></button></div>}

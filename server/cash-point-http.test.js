@@ -51,6 +51,11 @@ for (const postgres of [false, true]) test(`cash Point checkout preserves paymen
         if (mode === 'uncertain') { res.statusCode = 503; return res.end('{"message":"Confirmation lost after accepting order"}') }
         res.statusCode = 201; return res.end(JSON.stringify(orders.get(key)))
       }
+      if (req.method === 'POST' && req.url === '/terminals/v1/actions') {
+        if (mode === 'print-rejected') { res.statusCode = 422; return res.end('{"message":"Printing is disabled"}') }
+        res.statusCode = 201
+        return res.end(JSON.stringify({ id: `PRINT-${key}`, status: 'created' }))
+      }
       const order = [...orders.values()].find(o => req.url.startsWith(`/v1/orders/${o.id}`))
       if (order && req.method === 'POST' && req.url.endsWith('/cancel')) {
         order.status = 'canceled'; order.status_detail = 'canceled'
@@ -91,13 +96,16 @@ for (const postgres of [false, true]) test(`cash Point checkout preserves paymen
     const config = (await request('/api/pos/config')).body
     assert.equal(config.cashEnabled, true); assert.equal(config.mockMode, false)
     const item = (await request('/api/items', 'POST', { name: 'Local cash bread', category: 'Bread', unit: 'pieces', quantity: 10, lowStockThreshold: 0, price: 1000, sellable: true })).body
+    const cake = await request('/api/items', 'POST', { name: 'Local cash cake', category: 'Cake', unit: 'pieces', quantity: 1, lowStockThreshold: 0, price: 2500, sellable: true })
+    assert.equal(cake.status, 201)
     const stock = async () => (await request('/api/items')).body.find(i => i.id === item.id).quantity
     const drawer = async () => (await request('/api/register-cash')).body.balance
     const cart = { items: [{ itemId: item.id, quantity: 1 }], cashReceived: 2000 }, key = crypto.randomUUID()
-    assert.equal((await request('/api/sales/cash', 'POST', { ...cart, cashReceived: 500 }, crypto.randomUUID())).status, 400)
+    const pointRoute = '/api/sales/cash/point'
+    assert.equal((await request(pointRoute, 'POST', { ...cart, cashReceived: 500 }, crypto.randomUUID())).status, 400)
     assert.equal(requests.length, 0)
 
-    const initial = await request('/api/sales/cash', 'POST', cart, key)
+    const initial = await request(pointRoute, 'POST', cart, key)
     assert.equal(initial.status, 201)
     const sale = initial.body
     assert.equal(sale.status, 'pending'); assert.equal(sale.paymentMethod, 'cash'); assert.equal(sale.pointPayment, true)
@@ -112,7 +120,7 @@ for (const postgres of [false, true]) test(`cash Point checkout preserves paymen
     const work = (await request(`/api/register-sessions/${session.id}/closure`)).body
     assert.equal(work.live.pendingCount, 1)
     assert.equal((await request(`/api/register-sessions/${session.id}/closure`, 'POST', { countedCash: 100, fingerprint: work.live.fingerprint, expectedRevision: 0 })).body.code, 'PENDING_PAYMENTS')
-    const duplicate = await Promise.all([request('/api/sales/cash', 'POST', cart, key), request('/api/sales/cash', 'POST', cart, key)])
+    const duplicate = await Promise.all([request(pointRoute, 'POST', cart, key), request(pointRoute, 'POST', cart, key)])
     assert.ok(duplicate.every(r => r.body.id === sale.id)); assert.equal(requests.length, 1)
     assert.equal((await request('/api/sales/cash', 'POST', { ...cart, cashReceived: 3000 }, key)).status, 409)
     const order = orders.get(sale.id)
@@ -163,13 +171,91 @@ for (const postgres of [false, true]) test(`cash Point checkout preserves paymen
     assert.equal((await request('/api/users', 'POST', { username: 'cashier-test', name: 'Cashier Test', role: 'cashier', password: 'Initial-Cashier-2026' })).status, 201)
     assert.equal((await request('/api/auth/login', 'POST', { username: 'cashier-test', password: 'Initial-Cashier-2026' })).status, 200)
     assert.equal((await request('/api/auth/password', 'POST', { currentPassword: 'Initial-Cashier-2026', password: 'Personal-Cashier-2026' })).status, 200)
-    assert.equal((await request('/api/register-sessions', 'POST', { openingCash: 0 })).status, 200)
+    const cashierRegister = await request('/api/register-sessions', 'POST', { openingCash: 0 })
+    assert.equal(cashierRegister.status, 200)
     assert.equal((await request(`/api/sales/${sale.id}/retry-point`, 'POST')).status, 404, 'Cashiers cannot recover another operator sale')
     mode = 'uncertain'
-    const cashierSale = await request('/api/sales/cash', 'POST', cart, crypto.randomUUID())
+    const cashierSale = await request(pointRoute, 'POST', cart, crypto.randomUUID())
     assert.equal(cashierSale.body.uncertain, true)
     await expireLease(cashierSale.body.saleId); mode = 'valid'
     assert.equal((await request(`/api/sales/${cashierSale.body.saleId}/retry-point`, 'POST')).status, 200, 'Cashiers can recover their own cash Point sale')
     assert.equal((await request(`/api/sales/${cashierSale.body.saleId}/cancel`, 'POST')).body.status, 'cancelled')
     assert.equal(await stock(), 9)
+
+    await t.test('direct cash reaches the cashier register without contacting Point, even with cash Point enabled', async () => {
+      const providerCalls = requests.length
+      const directKey = crypto.randomUUID()
+      const route = '/api/sales/cash/local'
+      const results = await Promise.all([request(route, 'POST', cart, directKey), request(route, 'POST', cart, directKey)])
+      const created = results.find(result => result.status === 201)
+      const replay = results.find(result => result.status === 200)
+      assert.ok(created && replay)
+      const directSale = created.body
+      assert.equal(replay.body.id, directSale.id)
+      assert.equal(directSale.status, 'paid')
+      assert.equal(directSale.paymentMethod, 'cash')
+      assert.equal(directSale.pointPayment, false)
+      assert.equal(directSale.mpOrderId, null)
+      assert.equal(directSale.cashChange, 1000)
+      assert.equal(directSale.registerSessionId, cashierRegister.body.id)
+      assert.equal((await request(`/api/checkouts/${directKey}`)).body.id, directSale.id)
+      assert.equal((await request(pointRoute, 'POST', cart, directKey)).status, 409)
+      assert.equal(await stock(), 8)
+      assert.equal(await drawer(), 1000)
+      const closure = (await request(`/api/register-sessions/${cashierRegister.body.id}/closure`)).body
+      assert.equal(closure.live.cash.net, 1000)
+      assert.equal(closure.live.pendingCount, 0)
+      assert.equal(requests.length, providerCalls)
+    })
+
+    await t.test('register close sends a compact ticket and survives a rejected print', async () => {
+      const sessionId = cashierRegister.body.id
+      const route = `/api/register-sessions/${sessionId}/closure`
+      const card = await request('/api/sales/card', 'POST', { items: [{ itemId: item.id, quantity: 2 }, { itemId: cake.body.id, quantity: 1 }] }, crypto.randomUUID())
+      assert.equal(card.status, 201)
+      const cardOrder = orders.get(card.body.id)
+      cardOrder.status = 'processed'; cardOrder.status_detail = 'accredited'
+      Object.assign(cardOrder.transactions.payments[0], { status: 'processed', status_detail: 'accredited' })
+      assert.equal((await request(`/api/sales/${card.body.id}?refresh=true`)).body.status, 'paid')
+      const withdrawal = await request('/api/register-cash/withdrawals', 'POST', { sessionId, amount: 100, recipient: 'Private recipient', purpose: 'Local fixture' }, crypto.randomUUID())
+      assert.equal(withdrawal.status, 201)
+      const { live } = (await request(route)).body
+      const declaration = { countedCash: 850, cashIn: 0, cashOut: 0, note: 'Internal note', expectedRevision: 0, fingerprint: live.fingerprint }
+      const before = requests.length
+      const closed = await request(route, 'POST', declaration)
+      assert.equal(closed.status, 200)
+      assert.equal(closed.body.pointPrint, 'submitted')
+      assert.equal(closed.body.difference, -50)
+      assert.equal(requests.length, before + 1)
+      const print = requests.at(-1)
+      assert.equal(print.path, '/terminals/v1/actions')
+      assert.equal(print.key, closed.body.id)
+      assert.deepEqual(print.body.config.point, { terminal_id: 'LOCAL-CASH-POINT', subtype: 'custom' })
+      const rows = [...print.body.content.matchAll(/\{s\}([^{}]+)\{\/s\}\{br\}/g)].map(([, row]) => row)
+      const amountRows = rows.filter(row => /\$[\d.]+$/.test(row))
+      assert.deepEqual(amountRows.map(row => row.replace(/ +/g, ' ')), [
+        'Efectivo (1) $1.000', 'Tarjeta POS (1) $4.500', 'Total (2) $5.500', 'Fondo inicial $0',
+        'Retiros (1) $100', 'Esperado $900', 'Contado $850', 'Diferencia -$50',
+      ])
+      assert.ok(amountRows.every(row => row.length === 32), 'Amounts align at the end of each row')
+      assert.ok(rows.includes('3 x Local cash bread'), 'Rank products by quantity across payment methods')
+      assert.ok(rows.includes('Cerrado por: Cashier Test'))
+      assert.doesNotMatch(print.body.content, /Private recipient|Internal note|Local cash cake/)
+      assert.equal((await request(route, 'POST', declaration)).status, 409)
+      assert.equal((await request(route, 'POST', { ...declaration, expectedRevision: 1 })).status, 200)
+      assert.equal(requests.length, before + 1, 'Retries and corrections do not send a second print')
+
+      const next = await request('/api/register-sessions', 'POST', { openingCash: 100 })
+      assert.equal(next.status, 200)
+      const nextRoute = `/api/register-sessions/${next.body.id}/closure`
+      const nextLive = (await request(nextRoute)).body.live
+      mode = 'print-rejected'
+      const balanced = await request(nextRoute, 'POST', { countedCash: 100, cashIn: 0, cashOut: 0, expectedRevision: 0, fingerprint: nextLive.fingerprint })
+      assert.equal(balanced.status, 200)
+      assert.equal(balanced.body.pointPrint, 'failed')
+      assert.match(requests.at(-1).body.content, /Efectivo \(0\) +\$0.*Tarjeta POS \(0\) +\$0/)
+      assert.doesNotMatch(requests.at(-1).body.content, /Diferencia|Retiros|MAS VENDIDO/)
+      assert.equal((await request(nextRoute)).body.closure.revision, 1)
+      assert.equal((await request('/api/bootstrap')).body.registerSession, null)
+    })
   })

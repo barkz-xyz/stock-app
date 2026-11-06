@@ -6,7 +6,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { inflateSync } from 'node:zlib'
 import { PDFDocument } from 'pdf-lib'
-import { businessDateAt, closurePeriod, buildClosureSummary, cleanClosureInput, createClosure } from './cash-closure.js'
+import { closurePeriod, buildClosureSummary, cleanClosureInput, createClosure } from './cash-closure.js'
 import { createCashClosurePdf } from './cash-closure-pdf.js'
 
 const sale = (method, total, at, refunds = [], extra = {}) => ({ id: crypto.randomUUID(), shortId: 'ABC12345',
@@ -64,6 +64,33 @@ test('cash close validates actual declarations, denomination counts and explanat
   assert.throws(() => cleanClosureInput({ ...base, denominations: { 10000: 2 } }), /desglose/)
   for(const countedCard of [null,50,1e15,'forged'])assert.equal(createClosure(summary,cleanClosureInput({...base,countedCard}),null).countedCard,0)
   assert.throws(() => createClosure(summary, cleanClosureInput({ ...base, cashOut: 50 }), null), /observación/)
+})
+
+test('cash close only requires notes for a cash shortage or surplus, including corrections', () => {
+  const summary = buildClosureSummary([sale('card', 500, '2026-10-17T12:00:00Z', [], { status: 'pending' })], closurePeriod('2026-10-17'))
+  assert.equal(summary.pendingCount, 1)
+  for (const live of [summary, { ...summary, cashLedger: { cashIn: 500, cashOut: 200 } }]) {
+    const balanced = { ...draft(live), note: '   ' }
+    const first = createClosure(live, cleanClosureInput(balanced), null)
+    assert.equal(first.difference, 0)
+    assert.equal(first.note, '')
+    for (const existing of [null, first]) {
+      const input = { ...balanced, expectedRevision: existing?.revision || 0 }
+      const saved = createClosure(live, cleanClosureInput(input), existing)
+      assert.equal(saved.difference, 0)
+      assert.equal(saved.note, '')
+      assert.equal(saved.revision, (existing?.revision || 0) + 1)
+      for (const offset of [-1, 1]) {
+        const unbalanced = { ...input, countedCash: input.countedCash + offset }
+        for (const note of [undefined, '', ' \n ']) {
+          assert.throws(() => createClosure(live, cleanClosureInput({ ...unbalanced, note }), existing), /faltante o sobrante/)
+        }
+        const explained = createClosure(live, cleanClosureInput({ ...unbalanced, note: ' Diferencia de conteo. ' }), existing)
+        assert.equal(explained.difference, offset)
+        assert.equal(explained.note, 'Diferencia de conteo.')
+      }
+    }
+  }
 })
 
 test('file closures preserve snapshots and revisions, reject racing writes and detect later changes', async () => {

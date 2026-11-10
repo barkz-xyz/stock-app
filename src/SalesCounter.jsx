@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, Check, ChevronRight, ChevronUp, ChevronDown, CreditCard, FileCheck2, History, LayoutDashboard, Minus, PackageOpen, Plus, ReceiptText, RotateCw, Search, ShoppingBasket, Monitor, Star, Trash2, Undo2, Wifi, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, Check, ChevronRight, ChevronUp, ChevronDown, CreditCard, FileCheck2, Globe, History, LayoutDashboard, Minus, PackageOpen, Plus, ReceiptText, RotateCw, Search, ShoppingBasket, Monitor, Star, Trash2, Undo2, Wifi, X } from 'lucide-react'
 import { api } from './api.js'
 import { beginCheckout, clearCheckout, pendingCheckout } from './checkoutAttempts.js'
 import { saleUsesPoint } from './pointPayments.js'
@@ -122,6 +122,51 @@ function CheckoutModal({ checkout, posConfig, onCash, onCard, onRetry, onCancelS
   </Modal>
 }
 
+function SaleLines({ items }) {
+  const { t, formatCurrency, unitLabel } = useI18n()
+  return <div className="sale-detail-lines">
+    {items.map(line => <div key={line.lineId}>
+      <div><strong>{line.name}</strong><span>{formatQuantity(line.quantity)} {unitLabel(line.unit)} · {formatCurrency(line.unitPrice)}</span>
+        {line.unstockedQuantity > 0 && <small className="stock-shortfall">{t('withoutStock')}: {formatQuantity(line.unstockedQuantity)} {unitLabel(line.unit)}</small>}</div>
+      <b>{formatCurrency(line.lineTotal)}</b>
+    </div>)}
+  </div>
+}
+
+function WebSaleDetails({ sale, onClose }) {
+  const { t, language, formatCurrency } = useI18n()
+  const [ticketOpened, setTicketOpened] = useState(false)
+  const tx = (es, en) => language === 'es' ? es : en
+  const { web } = sale
+  const amount = value => value == null ? tx('Sin informar', 'Unavailable') : formatCurrency(value)
+  const date = new Intl.DateTimeFormat(language === 'es' ? 'es-CL' : 'en-US', {
+    timeZone: 'America/Santiago', dateStyle: 'short', timeStyle: 'short',
+  }).format(new Date(sale.paidAt))
+  return <Modal title={`#${sale.shortId}`} eyebrow={tx('Venta web', 'Web sale')} onClose={onClose}>
+    <div className="sale-details-body">
+      <div className="sale-detail-summary">
+        <div><span>{tx('Subtotal productos', 'Products subtotal')}</span><strong>{amount(web.subtotal)}</strong></div>
+        <div><span>{tx('Despacho', 'Shipping')}</span><strong>{amount(web.shippingAmount)}</strong></div>
+        <div><span>{tx('Total cobrado', 'Total charged')}</span><strong>{amount(web.chargedTotal)}</strong></div>
+      </div>
+      <div className="sale-detail-meta"><span className="sale-status success">{t('salePaid')}{web.environment === 'test' && ' · PRUEBA'}</span><span>Web</span></div>
+      <div className="point-payment-details"><div className="point-payment-grid">
+        <div><span>{tx('Pedido', 'Order')}</span><strong>{web.externalReference}</strong></div>
+        {web.orderReference && <div><span>{tx('Orden Mercado Pago', 'Mercado Pago order')}</span><strong>{web.orderReference}</strong></div>}
+        <div><span>{tx('Pago', 'Payment')}</span><strong>{web.paymentId || web.paymentReference}</strong></div>
+        <div><span>{web.approvedAt ? tx('Aprobación', 'Approved') : tx('Confirmación', 'Confirmed')}</span><strong>{date}</strong></div>
+      </div></div>
+      <SaleLines items={sale.items} />
+      <div className="modal-actions">
+        <button type="button" className="button secondary" onClick={onClose}>{t('close')}</button>
+        <a className="button primary" href={api.webSaleTicketUrl(sale.id)} target="_blank" rel="noopener" onClick={() => setTicketOpened(true)}>
+          <ReceiptText size={17} />{ticketOpened ? tx('Reimprimir', 'Reprint') : tx('Imprimir ticket', 'Print ticket')}
+        </a>
+      </div>
+    </div>
+  </Modal>
+}
+
 function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefundCopy, onCreditNote, onReconcilePoint, onResolveInventory, busy, canManage, refundAttempt, onRecoverRefund }) {
   const { t, formatCurrency, formatTime, unitLabel } = useI18n()
   const [view, setView] = useState('details')
@@ -204,9 +249,7 @@ function SaleDetailsModal({ sale, onClose, onRefund, onRetryRefund, onPrintRefun
         </div>
         {pointVoucher && <div className="point-document-state"><ReceiptText size={16} /><div><strong>{t('pointVoucher')}</strong><span>{t('pointVoucherDescription')}</span></div></div>}
       </section>}
-      <div className="sale-detail-lines">
-        {sale.items.map((line) => <div key={line.lineId}><div><strong>{line.name}</strong><span>{formatQuantity(line.quantity)} {unitLabel(line.unit)} · {formatCurrency(line.unitPrice)}</span>{line.unstockedQuantity>0&&<small className="stock-shortfall">{t('withoutStock')}: {formatQuantity(line.unstockedQuantity)} {unitLabel(line.unit)}</small>}</div><b>{formatCurrency(line.lineTotal)}</b></div>)}
-      </div>
+      <SaleLines items={sale.items} />
       {canManage && sale.refunds?.length > 0 && <section className="refund-history"><div className="section-label"><span>{t('refundHistory')}</span></div>{sale.refunds.map((refund) => <article key={refund.id}>
         <div className={`refund-icon ${refund.status}`}><Undo2 size={17} /></div>
         <div><strong>{formatCurrency(refund.amount)}</strong><span>{refund.status === 'processed' ? t('refundCompleted') : refund.status === 'pending' ? t('refundPending') : t('refundFailed')}</span>{refund.reason && <small>{refund.reason}</small>}</div>
@@ -282,7 +325,7 @@ function SalesHistory({ refreshToken, onResume, onSelect, showOperator, business
   return <section className="card register-history" id="caja-history-panel" role="tabpanel" aria-labelledby="caja-history-tab" aria-busy={loading}>
     <div className="history-filters">
       <div className="history-search-row"><label className="search-box"><Search size={17} /><input value={filters.search} onChange={update('search')} placeholder={t('searchSale')} aria-label={t('searchSale')} /></label><button type="button" className="button secondary compact history-today" aria-pressed={dateRange === null} onClick={() => { setOffset(0); setDateRange(null) }}>{t('today')}</button></div>
-      <div className="history-filter-row"><label><span>{t('fromDate')}</span><input type="date" value={from} max={businessDate} onChange={updateDate('from')} /></label><label><span>{t('toDate')}</span><input type="date" value={to} min={from || undefined} max={businessDate} onChange={updateDate('to')} /></label><select aria-label={t('payment')} value={filters.method} onChange={update('method')}><option value="">{t('allMethods')}</option><option value="cash">{t('cash')}</option><option value="card">{t('card')}</option></select><select aria-label={t('status')} value={filters.status} onChange={update('status')}><option value="">{t('allStatuses')}</option>{['paid','pending','refunded','failed','cancelled','expired'].map(s => <option key={s} value={s}>{saleState(s, t).label}</option>)}</select><button type="button" className="icon-button" onClick={reset} aria-label={t('clearFilters')} title={t('clearFilters')}><X size={17} /></button></div>
+      <div className="history-filter-row"><label><span>{t('fromDate')}</span><input type="date" value={from} max={businessDate} onChange={updateDate('from')} /></label><label><span>{t('toDate')}</span><input type="date" value={to} min={from || undefined} max={businessDate} onChange={updateDate('to')} /></label><select aria-label={t('payment')} value={filters.method} onChange={update('method')}><option value="">{t('allMethods')}</option><option value="cash">{t('cash')}</option><option value="card">{t('card')}</option>{showOperator && <option value="web">Web</option>}</select><select aria-label={t('status')} value={filters.status} onChange={update('status')}><option value="">{t('allStatuses')}</option>{['paid','pending','refunded','failed','cancelled','expired'].map(s => <option key={s} value={s}>{saleState(s, t).label}</option>)}</select><button type="button" className="icon-button" onClick={reset} aria-label={t('clearFilters')} title={t('clearFilters')}><X size={17} /></button></div>
     </div>
     {error && <div className="inline-error" role="alert"><AlertTriangle size={16} />{error}<button className="text-button" onClick={() => setRetry(n => n + 1)}>{t('retryConnection')}</button></div>}
     <div className={`history-ledger ${loading ? 'is-updating' : ''}`}>
@@ -291,7 +334,7 @@ function SalesHistory({ refreshToken, onResume, onSelect, showOperator, business
         const state = sale.status === 'paid' && sale.refundedTotal > 0 ? { label: t('salePartiallyRefunded'), tone: 'warning' } : saleState(sale.status, t)
         const interactive = ['paid','pending','refunded'].includes(sale.status)
         return <button className="ledger-row" key={sale.id} disabled={!interactive || loading} onClick={() => sale.status === 'pending' ? onResume(sale) : onSelect(sale)} aria-label={`${t('openSaleDetails')} #${sale.shortId}`}>
-          <span className="ledger-reference"><strong>#{sale.shortId}</strong><small>{dateFormat.format(new Date(sale.createdAt))}{showOperator&&` · ${sale.cashierName||(language==='es'?'Sin asignar':'Unassigned')}`}</small></span><span className="ledger-method">{sale.paymentMethod === 'card' ? <CreditCard size={16} /> : <Banknote size={16} />}{t(sale.paymentMethod === 'card' ? 'card' : 'cash')}</span><span className={`sale-status ${state.tone}`}>{state.label}</span><strong className="ledger-amount">{formatCurrency(sale.total)}<ChevronRight size={15} /></strong>
+          <span className="ledger-reference"><strong>#{sale.shortId}</strong><small>{dateFormat.format(new Date(sale.createdAt))}{showOperator&&sale.channel!=='web'&&` · ${sale.cashierName||(language==='es'?'Sin asignar':'Unassigned')}`}</small></span><span className="ledger-method">{sale.channel === 'web' ? <><Globe size={16} />Web</> : <>{sale.paymentMethod === 'card' ? <CreditCard size={16} /> : <Banknote size={16} />}{t(sale.paymentMethod === 'card' ? 'card' : 'cash')}</>}</span><span className={`sale-status ${state.tone}`}>{state.label}</span><strong className="ledger-amount">{formatCurrency(sale.total)}<ChevronRight size={15} /></strong>
         </button>
       })}
       {data && !data.sales.length && <div className="sales-empty"><Search size={23} /><span>{t('noMatchingSales')}</span></div>}
@@ -622,7 +665,8 @@ const SalesCounter = memo(function SalesCounter({ items, sales, posConfig, onRef
       </aside>
     </section> : <SalesHistory businessDate={businessDate} showOperator={user?.role==='admin'} refreshToken={historyRevision} onResume={resumeSale} onSelect={setSelectedSale} />}
     {checkout && <CheckoutModal checkout={checkout} posConfig={posConfig} onCash={payCash} onCard={payCard} onRetry={retry} onCancelSale={cancelSale} onClose={() => setCheckout(null)} busy={busy || !serverAvailable} />}
-    {selectedSale && <SaleDetailsModal canManage={user?.role==='admin'} sale={selectedSale} onClose={() => setSelectedSale(null)} onRefund={refundSale} onRetryRefund={retryRefund} onPrintRefundCopy={printRefundCopy} onCreditNote={recordCreditNote} onReconcilePoint={reconcilePointSale} onResolveInventory={resolveRefundInventory} busy={busy} refundAttempt={refundAttempt} onRecoverRefund={recoverRefund} />}
+    {selectedSale?.channel === 'web' && <WebSaleDetails key={selectedSale.id} sale={selectedSale} onClose={() => setSelectedSale(null)} />}
+    {selectedSale && selectedSale.channel !== 'web' && <SaleDetailsModal canManage={user?.role==='admin'} sale={selectedSale} onClose={() => setSelectedSale(null)} onRefund={refundSale} onRetryRefund={retryRefund} onPrintRefundCopy={printRefundCopy} onCreditNote={recordCreditNote} onReconcilePoint={reconcilePointSale} onResolveInventory={resolveRefundInventory} busy={busy} refundAttempt={refundAttempt} onRecoverRefund={recoverRefund} />}
   </div>
 })
 

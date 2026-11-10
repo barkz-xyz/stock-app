@@ -131,6 +131,7 @@ export const api = {
   cashPointSale: (items, key, cashReceived) => request('/api/sales/cash/point', { method: 'POST', body: JSON.stringify({ items, cashReceived }), headers: { 'Idempotency-Key': key }, signal: AbortSignal.timeout(20000) }),
   cardSale: (items, key) => request('/api/sales/card', { method: 'POST', body: JSON.stringify({ items }), ...(key ? { headers: { 'Idempotency-Key': key } } : {}), signal: AbortSignal.timeout(20000) }),
   sale: (id, refresh = false) => request(`/api/sales/${id}${refresh ? '?refresh=true' : ''}`),
+  webSaleTicketUrl: id => `/api/sales/${encodeURIComponent(id)}/ticket`,
   retryCardSale: (id) => request(`/api/sales/${id}/retry-card`, { method: 'POST' }),
   retryPointSale: (id) => request(`/api/sales/${id}/retry-point`, { method: 'POST' }),
   cancelSale: (id) => request(`/api/sales/${id}/cancel`, { method: 'POST' }),

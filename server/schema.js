@@ -4,7 +4,7 @@ import { initializeCashLedger } from './cash-ledger.js'
 import { createIntegrationStore } from './integration-store.js'
 import { closureTimeZone } from './cash-closure.js'
 
-export const databaseSchemaVersion = 4
+export const databaseSchemaVersion = 5
 
 export async function migrateDatabase(pool) {
   const client = await pool.connect()
@@ -246,6 +246,24 @@ export async function migrateDatabase(pool) {
     `)
     await initializeInventoryRevision(client)
     await initializeStockReservations(client)
+    await client.query(`
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT 'pos';
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS reservation_id UUID REFERENCES stock_reservations(id);
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS web_payment JSONB;
+      ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_payment_method_check;
+      ALTER TABLE sales ADD CONSTRAINT sales_payment_method_check CHECK(payment_method IN ('cash','card','web'));
+      ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_web_channel_check;
+      ALTER TABLE sales ADD CONSTRAINT sales_web_channel_check CHECK (
+        (channel='pos' AND payment_method IN ('cash','card') AND reservation_id IS NULL AND web_payment IS NULL) OR
+        (channel='web' AND payment_method='web' AND reservation_id IS NOT NULL AND web_payment IS NOT NULL
+          AND cashier_id IS NULL AND register_session_id IS NULL AND NOT point_payment)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS sales_reservation_idx ON sales(reservation_id) WHERE reservation_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS sales_web_payment_ref_idx
+        ON sales((web_payment->>'environment'),(web_payment->>'paymentReference')) WHERE channel='web';
+      CREATE UNIQUE INDEX IF NOT EXISTS sales_web_payment_id_idx
+        ON sales((web_payment->>'environment'),(web_payment->>'paymentId')) WHERE channel='web';
+    `)
     await initializeCashLedger(client)
     await createIntegrationStore({ pool: client }).initialize()
     await client.query('CREATE TABLE IF NOT EXISTS bakery_schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())')

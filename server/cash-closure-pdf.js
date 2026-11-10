@@ -98,16 +98,25 @@ export async function createCashClosurePdf(closure) {
   if(closure.additionalCash)note('Fondo:',`Anterior ${money(closure.openingCash-closure.additionalCash)} + aporte ${money(closure.additionalCash)}`)
 
   section('01 / VENTAS')
+  const showWeb = closure.scope !== 'session'
+  const web = s.web || { transactions: 0, gross: 0, refunds: 0, net: 0 }
+  const columnWidth = showWeb ? 93 : 113
+  const conceptWidth = showWeb ? 151 : 172
   table([
-    { label: 'Concepto', width: 172 },
-    { label: `Efectivo (${s.cash.transactions})`, width: 113, align: 'right' },
-    { label: `Tarjeta (${s.card.transactions})`, width: 113, align: 'right' },
-    { label: `Total (${s.transactions})`, width: width - 398, align: 'right' },
+    { label: 'Concepto', width: conceptWidth },
+    { label: `Efectivo (${s.cash.transactions})`, width: columnWidth, align: 'right' },
+    { label: `Tarjeta Point (${s.card.transactions})`, width: columnWidth, align: 'right' },
+    ...(showWeb ? [{ label: `Web (${web.transactions})`, width: columnWidth, align: 'right' }] : []),
+    { label: `Total (${s.transactions})`, width: width - conceptWidth - columnWidth * (showWeb ? 3 : 2), align: 'right' },
   ], [
-    { cells: ['Ventas brutas', money(s.cash.gross), money(s.card.gross), money(s.gross)] },
-    { cells: [`Devoluciones (${s.cash.refundCount + s.card.refundCount})`, money(-s.cash.refunds), money(-s.card.refunds), money(-s.refunds)] },
-    { cells: ['VENTAS NETAS', money(s.cash.net), money(s.card.net), money(s.net)], strong: true },
+    { cells: ['Ventas brutas', money(s.cash.gross), money(s.card.gross), ...(showWeb ? [money(web.gross)] : []), money(s.gross)] },
+    { cells: [`Devoluciones (${s.cash.refundCount + s.card.refundCount + (web.refundCount ?? 0)})`, money(-s.cash.refunds), money(-s.card.refunds), ...(showWeb ? [money(-web.refunds)] : []), money(-s.refunds)] },
+    { cells: ['VENTAS NETAS', money(s.cash.net), money(s.card.net), ...(showWeb ? [money(web.net)] : []), money(s.net)], strong: true },
   ])
+  if (showWeb && s.web) {
+    note('Web:', `Productos ${money(web.subtotal)} | Despacho informado ${money(web.shippingAmount)}`)
+    if (web.incompleteCount) note('Web:', `${web.incompleteCount} venta(s) sin total cobrado informado; se incluye el subtotal de productos.`)
+  }
 
   const cashRows = [
     ['Fondo inicial', money(closure.openingCash)], ['Ventas netas', money(s.cash.net)],
@@ -158,7 +167,7 @@ export async function createCashClosurePdf(closure) {
 
   section(`04 / MOVIMIENTOS (${s.operations.length})`)
   const ledgerRows = s.operations.map(op => ({ cells: [clock.format(new Date(op.at)), op.shortId || shortId(op.saleId),
-    op.type === 'refund' ? 'DEV.' : 'VTA.', op.method === 'cash' ? 'Efectivo' : 'Tarjeta',
+    op.type === 'refund' ? 'DEV.' : 'VTA.', op.method === 'cash' ? 'Efectivo' : op.method === 'web' ? 'Web' : 'Tarjeta',
     op.type === 'sale' ? money(op.amount) : '-', op.type === 'refund' ? money(-op.amount) : '-'] }))
   ledgerRows.push({ cells: ['TOTAL', '', '', '', money(s.gross), money(s.refunds)], strong: true })
   table([

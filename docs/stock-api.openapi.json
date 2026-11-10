@@ -1446,6 +1446,48 @@
           },
           "currency": {
             "const": "CLP"
+          },
+          "paymentDetails": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Evidencia del checkout después de consultar el pago aprobado. El total cobrado equivale al subtotal de la reserva más el despacho.",
+            "required": [
+              "status",
+              "orderReference",
+              "paymentId",
+              "approvedAt",
+              "shippingAmount",
+              "chargedTotal"
+            ],
+            "properties": {
+              "status": {
+                "const": "approved"
+              },
+              "orderReference": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$",
+                "maxLength": 120
+              },
+              "paymentId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$",
+                "maxLength": 120
+              },
+              "approvedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "shippingAmount": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 999999999998
+              },
+              "chargedTotal": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 999999999999
+              }
+            }
           }
         }
       },
@@ -1545,6 +1587,14 @@
               "string",
               "null"
             ]
+          },
+          "saleId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Venta web asociada. Nulo hasta registrar la venta."
           },
           "releaseReason": {
             "type": [

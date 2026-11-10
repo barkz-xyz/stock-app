@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Banknote, BarChart3, Boxes, Calculator, CreditCard, Download, ReceiptText, RotateCw, TrendingDown, TrendingUp, WalletCards } from 'lucide-react'
+import { Banknote, BarChart3, Boxes, Calculator, CreditCard, Download, Globe, ReceiptText, RotateCw, TrendingDown, TrendingUp, WalletCards } from 'lucide-react'
 
 import { useI18n } from './i18n.js'
 import { formatQuantity, LoadingSkeleton } from './ui.jsx'
@@ -67,7 +67,7 @@ export default function MetricsPage({ metrics, range, onRangeChange, onRefresh, 
     <section className="analytics-main-grid">
       <article className="card chart-card"><header className="card-header"><h2>{range === 'today' ? t('revenueByHour') : t('revenueByDay')}</h2><strong>{formatCurrency(summary.revenue)}</strong></header><BarSeries data={range === 'today' ? hourly : daily} formatValue={formatCurrency} /></article>
       <article className="card payment-mix-card"><header className="card-header"><h2>{t('paymentMix')}</h2></header><div className="payment-metrics">
-        {[['cash', t('cashSales'), Banknote, 'sage'], ['card', t('pointSales'), CreditCard, 'cocoa']].map(([method, label, Icon, tone]) => { const item = data.paymentMethods[method] || {}; const share = paymentShare(item.revenue || 0); return <div className="payment-metric" key={method}><div className={`payment-metric-icon ${tone}`}><Icon size={19} /></div><div><span>{label}</span><strong>{formatCurrency(item.revenue)}</strong><small>{item.transactions || 0} {t('transactions').toLowerCase()}</small></div><b>{share}%</b><div className="payment-track"><i style={{ width: `${share}%` }} /></div></div> })}
+        {[['cash', t('cashSales'), Banknote, 'sage'], ['card', t('pointSales'), CreditCard, 'cocoa'], ...(data.paymentMethods.web ? [['web', 'Web', Globe, 'cocoa']] : [])].map(([method, label, Icon, tone]) => { const item = data.paymentMethods[method] || {}; const share = paymentShare(item.revenue || 0); return <div className="payment-metric" key={method}><div className={`payment-metric-icon ${tone}`}><Icon size={19} /></div><div><span>{label}</span><strong>{formatCurrency(item.revenue)}</strong><small>{item.transactions || 0} {t('transactions').toLowerCase()}</small></div><b>{share}%</b><div className="payment-track"><i style={{ width: `${share}%` }} /></div></div> })}
       </div></article>
     </section>
 

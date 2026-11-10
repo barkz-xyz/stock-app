@@ -26,6 +26,7 @@ import {
 } from './store.js'
 import { createDailyReport } from './report.js'
 import { createCashClosurePdf } from './cash-closure-pdf.js'
+import { renderWebSaleTicket } from './web-sale-ticket.js'
 import { closeChangeListener, listenForDatabaseChanges, subscribeToChanges } from './changes.js'
 
 const app = express()
@@ -574,6 +575,13 @@ app.post(['/api/sales/:id/retry-point', '/api/sales/:id/retry-card'], async (req
     next(error)
   }
 })
+app.get('/api/sales/:id/ticket', requireAdmin, async (req, res) => {
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(req.params.id)) return res.sendStatus(404)
+  const sale = await getSale(req.params.id)
+  if (sale?.channel !== 'web') return res.sendStatus(404)
+  res.set('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
+  res.type('html').send(renderWebSaleTicket(sale))
+})
 app.get('/api/sales/:id', async (req, res, next) => {
   try {
     let sale = await getSale(req.params.id)
@@ -647,6 +655,7 @@ app.post('/api/sales/:id/refunds', async (req, res, next) => {
     if (!requestKey) throw Object.assign(new Error('Falta la referencia de la devolución. Actualiza la página e intenta de nuevo.'), { status: 400, code: 'IDEMPOTENCY_REQUIRED' })
     const existing = await getSale(req.params.id)
     if (!existing) return res.status(404).json({ error: 'Sale not found.' })
+    if (existing.channel === 'web') return res.status(409).json({ error: 'Gestiona las devoluciones web desde el checkout.', code: 'WEB_REFUND_NOT_SUPPORTED' })
     if (existing.paymentMethod === 'card') requireProtectedPoint()
     prepared = await prepareRefund(existing.id, cleanRefund(req.body), { key: requestKey, actor: req.user })
     if (!prepared) return res.status(404).json({ error: 'Sale not found.' })

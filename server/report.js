@@ -1,4 +1,4 @@
-function escapeHtml(value) {
+export function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
@@ -54,6 +54,7 @@ export function createDailyReport({ metrics, items, businessDate, language = 'es
   const summary = metrics.summary
   const cash = metrics.paymentMethods.cash
   const card = metrics.paymentMethods.card
+  const web = metrics.paymentMethods.web
   const closure = metrics.cashClosure
   const attentionItems = items.filter((item) => item.quantity <= item.lowStockThreshold)
   const maxHour = Math.max(...metrics.hourly.map((entry) => entry.revenue), 1)
@@ -80,7 +81,7 @@ export function createDailyReport({ metrics, items, businessDate, language = 'es
 <section class="hero"><div class="brand"><div class="mark">BP</div><div><h1>${escapeHtml(text.title)}</h1><p>${escapeHtml(text.subtitle)}</p></div></div><div class="hero-meta"><strong>${escapeHtml(reportDate)}</strong><span>${escapeHtml(text.generated)} · ${escapeHtml(generated)}</span></div></section>
 <section class="metrics">${metric(text.collected, formatCurrency(summary.revenue, language))}${metric(text.transactions, formatNumber(summary.transactions, language))}${metric(text.ticket, formatCurrency(summary.averageTicket, language))}${metric(text.units, formatNumber(summary.itemsSold, language))}</section>
 <section class="grid">
-<article class="card"><header><span class="eyebrow">${escapeHtml(text.payments)}</span><h2>${escapeHtml(text.cash)} / Point</h2></header><div class="payment-grid"><div class="payment"><span>${escapeHtml(text.cash)}</span><strong>${formatCurrency(cash.revenue, language)}</strong><small>${cash.transactions} ${escapeHtml(text.sales)}</small></div><div class="payment"><span>${escapeHtml(text.point)}</span><strong>${formatCurrency(card.revenue, language)}</strong><small>${card.transactions} ${escapeHtml(text.sales)}</small></div></div></article>
+<article class="card"><header><span class="eyebrow">${escapeHtml(text.payments)}</span><h2>${escapeHtml(text.cash)} / Point${web ? ' / Web' : ''}</h2></header><div class="payment-grid"><div class="payment"><span>${escapeHtml(text.cash)}</span><strong>${formatCurrency(cash.revenue, language)}</strong><small>${cash.transactions} ${escapeHtml(text.sales)}</small></div><div class="payment"><span>${escapeHtml(text.point)}</span><strong>${formatCurrency(card.revenue, language)}</strong><small>${card.transactions} ${escapeHtml(text.sales)}</small></div>${web ? `<div class="payment"><span>Web</span><strong>${formatCurrency(web.revenue, language)}</strong><small>${web.transactions} ${escapeHtml(text.sales)}</small></div>` : ''}</div></article>
 <article class="card"><header><span class="eyebrow">${escapeHtml(text.operations)}</span><h2>${summary.pendingPoint || summary.failedPayments ? escapeHtml(text.attention) : escapeHtml(text.healthy)}</h2></header><div class="operations">${metric(text.pending, summary.pendingPoint)}${metric(text.failed, summary.failedPayments)}${metric(text.refunds, formatCurrency(summary.refundedTotal, language))}</div></article>
 <article class="card full"><header><span class="eyebrow">01</span><h2>${escapeHtml(text.products)}</h2></header>${productRows ? `<div class="table-wrap"><table><thead><tr><th>#</th><th>${escapeHtml(text.product)}</th><th>${escapeHtml(text.quantity)}</th><th>${escapeHtml(text.revenue)}</th><th>${escapeHtml(text.share)}</th></tr></thead><tbody>${productRows}</tbody></table></div>` : `<div class="empty">${escapeHtml(text.empty)}</div>`}</article>
 <article class="card"><header><span class="eyebrow">02</span><h2>${escapeHtml(text.hours)}</h2></header>${hourRows ? `<div class="hours">${hourRows}</div>` : `<div class="empty">${escapeHtml(text.empty)}</div>`}</article>

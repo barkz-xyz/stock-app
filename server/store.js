@@ -145,6 +145,8 @@ function normalizeSale(row, items = row.items || [], refunds = row.refunds || []
     checkoutKey: row.checkout_key ?? row.checkoutKey ?? null,
     status: row.status,
     paymentMethod: row.payment_method ?? row.paymentMethod,
+    channel: row.channel || 'pos',
+    ...(row.channel === 'web' ? { reservationId: row.reservation_id ?? row.reservationId, web: row.web_payment ?? row.web } : {}),
     pointPayment: Boolean(row.point_payment ?? row.pointPayment) || (row.payment_method ?? row.paymentMethod) === 'card',
     pointTaxCondition: row.point_tax_condition ?? row.pointTaxCondition ?? null,
     total: Number(row.total),
@@ -200,6 +202,7 @@ function normalizeCashClosure(row) {
     countedCash: Number(row.counted_cash ?? row.countedCash ?? 0),
     cashSales: Number(row.cash_sales ?? row.cashSales ?? 0),
     cardSales: Number(row.card_sales ?? row.cardSales ?? 0),
+    webSales: Number(row.webSales ?? 0),
     totalSales: Number(row.total_sales ?? row.totalSales ?? 0),
     expectedCash: Number(row.expected_cash ?? row.expectedCash ?? 0),
     difference: Number(row.difference ?? 0),
@@ -1616,7 +1619,8 @@ export async function searchSales(input, user = null) {
   if (q.method) add('s.payment_method = ?', q.method)
   if (q.status === 'refunded') clauses.push("(s.status='refunded' OR EXISTS (SELECT 1 FROM refunds r WHERE r.sale_id=s.id AND r.status='processed'))")
   else if (q.status) add('s.status = ?', q.status)
-  if (q.search) add("LOWER(REPLACE(s.id::text || ' ' || COALESCE(s.mp_external_reference,''),'-','')) LIKE ? ESCAPE '\\'", `%${q.search.replaceAll('-', '').toLowerCase().replace(/[\\%_]/g, '\\$&')}%`)
+  if (q.search) add(`LOWER(REPLACE(concat_ws(' ',s.id::text,s.mp_external_reference,
+    s.web_payment->>'externalReference',s.web_payment->>'paymentReference',s.web_payment->>'orderReference',s.web_payment->>'paymentId'),'-','')) LIKE ? ESCAPE '\\'`, `%${q.search.replaceAll('-', '').toLowerCase().replace(/[\\%_]/g, '\\$&')}%`)
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
   const client = await pool.connect()
   try {
@@ -1732,8 +1736,10 @@ export function buildSalesMetrics(sales, { from, to, previousFrom, previousTo, t
   const previous = paidSummary(previousPaid, previousRefunds)
   const cashPaid = currentPaid.filter((sale) => sale.paymentMethod === 'cash')
   const cardPaid = currentPaid.filter((sale) => sale.paymentMethod === 'card')
+  const webPaid = currentPaid.filter((sale) => sale.paymentMethod === 'web')
   const cashRefunds = currentRefunds.filter((refund) => refund.paymentMethod === 'cash')
   const cardRefunds = currentRefunds.filter((refund) => refund.paymentMethod === 'card')
+  const webRefunds = currentRefunds.filter((refund) => refund.paymentMethod === 'web')
   const todayCash = todayPaid.filter((sale) => sale.paymentMethod === 'cash')
   const todayCard = todayPaid.filter((sale) => sale.paymentMethod === 'card')
   const todayCashRefunds = todayRefunds.filter((refund) => refund.paymentMethod === 'cash')
@@ -1801,6 +1807,7 @@ export function buildSalesMetrics(sales, { from, to, previousFrom, previousTo, t
     paymentMethods: {
       cash: paidSummary(cashPaid, cashRefunds),
       card: paidSummary(cardPaid, cardRefunds),
+      ...(webPaid.length || webRefunds.length ? { web: paidSummary(webPaid, webRefunds) } : {}),
     },
     daily: [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
     hourly,

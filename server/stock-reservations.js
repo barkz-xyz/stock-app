@@ -43,9 +43,24 @@ export function cleanPaymentStart(body) {
   return { paymentAttemptId: reservationId(body.paymentAttemptId) }
 }
 export function cleanConfirmation(body) {
-  objectInput(body, ['paymentAttemptId', 'paymentReference', 'amount', 'currency'])
+  objectInput(body, ['paymentAttemptId', 'paymentReference', 'amount', 'currency', 'paymentDetails'])
   if (typeof body.paymentReference !== 'string' || !reference.test(body.paymentReference) || body.currency !== 'CLP') throw reservationError('Invalid payment reference or currency.')
-  return { paymentAttemptId: reservationId(body.paymentAttemptId), paymentReference: body.paymentReference, amount: money(body.amount), currency: 'CLP' }
+  const confirmation = { paymentAttemptId: reservationId(body.paymentAttemptId), paymentReference: body.paymentReference, amount: money(body.amount), currency: 'CLP' }
+  if (!Object.hasOwn(body, 'paymentDetails')) return confirmation
+  const details = body.paymentDetails
+  objectInput(details, ['status', 'orderReference', 'paymentId', 'approvedAt', 'shippingAmount', 'chargedTotal'])
+  if (details.status !== 'approved' || ![details.orderReference, details.paymentId].every(value => typeof value === 'string' && reference.test(value))) {
+    throw reservationError('Payment details must describe an approved order and payment.')
+  }
+  const approvedAt = typeof details.approvedAt === 'string' ? Date.parse(details.approvedAt) : NaN
+  if (typeof details.approvedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(details.approvedAt) ||
+      !dateOnly(details.approvedAt) || !Number.isFinite(approvedAt) || approvedAt > Date.now() + 5 * 60 * 1000) throw reservationError('Use an ISO 8601 approval timestamp with a time zone.')
+  const { shippingAmount, chargedTotal } = details
+  if (!Number.isSafeInteger(shippingAmount) || shippingAmount < 0 || money(chargedTotal) !== confirmation.amount + shippingAmount) {
+    throw reservationError('The charge must equal the reservation subtotal plus shipping.', 409, 'PAYMENT_MISMATCH')
+  }
+  return { ...confirmation, paymentDetails: { orderReference: details.orderReference, paymentId: details.paymentId,
+    approvedAt: new Date(approvedAt).toISOString(), shippingAmount, chargedTotal } }
 }
 export function cleanRelease(body) {
   objectInput(body, ['reason', 'paymentAttemptId', 'outcomeVerified'])
@@ -131,17 +146,46 @@ export async function initializeStockReservations(pool) {
   `)
 }
 
-const selectReservation = `SELECT r.*,COALESCE((SELECT jsonb_agg(to_jsonb(l) ORDER BY l.product_id)
+const selectReservation = `SELECT r.*,(SELECT id FROM sales WHERE reservation_id=r.id) AS sale_id,
+  COALESCE((SELECT jsonb_agg(to_jsonb(l) ORDER BY l.product_id)
   FROM stock_reservation_lines l WHERE l.reservation_id=r.id),'[]') AS lines FROM stock_reservations r`
 const iso = value => value == null ? null : new Date(value).toISOString()
 function representation(row) {
   return { id: row.id, externalReference: row.external_reference, status: row.status,
     total: { amount: Number(row.total), currency: 'CLP' }, inventoryApplied: row.inventory_applied,
     expiresAt: iso(row.expires_at), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
-    paymentAttemptId: row.payment_attempt_id, paymentReference: row.payment_reference, releaseReason: row.release_reason,
+    paymentAttemptId: row.payment_attempt_id, paymentReference: row.payment_reference, saleId: row.sale_id, releaseReason: row.release_reason,
     paymentStartedAt: iso(row.payment_started_at), confirmedAt: iso(row.confirmed_at), releasedAt: iso(row.released_at),
     items: row.lines.map(line => ({ itemId: line.product_id, name: line.item_name, unit: line.unit,
       quantity: Number(line.quantity).toFixed(2), unitPrice: Number(line.unit_price), lineTotal: Number(line.line_total) })) }
+}
+
+async function recordWebSale(db, row, body) {
+  const details = body.paymentDetails
+  const { rows: [existing] } = await db.query('SELECT id,web_payment FROM sales WHERE reservation_id=$1', [row.id])
+  if (existing) {
+    if (!details) return
+    if (existing.web_payment.chargedTotal != null) {
+      if (Object.entries(details).some(([key, value]) => existing.web_payment[key] !== value)) {
+        throw reservationError('Payment details differ from the recorded sale.', 409, 'PAYMENT_MISMATCH')
+      }
+      return
+    }
+    await db.query(`UPDATE sales SET total=$2,paid_at=$3,created_at=$3,updated_at=clock_timestamp(),
+      web_payment=web_payment || $4::jsonb WHERE id=$1`, [existing.id, details.chargedTotal, details.approvedAt, JSON.stringify(details)])
+    return
+  }
+  const id = crypto.randomUUID()
+  const payment = {
+    environment: row.environment, externalReference: row.external_reference, paymentReference: body.paymentReference,
+    subtotal: Number(row.total), shippingAmount: null, chargedTotal: null, approvedAt: null, ...details,
+  }
+  await db.query(`INSERT INTO sales(id,status,payment_method,channel,reservation_id,total,inventory_applied,created_at,paid_at,web_payment)
+    VALUES($1,'paid','web','web',$2,$3,TRUE,$4,$4,$5)`,
+  [id, row.id, payment.chargedTotal ?? payment.subtotal, payment.approvedAt ?? row.confirmed_at, JSON.stringify(payment)])
+  await db.query(`INSERT INTO sale_items(id,sale_id,item_id,item_name,unit,quantity,unit_price,line_total,inventory_quantity)
+    SELECT gen_random_uuid(),$2,item_id,item_name,unit,quantity,unit_price,line_total,quantity
+    FROM stock_reservation_lines WHERE reservation_id=$1`, [row.id, id])
 }
 
 export function createStockReservationStore({ pool, ttlSeconds = 900, maxActive = 50 }) {
@@ -169,6 +213,8 @@ export function createStockReservationStore({ pool, ttlSeconds = 900, maxActive 
       const previous = (await db.query('SELECT * FROM stock_reservation_operations WHERE client_id=$1 AND idempotency_key=$2', [actor.id, key])).rows[0]
       if (previous) {
         if (previous.action !== action || previous.fingerprint !== fingerprint) throw reservationError('Idempotency key already used for another operation.', 409, 'IDEMPOTENCY_CONFLICT')
+        // Replaying a confirmation from before sale registration can materialize its sale.
+        if (action === 'confirm') await callback(db, owner)
         return { reservation: representation(await read(db, previous.reservation_id, actor.id)), replayed: true }
       }
       const resultId = await callback(db, owner)
@@ -276,13 +322,20 @@ export function createStockReservationStore({ pool, ttlSeconds = 900, maxActive 
         if (row.payment_attempt_id !== body.paymentAttemptId || Number(row.total) !== body.amount) throw reservationError('Payment does not match this reservation.', 409, 'PAYMENT_MISMATCH')
         if (row.status === 'confirmed') {
           if (row.payment_reference !== body.paymentReference) throw reservationError('Reservation already confirmed with a different payment.', 409, 'PAYMENT_MISMATCH')
+          await recordWebSale(db, row, body)
           return id
         }
         if (row.status !== 'payment_pending') throw reservationError('Reservation is not held for this payment. Reconcile or refund the payment in the checkout.', 409, 'RESERVATION_NOT_PAYABLE')
         const used = await db.query('SELECT 1 FROM stock_reservations WHERE client_id=$1 AND payment_reference=$2 AND id<>$3', [actor.id, body.paymentReference, id])
         if (used.rowCount) throw reservationError('Payment already confirmed another reservation.', 409, 'PAYMENT_ALREADY_USED')
-        await db.query("UPDATE stock_reservations SET status='confirmed',payment_reference=$2,confirmed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1", [id, body.paymentReference])
+        const { rows: [confirmed] } = await db.query("UPDATE stock_reservations SET status='confirmed',payment_reference=$2,confirmed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1 RETURNING confirmed_at", [id, body.paymentReference])
+        await recordWebSale(db, { ...row, ...confirmed }, body)
         return id
+      }).catch(error => {
+        if (error.code === '23505' && ['sales_web_payment_ref_idx', 'sales_web_payment_id_idx'].includes(error.constraint)) {
+          throw reservationError('Payment already confirmed another reservation.', 409, 'PAYMENT_ALREADY_USED')
+        }
+        throw error
       })
     },
     release,

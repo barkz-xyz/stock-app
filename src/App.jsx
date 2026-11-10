@@ -491,7 +491,9 @@ export default function App() {
   if (auth?.required && (!auth.authenticated||auth.user?.mustChangePassword)) return <LoginScreen auth={auth} onSetup={handleSetup} onPassword={handlePassword} onLogin={handleLogin} theme={theme} onThemeToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} />
 
   if(blockedPage)return <LoadingSkeleton/>
-  const closureSessionId=route.closureMonth&&route.registerSessionId?route.registerSessionId:isAdmin&&route.closureMonth&&route.closureDate?null:currentRegisterSession?.id||'none'
+  const closureView = route.closureView === 'daily' && !isAdmin ? 'current' : route.closureView
+  const dailyClose = isAdmin && (closureView === 'daily' || (route.closureMonth && route.closureDate && !route.registerSessionId))
+  const closureSessionId = dailyClose ? null : route.closureMonth && route.registerSessionId ? route.registerSessionId : currentRegisterSession?.id || 'none'
   return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${isCajaPage ? 'is-caja' : ''}`}>
     <aside className={`sidebar ${mobileMenu ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
       <div className="brand"><button ref={brandLogoRef} className="brand-logo" onClick={toggleSidebar} aria-expanded={!sidebarCollapsed} aria-label={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')} title={sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')}><span className="brand-mark"><Croissant size={24} /></span></button><span className="brand-copy"><strong>Bakery POS</strong></span><button className="sidebar-toggle" onClick={toggleSidebar} aria-label={t('collapseSidebar')} title={t('collapseSidebar')}><PanelLeftClose size={17} /></button></div>
@@ -506,7 +508,7 @@ export default function App() {
       {issue && <div className={`operation-banner ${issue.type}`} role="alert"><AlertTriangle size={17} /><span>{issue.message}</span><button onClick={() => setIssue(null)} aria-label={t('close')}><X size={18} /></button></div>}
       {loading ? <LoadingSkeleton /> : <Suspense fallback={<LoadingSkeleton />}>
         {page === 'dashboard' && <Dashboard items={items} movements={movements} dailySummary={dailySummary} onAdd={openAdd} onAdjust={openAdjust} onGoInventory={goInventory} onGoPos={goPos} dayKey={dayKey} />}
-        {page === 'pos' && route.registerView === 'close' && <CashClosurePage user={auth.user} sessionId={closureSessionId} refreshToken={reconciled} date={route.closureDate} view={route.closureView} month={route.closureMonth} currentMonth={dayKey.slice(0, 7)} onClosed={refreshAfterChange} onNavigate={navigate} setToast={setToast} />}
+        {page === 'pos' && route.registerView === 'close' && <CashClosurePage user={auth.user} sessionId={closureSessionId} refreshToken={reconciled} date={dailyClose ? route.closureDate || dayKey : route.closureDate} view={dailyClose ? 'daily' : closureView} month={route.closureMonth} currentDate={dayKey} onClosed={refreshAfterChange} onNavigate={navigate} setToast={setToast} />}
         {page === 'pos' && route.registerView === 'cash' && <CashMovementsPage user={auth.user} refreshToken={reconciled} onRefresh={refreshAfterChange} onNavigate={navigate} setToast={setToast}/>}
         {page === 'pos' && ['cart','history'].includes(route.registerView) && <SalesCounter user={auth.user} businessDate={dayKey} registerOpening={currentRegisterOpening} registerSession={currentRegisterSession} onOpenRegister={openRegister} serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refreshAfterChange} setToast={setToast} onNavigate={navigate} registerView={route.registerView} historyRevision={route.registerView === 'history' ? reconciled : 0} onRegisterViewChange={changeRegisterView} />}
         {page === 'inventory' && <Inventory items={items} onBatch={openBatch} onAdd={isAdmin?openAdd:undefined} onAdjust={openAdjust} onEdit={isAdmin?openEdit:undefined} dayKey={dayKey} />}

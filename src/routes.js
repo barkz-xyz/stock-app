@@ -9,6 +9,7 @@ export function sectionHref(page, { view = 'cart', range = 'today', date, sessio
     if (date) query.set('fecha', date)
     if (sessionId) query.set('sesion', sessionId)
     if (closureView === 'history') query.set('vista', 'historial')
+    if (closureView === 'daily') query.set('vista', 'diario')
     if (month) query.set('mes', month)
     return `/caja/cierre${query.size ? `?${query}` : ''}`
   }
@@ -24,9 +25,10 @@ export function parseRoute(href) {
   const page = path === '/' ? 'dashboard' : ['/caja/historial', '/caja/cierre', '/caja/retiros'].includes(path) ? 'pos'
     : Object.keys(sectionPaths).find(page => sectionPaths[page] === path) || 'not-found'
   const range = url.searchParams.get('periodo')
+  const closureView = url.searchParams.get('vista')
   return { page, registerView: path === '/caja/cierre' ? 'close' : path === '/caja/retiros' ? 'cash' : path === '/caja/historial' ? 'history' : 'cart',
     closureDate: url.searchParams.get('fecha') || '', registerSessionId:url.searchParams.get('sesion')||'',
-    closureView: url.searchParams.get('vista') === 'historial' ? 'history' : 'current', closureMonth: url.searchParams.get('mes') || '',
+    closureView: closureView === 'historial' ? 'history' : closureView === 'diario' ? 'daily' : 'current', closureMonth: url.searchParams.get('mes') || '',
     metricsRange: ['7d', '30d'].includes(range) ? range : 'today',
     settingsTab: url.searchParams.get('tab') === 'inventory-api' ? 'inventory-api' : 'point',
     canonical: path === '/' ? sectionPaths.dashboard : null }

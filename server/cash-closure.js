@@ -50,11 +50,12 @@ export function buildClosureSummary(sales, period, { registerSessionId = null } 
   const within = value => value && new Date(value) >= period.from && new Date(value) < period.to
   const cash = { gross: 0, refunds: 0, net: 0, transactions: 0, refundCount: 0 }
   const card = { ...cash, recordedFees: 0, recordedSettlement: 0, reconciledTransactions: 0, unreconciledTransactions: 0 }
+  const web = { ...cash, subtotal: 0, shippingAmount: 0, incompleteCount: 0 }
   const operations = [], excluded = []
   for (const sale of sales) {
     const method = sale.paymentMethod
-    if (!['cash', 'card'].includes(method)) continue
-    const totals = method === 'cash' ? cash : card
+    if (!['cash', 'card', 'web'].includes(method) || method === 'web' && registerSessionId) continue
+    const totals = method === 'cash' ? cash : method === 'card' ? card : web
     const paidAt = sale.paidAt || sale.createdAt
     const originalSession = !registerSessionId || sale.registerSessionId === registerSessionId
     if (originalSession && within(paidAt)) {
@@ -67,9 +68,14 @@ export function buildClosureSummary(sales, period, { registerSessionId = null } 
             card.recordedSettlement += sale.mpNetReceivedAmount
             card.reconciledTransactions++
           } else card.unreconciledTransactions++
+        } else if (method === 'web') {
+          web.subtotal += sale.web.subtotal
+          web.shippingAmount += sale.web.shippingAmount ?? 0
+          if (sale.web.chargedTotal == null) web.incompleteCount++
         }
         operations.push({ id: sale.id, saleId: sale.id, shortId: sale.shortId, type: 'sale', method,
           at: instant(paidAt), amount: sale.total, reference: sale.mpOperationId || sale.mpPaymentId || '',
+          ...(method === 'web' ? { reference: sale.web.externalReference, shippingAmount: sale.web.shippingAmount } : {}),
           terminal: sale.mpTerminalSerial || '', cardBrand: sale.mpCardBrand || '', cardLastFour: sale.mpCardLastFour || '',
           fee: method === 'card' && sale.mpNetReceivedAmount != null ? sale.mpFeeAmount : null,
           settlement: method === 'card' ? sale.mpNetReceivedAmount : null,
@@ -94,11 +100,13 @@ export function buildClosureSummary(sales, period, { registerSessionId = null } 
   }
   cash.net = cash.gross - cash.refunds
   card.net = card.gross - card.refunds
+  web.net = web.gross - web.refunds
   operations.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
   excluded.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
   const summary = { businessDate: period.businessDate, timeZone: period.timeZone, from: period.from.toISOString(), to: period.to.toISOString(),
-    cash, card, gross: cash.gross + card.gross, refunds: cash.refunds + card.refunds,
-    net: cash.net + card.net, transactions: cash.transactions + card.transactions,
+    cash, card, ...(web.transactions || web.refundCount ? { web } : {}),
+    gross: cash.gross + card.gross + web.gross, refunds: cash.refunds + card.refunds + web.refunds,
+    net: cash.net + card.net + web.net, transactions: cash.transactions + card.transactions + web.transactions,
     pendingCount: excluded.filter(o => ['pending', 'processing'].includes(o.status)).length, operations, excluded }
   return { ...summary, fingerprint: crypto.createHash('sha256').update(JSON.stringify(summary)).digest('hex') }
 }
@@ -139,6 +147,7 @@ export function createClosure(summary, input, existing) {
     openingCash: input.openingCash, cashAdjustments: cashIn - cashOut, cashIn, cashOut,
     countedCash: input.countedCash, countedCard: summary.card.net, cardTotalSource: 'pos', operator: input.operator, terminalReference: input.terminalReference,
     denominations: input.denominations, cashSales: summary.cash.net, cardSales: summary.card.net, totalSales: summary.net,
+    ...(summary.web ? { webSales: summary.web.net } : {}),
     expectedCash, difference, cardDifference: null, transactionCount: summary.transactions, note: input.note,
     closedAt: new Date().toISOString(), snapshot: summary }
 }

@@ -1,6 +1,6 @@
 # Reservas de stock para el checkout
 
-Las reservas usan el saldo neto disponible que ya consume Caja. Reservar descuenta una vez; confirmar no vuelve a descontar; liberar o vencer repone una vez. El pedido comercial, los compradores y los cobros online permanecen en el repositorio `bakery-checkout`. Las reservas confirmadas generan movimientos de inventario, sin incluir cobros web en cierres de efectivo o Point.
+Las reservas usan el saldo neto disponible que ya consume Caja. Reservar descuenta una vez; confirmar no vuelve a descontar; liberar o vencer repone una vez. El pedido comercial, los compradores y los cobros online permanecen en el repositorio `bakery-checkout`. Al confirmar una reserva se registra una venta Web. Sus cobros se muestran por separado en el cierre diario y el PDF.
 
 Las ventas autenticadas del mostrador pueden superar el saldo registrado: se conserva el saldo mínimo en cero y se registra `inventoryQuantity` (descuento real) y `unstockedQuantity` (faltante) por línea. Esta excepción no se aplica a reservas web, que siguen exigiendo saldo completo. Una cancelación Point restituye sólo `inventoryQuantity`; no inventa stock por la parte sin registro ni readquiere unidades de reservas online. Por tanto, puede haber varias ventas POS con faltante, pero la suma de asignaciones de stock registrado entre canales sigue siendo exclusiva. Una devolución con restitución es una decisión explícita sobre productos físicamente devueltos y suma la cantidad efectivamente retornada.
 
@@ -43,7 +43,7 @@ Todas requieren `Authorization: Bearer …` con `inventory:reserve`. Todas las e
 | `POST /api/integrations/v1/reservations` | Reservar todo el carrito de forma atómica |
 | `GET /api/integrations/v1/reservations/{id}` | Recuperar el estado, sólo para la integración propietaria |
 | `POST /api/integrations/v1/reservations/{id}/payment-pending` | Retener las unidades antes de iniciar el pago |
-| `POST /api/integrations/v1/reservations/{id}/confirm` | Confirmar sin otro descuento de stock |
+| `POST /api/integrations/v1/reservations/{id}/confirm` | Confirmar y registrar una venta Web en la misma transacción |
 | `POST /api/integrations/v1/reservations/{id}/release` | Devolver las unidades pendientes una sola vez |
 
 Crear una reserva:
@@ -104,7 +104,7 @@ El worker persistente revisa vencimientos cada 10 segundos y al arrancar. Sólo 
 
 Una clave repetida con el mismo cuerpo normalizado recupera la misma reserva y su **estado actual**, sin alargar el plazo. La misma clave con otra operación o cuerpo devuelve `409 IDEMPOTENCY_CONFLICT`. Una referencia externa con otra clave devuelve `409 EXTERNAL_REFERENCE_EXISTS`: usar la clave original para recuperar un timeout. Al iniciar otro intento después de terminar uno, usar nueva referencia externa e idempotencia. Las claves se registran al confirmar una operación válida; los errores de validación no generan descuentos ni registros de idempotencia.
 
-Repetir la confirmación del mismo intento y referencia no duplica el consumo. Reutilizar un pago en otra reserva devuelve `409 PAYMENT_ALREADY_USED`. Confirmar después de liberar o vencer se rechaza; el checkout debe registrar `paid_requires_review`, impedir la entrega y gestionar compensación/reembolso. Esta entrega no readquiere stock automáticamente después de una liberación. Un pago aprobado tarde sigue siendo confirmable si permanecía correctamente retenido en `payment_pending`.
+Repetir la confirmación del mismo intento y referencia recupera el mismo `saleId` y conserva el stock. Reutilizar un pago en otra reserva devuelve `409 PAYMENT_ALREADY_USED`. Confirmar después de liberar o vencer se rechaza; el checkout debe registrar `paid_requires_review`, impedir la entrega y gestionar compensación/reembolso. Esta entrega no readquiere stock automáticamente después de una liberación. Un pago aprobado tarde sigue siendo confirmable si permanecía correctamente retenido en `payment_pending`.
 
 ## Operación, auditoría y concurrencia
 
@@ -112,8 +112,10 @@ El administrador puede revisar pendientes e historial en Configuración y libera
 
 No se permite contar saldo absoluto, cambiar unidad o borrar un producto con reservas online activas. Recepciones de stock y ventas del saldo restante siguen disponibles. Los triggers PostgreSQL también protegen la eliminación/cambio de unidad y el límite de capacidad. Una importación que intenta reemplazar productos reservados falla de forma atómica.
 
-Las tablas `stock_reservations`, `stock_reservation_lines` y `stock_reservation_operations` conservan estado, cotización y referencias de reintentos, sin compradores ni secretos. `movements.reservation_id` vincula reservas y restituciones. El stock, movimiento, reserva y operación idempotente se confirman juntos. Borrar credenciales de una integración terminada no borra su historial de reservas.
+Las tablas `stock_reservations`, `stock_reservation_lines` y `stock_reservation_operations` conservan estado, cotización y referencias de reintentos, sin compradores ni secretos. `movements.reservation_id` vincula reservas y restituciones. La confirmación guarda la venta y sus líneas junto con la reserva y la operación idempotente. Borrar credenciales de una integración terminada no borra su historial de reservas.
 
 Reservas, Caja y Point bloquean los mismos productos en orden estable. Un carrito con una línea insuficiente revierte todas. No se mantiene una transacción de inventario abierta mientras se llama al proveedor de pagos. No se requiere Redis ni otro servicio de infraestructura para esta entrega.
 
 Errores relevantes: `QUOTE_CHANGED`, `INSUFFICIENT_STOCK`, `PRODUCT_UNAVAILABLE`, `RESERVATION_EXPIRED`, `PAYMENT_UNRESOLVED`, `PAYMENT_MISMATCH`, `RESERVATION_NOT_PAYABLE`, `ALREADY_CONFIRMED`, `ACTIVE_RESERVATIONS`. Todos mantienen el sobre de error privado con `requestId`; el checkout no debe convertir un error en stock cero ni continuar cobrando.
+
+Para integrar el detalle del cobro o probar Caja con inventario ficticio, consulta [Ventas web en Bakery POS](web-sales.md).

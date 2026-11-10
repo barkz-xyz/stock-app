@@ -14,7 +14,10 @@ export function postgresConfig(connectionString, env = process.env) {
   for (const key of ['host', 'hostaddr', 'port', 'user', 'password', 'database', 'dbname', 'service']) {
     if (url.searchParams.has(key)) throw new Error('PostgreSQL connection authority must be specified in the URL, not query parameters.')
   }
-  const privateHost = isPrivateDatabaseHost(url.hostname)
+  const renderPrivate = env.RENDER === 'true' && /^srv-[a-z0-9]+$/.test(env.RENDER_SERVICE_ID || '') &&
+    /^dpg-[a-z0-9]+-[a-z]$/.test(url.hostname) && url.hostname === env.BAKERY_RENDER_DB_HOST &&
+    (!url.port || url.port === '5432') && url.pathname === '/bakery_pos_sandbox'
+  const privateHost = isPrivateDatabaseHost(url.hostname) || renderPrivate
   const mode = url.searchParams.get('sslmode') || env.PGSSLMODE || (privateHost ? 'disable' : 'verify-full')
   if (!['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full', 'no-verify'].includes(mode)) throw new Error('Unsupported PostgreSQL TLS mode.')
   if (!privateHost && ['disable', 'no-verify'].includes(mode)) throw new Error('Public PostgreSQL connections require verified TLS. Configure PGSSLROOTCERT for a private CA.')

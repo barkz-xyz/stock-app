@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { WebhookSignatureValidator } from 'mercadopago'
-import { renderPointCashClosure, renderPointRefundCopy } from './point-receipts.js'
+import { renderPointCashClosure, renderPointRefundCopy, renderPointWebOrder } from './point-receipts.js'
 
 const apiBase = process.env.MERCADOPAGO_API_BASE || 'https://api.mercadopago.com'
 const mockMode = process.env.MERCADOPAGO_MOCK === 'true'
@@ -37,8 +37,7 @@ function accountConfigurationError() {
   return Object.assign(new Error('Mercado Pago account management is not configured. Add the server-side access token in Railway.'), { status: 503 })
 }
 
-async function mercadoPagoRequest(endpoint, { method = 'GET', body, idempotencyKey, uncertainMessage, validateResponse } = {}) {
-  const { accessToken } = credentials()
+async function mercadoPagoRequest(endpoint, { method = 'GET', body, idempotencyKey, uncertainMessage, validateResponse, accessToken = credentials().accessToken } = {}) {
   if (!accessToken) throw configurationError()
   const mutating = !['GET', 'HEAD'].includes(method)
   const unconfirmed = (cause, mercadoPagoStatus) => Object.assign(new Error(mutating
@@ -534,8 +533,8 @@ export async function refundPointOrder(orderId, sale, refund) {
   return confirmedPointRefundOrder(order, sale, refund)
 }
 
-async function printPointTicket({ requestId, externalReference, content, uncertainMessage, validateResponse }) {
-  const { terminalId } = credentials()
+async function printPointTicket({ requestId, externalReference, content, uncertainMessage, validateResponse, printer = credentials() }) {
+  const { terminalId, accessToken } = printer
   if (!terminalId && !mockMode) throw configurationError()
 
   if (mockMode) {
@@ -549,6 +548,7 @@ async function printPointTicket({ requestId, externalReference, content, uncerta
 
   return mercadoPagoRequest('/terminals/v1/actions', {
     method: 'POST',
+    accessToken,
     idempotencyKey: requestId,
     uncertainMessage,
     validateResponse,
@@ -559,6 +559,40 @@ async function printPointTicket({ requestId, externalReference, content, uncerta
       content,
     },
   })
+}
+
+const validPrintAction = result => validIdentifier(result?.id) && ['created', 'on_terminal', 'processed'].includes(result.status)
+
+function webOrderPrinter() {
+  const accessToken = process.env.MERCADOPAGO_WEB_PRINT_ACCESS_TOKEN || ''
+  const terminalId = process.env.MERCADOPAGO_WEB_PRINT_TERMINAL_ID || ''
+  return accessToken || terminalId ? { accessToken, terminalId } : credentials()
+}
+
+export function pointWebPrintConfigured() {
+  const { accessToken, terminalId } = webOrderPrinter()
+  return mockMode || Boolean(accessToken && terminalId)
+}
+
+export async function printPointWebOrder(sale, requestId) {
+  const parts = renderPointWebOrder(sale)
+  let sent = 0
+  try {
+    for (const [index, content] of parts.entries()) {
+      await printPointTicket({
+        requestId: index === 0 ? requestId : `${requestId}-${index + 1}`,
+        externalReference: `COMANDA-${sale.shortId}-${requestId}${parts.length > 1 ? `-${index + 1}` : ''}`,
+        content,
+        printer: webOrderPrinter(),
+        uncertainMessage: 'Point no confirmó el envío de la comanda.',
+        validateResponse: validPrintAction,
+      })
+      sent++
+    }
+  } catch (error) {
+    if (sent) error.uncertain = true
+    throw error
+  }
 }
 
 export async function printPointRefundCopy(sale, refund) {
@@ -582,7 +616,7 @@ export async function printPointCashClosure(closure) {
     externalReference: `CIERRE-${closure.id}`,
     content: renderPointCashClosure(closure),
     uncertainMessage: 'Mercado Pago did not confirm the cash-close print.',
-    validateResponse: result => validIdentifier(result?.id) && ['created', 'on_terminal', 'processed'].includes(result.status),
+    validateResponse: validPrintAction,
   })
 }
 

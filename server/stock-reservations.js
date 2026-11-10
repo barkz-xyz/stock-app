@@ -160,7 +160,7 @@ function representation(row) {
       quantity: Number(line.quantity).toFixed(2), unitPrice: Number(line.unit_price), lineTotal: Number(line.line_total) })) }
 }
 
-async function recordWebSale(db, row, body) {
+async function recordWebSale(db, row, body, queueWebPrints) {
   const details = body.paymentDetails
   const { rows: [existing] } = await db.query('SELECT id,web_payment FROM sales WHERE reservation_id=$1', [row.id])
   if (existing) {
@@ -180,15 +180,15 @@ async function recordWebSale(db, row, body) {
     environment: row.environment, externalReference: row.external_reference, paymentReference: body.paymentReference,
     subtotal: Number(row.total), shippingAmount: null, chargedTotal: null, approvedAt: null, ...details,
   }
-  await db.query(`INSERT INTO sales(id,status,payment_method,channel,reservation_id,total,inventory_applied,created_at,paid_at,web_payment)
-    VALUES($1,'paid','web','web',$2,$3,TRUE,$4,$4,$5)`,
-  [id, row.id, payment.chargedTotal ?? payment.subtotal, payment.approvedAt ?? row.confirmed_at, JSON.stringify(payment)])
+  await db.query(`INSERT INTO sales(id,status,payment_method,channel,reservation_id,total,inventory_applied,created_at,paid_at,web_payment,web_print)
+    VALUES($1,'paid','web','web',$2,$3,TRUE,$4,$4,$5,CASE WHEN $6 THEN '{"status":"queued"}'::jsonb END)`,
+  [id, row.id, payment.chargedTotal ?? payment.subtotal, payment.approvedAt ?? row.confirmed_at, JSON.stringify(payment), queueWebPrints])
   await db.query(`INSERT INTO sale_items(id,sale_id,item_id,item_name,unit,quantity,unit_price,line_total,inventory_quantity)
     SELECT gen_random_uuid(),$2,item_id,item_name,unit,quantity,unit_price,line_total,quantity
     FROM stock_reservation_lines WHERE reservation_id=$1`, [row.id, id])
 }
 
-export function createStockReservationStore({ pool, ttlSeconds = 900, maxActive = 50 }) {
+export function createStockReservationStore({ pool, ttlSeconds = 900, maxActive = 50, queueWebPrints = false }) {
   if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > 1800 || !Number.isInteger(maxActive) || maxActive < 1 || maxActive > 1000) throw new Error('Invalid reservation policy.')
   const requirePostgres = () => { if (!pool) throw reservationError('Reservations require PostgreSQL.', 503, 'SERVICE_UNAVAILABLE') }
   const transaction = async callback => {
@@ -322,14 +322,14 @@ export function createStockReservationStore({ pool, ttlSeconds = 900, maxActive 
         if (row.payment_attempt_id !== body.paymentAttemptId || Number(row.total) !== body.amount) throw reservationError('Payment does not match this reservation.', 409, 'PAYMENT_MISMATCH')
         if (row.status === 'confirmed') {
           if (row.payment_reference !== body.paymentReference) throw reservationError('Reservation already confirmed with a different payment.', 409, 'PAYMENT_MISMATCH')
-          await recordWebSale(db, row, body)
+          await recordWebSale(db, row, body, queueWebPrints)
           return id
         }
         if (row.status !== 'payment_pending') throw reservationError('Reservation is not held for this payment. Reconcile or refund the payment in the checkout.', 409, 'RESERVATION_NOT_PAYABLE')
         const used = await db.query('SELECT 1 FROM stock_reservations WHERE client_id=$1 AND payment_reference=$2 AND id<>$3', [actor.id, body.paymentReference, id])
         if (used.rowCount) throw reservationError('Payment already confirmed another reservation.', 409, 'PAYMENT_ALREADY_USED')
         const { rows: [confirmed] } = await db.query("UPDATE stock_reservations SET status='confirmed',payment_reference=$2,confirmed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1 RETURNING confirmed_at", [id, body.paymentReference])
-        await recordWebSale(db, { ...row, ...confirmed }, body)
+        await recordWebSale(db, { ...row, ...confirmed }, body, queueWebPrints)
         return id
       }).catch(error => {
         if (error.code === '23505' && ['sales_web_payment_ref_idx', 'sales_web_payment_id_idx'].includes(error.constraint)) {

@@ -115,6 +115,44 @@ export function renderPointCashClosure(closure) {
   ].join('')
 }
 
+export function renderPointWebOrder(sale) {
+  const { web } = sale
+  const divider = `${'-'.repeat(lineWidth)}{br}`
+  const header = [
+    '{center}{b}COMANDA WEB{/b}{br}',
+    web.environment === 'test' ? '{b}PRUEBA{/b}{br}' : '',
+    smallLines('Bakery POS | Uso interno'),
+    '{/center}{left}',
+    divider,
+    smallLines(`Venta #${sale.shortId}`),
+    smallLines(`Pedido: ${web.externalReference}`),
+    smallLines(receiptTimestamp(sale.paidAt, process.env.BAKERY_TIME_ZONE)),
+  ].join('')
+  const ending = [
+    divider,
+    smallLines(`Subtotal: ${money(web.subtotal)}`),
+    smallLines(`Despacho: ${web.shippingAmount == null ? 'Sin informar' : money(web.shippingAmount)}`),
+    smallLines(`Total cobrado: ${web.chargedTotal == null ? 'Sin informar' : money(web.chargedTotal)}`),
+  ].join('')
+  const footer = '{br}{/left}'
+  const maxItemsLength = maximumContentLength - header.length - ending.length - footer.length - divider.length - smallLines('Parte 100/100').length
+  const sections = []
+  let products = ''
+  for (const item of sale.items) {
+    const quantity = Number(item.quantity).toLocaleString('es-CL', { maximumFractionDigits: 2 })
+    const lines = smallLines(`${quantity} x ${printerText(item.name, 140)}`) + smallLines(`Precio unit.: ${money(item.unitPrice)}`)
+    if (products.length + lines.length > maxItemsLength) {
+      sections.push(products)
+      products = ''
+    }
+    products += lines
+  }
+  sections.push(products)
+  return sections.map((lines, i) => header
+    + (sections.length > 1 ? smallLines(`Parte ${i + 1}/${sections.length}`) : '')
+    + divider + lines + (i === sections.length - 1 ? ending : '') + footer)
+}
+
 export function renderPointRefundCopy(sale, refund) {
   const saleReference = printerText(sale.shortId || sale.id, 40).toUpperCase()
   const operationId = printerText(sale.mpOperationId || sale.mpPaymentId || '', 80)

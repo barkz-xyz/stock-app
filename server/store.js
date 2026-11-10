@@ -134,6 +134,13 @@ function normalizeRefund(row, items = row.items || [], creditNote = row.creditNo
   }
 }
 
+const webPrintLeaseMs = 5 * 60 * 1000
+
+function webPrintStatus(print) {
+  if (print?.status === 'sending' && Date.now() - Date.parse(print.startedAt) >= webPrintLeaseMs) return 'uncertain'
+  return print?.status ?? null
+}
+
 function normalizeSale(row, items = row.items || [], refunds = row.refunds || []) {
   const normalizedRefunds = refunds.map((refund) => normalizeRefund(refund, refund.items, refund.creditNote || refund.credit_note))
   const refundedTotal = normalizedRefunds
@@ -146,7 +153,8 @@ function normalizeSale(row, items = row.items || [], refunds = row.refunds || []
     status: row.status,
     paymentMethod: row.payment_method ?? row.paymentMethod,
     channel: row.channel || 'pos',
-    ...(row.channel === 'web' ? { reservationId: row.reservation_id ?? row.reservationId, web: row.web_payment ?? row.web } : {}),
+    ...(row.channel === 'web' ? { reservationId: row.reservation_id ?? row.reservationId,
+      web: row.web_payment ?? row.web, webPrintStatus: webPrintStatus(row.web_print) } : {}),
     pointPayment: Boolean(row.point_payment ?? row.pointPayment) || (row.payment_method ?? row.paymentMethod) === 'card',
     pointTaxCondition: row.point_tax_condition ?? row.pointTaxCondition ?? null,
     total: Number(row.total),
@@ -347,6 +355,30 @@ export function getInventoryIntegrationStore() {
 
 export function getStockReservationStore(options = {}) {
   return createStockReservationStore({ pool, ...options })
+}
+
+export async function queuedWebOrderPrints() {
+  if (!pool) return []
+  const { rows } = await pool.query("SELECT id FROM sales WHERE web_print->>'status'='queued' ORDER BY created_at,id LIMIT 10")
+  return rows.map(row => row.id)
+}
+
+export async function claimWebOrderPrint(saleId, requestId, manual = false) {
+  if (!pool) return false
+  const { rowCount } = await pool.query(`
+    UPDATE sales SET web_print=jsonb_build_object('status','sending','requestId',$2::text,'startedAt',clock_timestamp())
+    WHERE id=$1 AND channel='web' AND (web_print->>'requestId') IS DISTINCT FROM $2::text
+      AND (web_print->>'status'='queued' OR ($3::boolean AND (
+        (web_print->>'status') IS DISTINCT FROM 'sending'
+        OR (web_print->>'startedAt')::timestamptz <= clock_timestamp() - $4 * INTERVAL '1 millisecond'
+      )))
+  `, [saleId, requestId, manual, webPrintLeaseMs])
+  return rowCount === 1
+}
+
+export async function finishWebOrderPrint(saleId, requestId, status) {
+  await pool.query(`UPDATE sales SET web_print=web_print || jsonb_build_object('status',$3::text)
+    WHERE id=$1 AND web_print->>'requestId'=$2 AND web_print->>'status'='sending'`, [saleId, requestId, status])
 }
 
 export async function getBootstrapData(now = new Date()) {

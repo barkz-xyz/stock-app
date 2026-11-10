@@ -2,13 +2,30 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
+import { createServer } from 'node:http'
 import test from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
 import { inflateSync } from 'node:zlib'
 import { PDFDocument } from 'pdf-lib'
 import pg from 'pg'
 import { deploymentTestEnvironment } from '../scripts/test-deploy.js'
 import { businessDateAt } from './cash-closure.js'
 import { postgresConfig } from './postgres.js'
+import { renderPointWebOrder } from './point-receipts.js'
+
+test('large web orders preserve every line within the Point print size limit', () => {
+  const items = Array.from({ length: 100 }, (_, i) => ({
+    name: `Producto-${i} ${'ingrediente '.repeat(12)}`, quantity: 1.25, unitPrice: 1000,
+  }))
+  const parts = renderPointWebOrder({ shortId: 'TEST1234', paidAt: '2026-11-10T15:00:00Z', items,
+    web: { environment: 'test', externalReference: 'checkout-large', subtotal: 125000, shippingAmount: 900, chargedTotal: 125900 },
+  })
+  assert.ok(parts.length > 1)
+  assert.ok(parts.every(part => part.length >= 100 && part.length <= 4096 && part.includes('COMANDA WEB')))
+  for (const [i, part] of parts.entries()) assert.ok(part.includes(`Parte ${i + 1}/${parts.length}`))
+  for (const [i] of items.entries()) assert.equal(parts.filter(part => part.includes(`1,25 x Producto-${i} `)).length, 1)
+  assert.match(parts.at(-1), /Total cobrado: \$125\.900/)
+})
 
 test('verified web confirmations, daily reconciliation and tickets share one saved sale', {
   skip: !process.env.TEST_DATABASE_URL, timeout: 30000,
@@ -18,19 +35,43 @@ test('verified web confirmations, daily reconciliation and tickets share one sav
   const db = new pg.Client(postgresConfig(url.href))
   await db.connect()
   let app
+  const prints = []
+  let rejectPrint = false
+  let releaseFirstPrint
+  const firstPrint = new Promise(resolve => { releaseFirstPrint = resolve })
+  const provider = createServer(async (request, response) => {
+    let raw = ''
+    for await (const chunk of request) raw += chunk
+    prints.push({ path: request.url, key: request.headers['x-idempotency-key'],
+      authorization: request.headers.authorization, body: JSON.parse(raw) })
+    if (prints.length === 1) await firstPrint
+    response.setHeader('Content-Type', 'application/json')
+    if (rejectPrint) {
+      response.writeHead(422).end(JSON.stringify({ message: 'Point fixture rejected the order' }))
+    } else {
+      response.writeHead(201).end(JSON.stringify({ id: 'POINT-ACTION-' + prints.length, status: 'created' }))
+    }
+  })
   t.after(async () => {
+    releaseFirstPrint()
     if (app && app.exitCode === null && app.signalCode === null) {
       const exit = once(app, 'exit')
       app.kill()
       await exit
     }
+    provider.closeAllConnections()
+    if (provider.listening) await new Promise(resolve => provider.close(resolve))
     try { await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`) } finally { await db.end() }
   })
   await db.query(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}"`)
   url.searchParams.set('options', `-c search_path=${schema}`)
+  provider.listen(0, '127.0.0.1')
+  await once(provider, 'listening')
   app = spawn(process.execPath, ['server/index.js'], { env: {
     ...deploymentTestEnvironment(process.env), DATABASE_URL: url.href, PORT: '0', HOST: '127.0.0.1',
     SESSION_SECRET: randomUUID(), INVENTORY_API_ENABLED: 'true', INVENTORY_API_ENVIRONMENT: 'test', INVENTORY_RESERVATIONS_ENABLED: 'true',
+    MERCADOPAGO_API_BASE: `http://127.0.0.1:${provider.address().port}`,
+    MERCADOPAGO_WEB_PRINT_ACCESS_TOKEN: 'test-print-only', MERCADOPAGO_WEB_PRINT_TERMINAL_ID: 'POINT-TEST-KITCHEN',
   } })
   let logs = ''
   app.stderr.on('data', chunk => { logs += chunk })
@@ -49,6 +90,14 @@ test('verified web confirmations, daily reconciliation and tickets share one sav
     body: data ? JSON.stringify(data) : undefined,
   })
   const post = (path, data, key) => request(path, { method: 'POST', data, key })
+  const waitForPrint = async (saleId, expected) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const sale = await request(`/api/sales/${saleId}`).then(r => r.json())
+      if (sale.webPrintStatus === expected) return sale
+      await delay(25)
+    }
+    assert.fail(`Expected Point print status ${expected}`)
+  }
   const setup = await post('/api/auth/setup', { username: 'web-test', name: 'Admin test', password: 'Web-test-only-2026' })
   assert.equal(setup.status, 200)
   cookie = setup.headers.get('set-cookie').split(';')[0]
@@ -86,6 +135,7 @@ test('verified web confirmations, daily reconciliation and tickets share one sav
   assert.equal((await change(confirmPath, body, confirmKey)).status, 503)
   assert.equal((await status()).status, 'payment_pending')
   assert.equal((await status()).saleId, null)
+  assert.equal(prints.length, 0)
   await db.query('ALTER TABLE sale_items DROP CONSTRAINT test_force_sale_failure')
 
   const responses = await Promise.all(Array.from({ length: 4 }, () => change(confirmPath, body, confirmKey)))
@@ -95,6 +145,8 @@ test('verified web confirmations, daily reconciliation and tickets share one sav
   assert.match(saleId, /^[0-9a-f-]{36}$/)
   assert.ok(confirmed.every(result => result.saleId === saleId && result.status === 'confirmed' && result.total.amount === 3000))
   assert.equal(confirmed.filter(result => result.replayed).length, 3)
+  releaseFirstPrint()
+  await waitForPrint(saleId, 'submitted')
   assert.equal((await change(confirmPath, body).then(r => r.json())).saleId, saleId)
   assert.equal((await change(confirmPath, { ...body, paymentDetails: { ...details, shippingAmount: 0, chargedTotal: 3000 } })).status, 409)
   assert.equal((await db.query('SELECT count(*)::int AS n FROM sales WHERE reservation_id=$1', [order.id])).rows[0].n, 1)
@@ -116,13 +168,27 @@ test('verified web confirmations, daily reconciliation and tickets share one sav
   assert.equal(sale.web.subtotal, 3000)
   assert.equal(sale.web.shippingAmount, 900)
   assert.equal(sale.total, 3900)
-  const ticket = await request(`/api/sales/${saleId}/ticket`)
-  assert.equal(ticket.status, 200)
-  assert.match(ticket.headers.get('cache-control'), /no-store/)
-  const html = await ticket.text()
-  for (const text of ['PRUEBA', 'checkout-web-test', 'ORD-test-101', 'PAY-test-101', 'Pan &lt;prueba&gt;', '2 × $1.500',
-    '$3.000', 'Despacho</td><td>$900', 'Total cobrado</td><td>$3.900', 'Reimprimir']) assert.ok(html.includes(text), text)
-  assert.equal(await request(`/api/sales/${saleId}/ticket`).then(r => r.text()), html)
+  assert.equal(prints.length, 1, 'Replaying a confirmation must never send another Point action')
+  assert.equal(prints[0].path, '/terminals/v1/actions')
+  assert.equal(prints[0].key, saleId)
+  assert.equal(prints[0].authorization, 'Bearer test-print-only')
+  assert.equal(prints[0].body.type, 'print')
+  assert.deepEqual(prints[0].body.config, { point: { terminal_id: 'POINT-TEST-KITCHEN', subtype: 'custom' } })
+  for (const text of ['COMANDA WEB', 'PRUEBA', 'Uso interno', 'checkout-web-test', '2 x Pan <prueba>',
+    'Precio unit.: $1.500', 'Subtotal: $3.000', 'Despacho: $900', 'Total cobrado: $3.900']) {
+    assert.ok(prints[0].body.content.includes(text), text)
+  }
+  assert.doesNotMatch(prints[0].body.content, /PAY-test-101|ORD-test-101/)
+  const printPath = `/api/sales/${saleId}/print-web-order`
+  const reprintKey = randomUUID()
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await post(printPath, undefined, reprintKey)
+    assert.equal(result.status, 202)
+    assert.equal((await result.json()).pointPrint, 'submitted')
+  }
+  assert.equal(prints.length, 2)
+  assert.equal(prints[1].key, reprintKey)
+  assert.equal(prints[1].body.content, prints[0].body.content)
   assert.equal((await post(`/api/sales/${saleId}/refunds`, { amount: 3900 }, randomUUID())).status, 409)
 
   const register = await post('/api/register-sessions', { openingCash: 1000 }).then(r => r.json())
@@ -160,11 +226,15 @@ test('verified web confirmations, daily reconciliation and tickets share one sav
   assert.equal(reused.status, 409)
   assert.equal((await reused.json()).error.code, 'PAYMENT_ALREADY_USED')
   const oldKey = randomUUID()
+  rejectPrint = true
   const legacy = await change(oldPath, old.body, oldKey).then(r => r.json())
   assert.match(legacy.saleId, /^[0-9a-f-]{36}$/)
   assert.equal((await request(`/api/sales/${legacy.saleId}`).then(r => r.json())).web.chargedTotal, null)
+  await waitForPrint(legacy.saleId, 'failed')
+  assert.equal(legacy.status, 'confirmed')
   const enriched = await change(oldPath, { ...old.body, paymentDetails: { ...details, orderReference: 'ORD-test-102',
     paymentId: 'PAY-test-102', shippingAmount: 0, chargedTotal: 1500 } }).then(r => r.json())
   assert.equal(enriched.saleId, legacy.saleId)
   assert.equal((await change(oldPath, old.body, oldKey).then(r => r.json())).saleId, legacy.saleId)
+  assert.equal(prints.length, 3)
 })

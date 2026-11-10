@@ -4,7 +4,7 @@ import { initializeCashLedger } from './cash-ledger.js'
 import { createIntegrationStore } from './integration-store.js'
 import { closureTimeZone } from './cash-closure.js'
 
-export const databaseSchemaVersion = 5
+export const databaseSchemaVersion = 6
 
 export async function migrateDatabase(pool) {
   const client = await pool.connect()
@@ -250,6 +250,7 @@ export async function migrateDatabase(pool) {
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT 'pos';
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS reservation_id UUID REFERENCES stock_reservations(id);
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS web_payment JSONB;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS web_print JSONB;
       ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_payment_method_check;
       ALTER TABLE sales ADD CONSTRAINT sales_payment_method_check CHECK(payment_method IN ('cash','card','web'));
       ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_web_channel_check;
@@ -263,6 +264,8 @@ export async function migrateDatabase(pool) {
         ON sales((web_payment->>'environment'),(web_payment->>'paymentReference')) WHERE channel='web';
       CREATE UNIQUE INDEX IF NOT EXISTS sales_web_payment_id_idx
         ON sales((web_payment->>'environment'),(web_payment->>'paymentId')) WHERE channel='web';
+      CREATE INDEX IF NOT EXISTS sales_web_print_queue_idx ON sales(created_at,id)
+        WHERE web_print->>'status'='queued';
     `)
     await initializeCashLedger(client)
     await createIntegrationStore({ pool: client }).initialize()

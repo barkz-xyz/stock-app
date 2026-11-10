@@ -2,7 +2,7 @@ import express from 'express'
 import { createIntegrationAccessRouter, replyError } from './inventory-api.js'
 import { reservationError, reservationId } from './stock-reservations.js'
 
-export function createReservationRouter({ getIntegrations, getReservations, config }) {
+export function createReservationRouter({ getIntegrations, getReservations, config, onConfirmed }) {
   const router = express.Router()
   router.use(createIntegrationAccessRouter({ getStore: getIntegrations, config, scope: 'inventory:reserve' }))
   router.use((req, res, next) => {
@@ -21,6 +21,7 @@ export function createReservationRouter({ getIntegrations, getReservations, conf
       : await store[action](actor(req), reservationId(req.params.id), key, req.body)
     res.set('Idempotency-Replayed', String(result.replayed))
     res.status(action === 'create' && !result.replayed ? 201 : 200).json({ ...result.reservation, replayed: result.replayed })
+    if (action === 'confirm') onConfirmed?.()
   }
   router.post('/', write('create'))
   router.get('/:id', async (req, res) => res.json(await getReservations().get(actor(req), reservationId(req.params.id))))

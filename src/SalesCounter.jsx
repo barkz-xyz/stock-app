@@ -135,14 +135,48 @@ function SaleLines({ items }) {
 
 function WebSaleDetails({ sale, onClose }) {
   const { t, language, formatCurrency } = useI18n()
-  const [ticketOpened, setTicketOpened] = useState(false)
+  const [printStatus, setPrintStatus] = useState(sale.webPrintStatus)
+  const [printing, setPrinting] = useState(false)
+  const [printError, setPrintError] = useState('')
+  const printKey = useRef(null)
   const tx = (es, en) => language === 'es' ? es : en
   const { web } = sale
   const amount = value => value == null ? tx('Sin informar', 'Unavailable') : formatCurrency(value)
+  const waitingForPoint = printStatus === 'queued' || printStatus === 'sending'
+  const printMessage = {
+    queued: tx('Comanda en cola para el Point.', 'Order queued for Point.'),
+    sending: tx('Enviando la comanda al Point…', 'Sending the order to Point…'),
+    submitted: tx('Comanda enviada al Point.', 'Order sent to Point.'),
+    failed: tx('No se pudo enviar la comanda al Point.', 'Could not send the order to Point.'),
+    uncertain: tx('Point no confirmó el envío. Revisa el terminal antes de reimprimir.', 'Point did not confirm submission. Check the terminal before reprinting.'),
+  }[printStatus]
+  const printLabel = printStatus === 'submitted' || printStatus === 'uncertain'
+    ? tx('Reimprimir', 'Reprint') : tx('Imprimir comanda', 'Print order')
+  useEffect(() => {
+    if (!waitingForPoint) return
+    let active = true
+    const timer = setInterval(() => {
+      api.sale(sale.id).then(next => { if (active) setPrintStatus(next.webPrintStatus) }).catch(() => {})
+    }, 1500)
+    return () => { active = false; clearInterval(timer) }
+  }, [sale.id, waitingForPoint])
+  const print = async () => {
+    if (printing || waitingForPoint) return
+    setPrinting(true)
+    setPrintError('')
+    printKey.current ||= crypto.randomUUID()
+    try {
+      const { pointPrint } = await api.printWebOrder(sale.id, printKey.current)
+      setPrintStatus(pointPrint)
+      if (pointPrint !== 'sending' && pointPrint !== 'queued') printKey.current = null
+    } catch (error) {
+      setPrintError(error.message)
+    } finally { setPrinting(false) }
+  }
   const date = new Intl.DateTimeFormat(language === 'es' ? 'es-CL' : 'en-US', {
     timeZone: 'America/Santiago', dateStyle: 'short', timeStyle: 'short',
   }).format(new Date(sale.paidAt))
-  return <Modal title={`#${sale.shortId}`} eyebrow={tx('Venta web', 'Web sale')} onClose={onClose}>
+  return <Modal title={`#${sale.shortId}`} eyebrow={tx('Venta web', 'Web sale')} onClose={onClose} closeable={!printing}>
     <div className="sale-details-body">
       <div className="sale-detail-summary">
         <div><span>{tx('Subtotal productos', 'Products subtotal')}</span><strong>{amount(web.subtotal)}</strong></div>
@@ -157,11 +191,13 @@ function WebSaleDetails({ sale, onClose }) {
         <div><span>{web.approvedAt ? tx('Aprobación', 'Approved') : tx('Confirmación', 'Confirmed')}</span><strong>{date}</strong></div>
       </div></div>
       <SaleLines items={sale.items} />
+      {printMessage && <p className="modal-description" role="status">{printMessage}</p>}
+      {printError && <div className="inline-error" role="alert"><AlertTriangle size={16} />{printError}</div>}
       <div className="modal-actions">
-        <button type="button" className="button secondary" onClick={onClose}>{t('close')}</button>
-        <a className="button primary" href={api.webSaleTicketUrl(sale.id)} target="_blank" rel="noopener" onClick={() => setTicketOpened(true)}>
-          <ReceiptText size={17} />{ticketOpened ? tx('Reimprimir', 'Reprint') : tx('Imprimir ticket', 'Print ticket')}
-        </a>
+        <button type="button" className="button secondary" onClick={onClose} disabled={printing}>{t('close')}</button>
+        <button type="button" className="button primary" onClick={print} disabled={printing || waitingForPoint}>
+          <ReceiptText size={17} />{printing ? tx('Enviando…', 'Sending…') : printLabel}
+        </button>
       </div>
     </div>
   </Modal>

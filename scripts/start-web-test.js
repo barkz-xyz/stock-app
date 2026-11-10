@@ -1,6 +1,7 @@
 import { randomUUID, randomBytes } from 'node:crypto'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
+import { parseEnv } from 'node:util'
 import pg from 'pg'
 import { postgresConfig } from '../server/postgres.js'
 
@@ -34,6 +35,14 @@ Object.assign(process.env, {
   INVENTORY_API_ENABLED: 'true', INVENTORY_API_ENVIRONMENT: 'test', INVENTORY_RESERVATIONS_ENABLED: 'true',
   SEED_DEMO_DATA: 'false', BAKERY_TIME_ZONE: 'America/Santiago',
 })
+if (process.env.WEB_TEST_POINT_PRINT_ENV_FILE) {
+  const source = parseEnv(await readFile(process.env.WEB_TEST_POINT_PRINT_ENV_FILE, 'utf8'))
+  const accessToken = source.MERCADOPAGO_ACCESS_TOKEN
+  const terminalId = source.MERCADOPAGO_POINT_TERMINAL_ID
+  if (!accessToken || !terminalId) throw new Error('The Point printing file needs an access token and terminal ID.')
+  process.env.MERCADOPAGO_WEB_PRINT_ACCESS_TOKEN = accessToken
+  process.env.MERCADOPAGO_WEB_PRINT_TERMINAL_ID = terminalId
+}
 
 const store = await import('../server/store.js')
 await store.initializeStore()

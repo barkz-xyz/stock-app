@@ -13,20 +13,20 @@ import { authStatus, login, logout, setupAdmin, changePassword, pointAccessIsPro
 import {
   buildPointManagement, cancelPointOrder, createPointOrder, createPointPos, createPointStore, deletePointPos, deletePointStore,
   getConfiguredTerminal, getMercadoPagoAccount, getPointOrder, getPointPayment, getPointPos, getPointStore,
-  listPointPos, listPointStores, listPointTerminals, pointConfiguration, printPointCashClosure, printPointRefundCopy, refundPointOrder,
+  listPointPos, listPointStores, listPointTerminals, pointConfiguration, pointWebPrintConfigured,
+  printPointCashClosure, printPointRefundCopy, printPointWebOrder, refundPointOrder,
   setupPointTerminal, updatePointPos, updatePointStore, validatePointWebhook,
 } from './mercadopago.js'
 import {
   adjustItem, saveInventoryBatch, searchSales, attachPointOrder, closeStore, completeRefund,
-  claimPointOrder, createItem, createSale, deleteItem, failRefund, getSale,
+  claimPointOrder, claimWebOrderPrint, createItem, createSale, deleteItem, failRefund, finishWebOrderPrint, getSale,
   getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales, getInventoryIntegrationStore, getStockReservationStore,
-  markCardSaleFailed, prepareRefund, rememberPendingRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
+  markCardSaleFailed, prepareRefund, queuedWebOrderPrints, rememberPendingRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
   updateItem, updateSaleFromPoint, updateSalePaymentDetails,
   listUsers, createUser, updateUser, listRegisterSessions, listClosureHistory, getActiveRegisterSession, getRegisterOpening, getRegisterCashStore, openRegisterSession, getRegisterClosure, saveRegisterClosure, getRegisterClosureRevision,
 } from './store.js'
 import { createDailyReport } from './report.js'
 import { createCashClosurePdf } from './cash-closure-pdf.js'
-import { renderWebSaleTicket } from './web-sale-ticket.js'
 import { closeChangeListener, listenForDatabaseChanges, subscribeToChanges } from './changes.js'
 
 const app = express()
@@ -36,6 +36,7 @@ const htmlCacheControl = 'public, max-age=0, s-maxage=60, stale-while-revalidate
 const inventoryApiConfig = inventoryApiConfiguration()
 let inventoryIntegrations
 let stockReservations, reservationCleanup
+let webPrintDrain
 
 app.disable('x-powered-by')
 app.set('trust proxy', process.env.RAILWAY_ENVIRONMENT_ID ? 1 : false)
@@ -46,7 +47,8 @@ app.use('/api', (_req, res, next) => {
   res.vary('Cookie')
   next()
 })
-app.use('/api/integrations/v1/reservations', createReservationRouter({ getIntegrations: () => inventoryIntegrations, getReservations: () => stockReservations, config: inventoryApiConfig }))
+app.use('/api/integrations/v1/reservations', createReservationRouter({ getIntegrations: () => inventoryIntegrations,
+  getReservations: () => stockReservations, config: inventoryApiConfig, onConfirmed: drainWebOrderPrints }))
 app.use('/api/integrations/v1', createInventoryRouter({ getStore: () => inventoryIntegrations, config: inventoryApiConfig }))
 app.use(express.json({ limit: '200kb', inflate: false }))
 
@@ -160,6 +162,36 @@ function requireProtectedPoint() {
   if (!pointAccessIsProtected() && !pointConfiguration().mockMode) {
     throw Object.assign(new Error('Set STAFF_PIN and SESSION_SECRET before enabling live Point payments.'), { status: 503 })
   }
+}
+
+function webOrderPrintingEnabled() {
+  return pointWebPrintConfigured() && (pointAccessIsProtected() || pointConfiguration().mockMode)
+}
+
+async function sendWebOrderPrint(saleId, requestId, manual = false) {
+  if (!(await claimWebOrderPrint(saleId, requestId, manual))) return null
+  let status = 'submitted'
+  try {
+    const sale = await getSale(saleId)
+    await printPointWebOrder(sale, requestId)
+  } catch (error) {
+    status = error.uncertain ? 'uncertain' : 'failed'
+    console.warn('Point web order print:', saleId, status, error.mercadoPagoStatus || error.status || '')
+  }
+  await finishWebOrderPrint(saleId, requestId, status)
+  return status
+}
+
+function drainWebOrderPrints() {
+  if (webPrintDrain || !webOrderPrintingEnabled()) return
+  webPrintDrain = (async () => {
+    let queued = await queuedWebOrderPrints()
+    while (queued.length) {
+      for (const saleId of queued) await sendWebOrderPrint(saleId, saleId)
+      queued = await queuedWebOrderPrints()
+    }
+  })().catch(() => console.error('Could not process the web order print queue.'))
+    .finally(() => { webPrintDrain = null })
 }
 
 function elapsedMilliseconds(startedAt) {
@@ -575,12 +607,16 @@ app.post(['/api/sales/:id/retry-point', '/api/sales/:id/retry-card'], async (req
     next(error)
   }
 })
-app.get('/api/sales/:id/ticket', requireAdmin, async (req, res) => {
-  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(req.params.id)) return res.sendStatus(404)
+app.post('/api/sales/:id/print-web-order', requireAdmin, async (req, res) => {
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(req.params.id)) return res.status(404).json({ error: 'Venta web no encontrada.' })
   const sale = await getSale(req.params.id)
-  if (sale?.channel !== 'web') return res.sendStatus(404)
-  res.set('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
-  res.type('html').send(renderWebSaleTicket(sale))
+  if (sale?.channel !== 'web') return res.status(404).json({ error: 'Venta web no encontrada.' })
+  if (!webOrderPrintingEnabled()) return res.status(503).json({ error: 'Configura el Point para imprimir comandas web.' })
+  const requestId = checkoutKey(req.headers['idempotency-key'])
+  if (!requestId) return res.status(400).json({ error: 'Falta la referencia de impresión.' })
+  const status = await sendWebOrderPrint(sale.id, requestId, true)
+  const pointPrint = status ?? (await getSale(sale.id)).webPrintStatus
+  res.status(pointPrint === 'submitted' ? 202 : 200).json({ pointPrint })
 })
 app.get('/api/sales/:id', async (req, res, next) => {
   try {
@@ -868,10 +904,15 @@ app.use((error, _req, res, _next) => {
 await initializeStore()
 inventoryIntegrations = getInventoryIntegrationStore()
 if (inventoryApiConfig.enabled && inventoryApiConfig.production && !inventoryIntegrations.persistent) throw new Error('The production inventory API requires PostgreSQL.')
-stockReservations = getStockReservationStore({ ttlSeconds: inventoryApiConfig.reservationTtlSeconds })
+stockReservations = getStockReservationStore({
+  ttlSeconds: inventoryApiConfig.reservationTtlSeconds, queueWebPrints: webOrderPrintingEnabled(),
+})
 if (inventoryApiConfig.reservationsEnabled && (!inventoryApiConfig.enabled || !stockReservations.persistent)) throw new Error('Stock reservations require the inventory API and PostgreSQL.')
 if (stockReservations.persistent) {
-  const cleanup = () => stockReservations.expire().catch(() => console.error(JSON.stringify({ event: 'stock_reservation_expiry_failed' })))
+  const cleanup = () => {
+    drainWebOrderPrints()
+    return stockReservations.expire().catch(() => console.error(JSON.stringify({ event: 'stock_reservation_expiry_failed' })))
+  }
   await cleanup()
   reservationCleanup = setInterval(cleanup, 10000)
   reservationCleanup.unref()

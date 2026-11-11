@@ -574,12 +574,21 @@ export function pointWebPrintConfigured() {
   return mockMode || Boolean(accessToken && terminalId)
 }
 
-export async function printPointWebOrder(sale, requestId) {
+export async function getPointWebPrintAction(id) {
+  if (mockMode) return { id, status: 'processed' }
+  return mercadoPagoRequest(`/terminals/v1/actions/${encodeURIComponent(id)}`, {
+    accessToken: webOrderPrinter().accessToken,
+    validateResponse: result => validIdentifier(result?.id) && String(result.id) === id
+      && typeof result.status === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(result.status),
+  })
+}
+
+export async function printPointWebOrder(sale, requestId, saveAction) {
   const parts = renderPointWebOrder(sale)
   let sent = 0
   try {
     for (const [index, content] of parts.entries()) {
-      await printPointTicket({
+      const action = await printPointTicket({
         requestId: index === 0 ? requestId : `${requestId}-${index + 1}`,
         externalReference: `COMANDA-${sale.shortId}-${requestId}${parts.length > 1 ? `-${index + 1}` : ''}`,
         content,
@@ -588,6 +597,7 @@ export async function printPointWebOrder(sale, requestId) {
         validateResponse: validPrintAction,
       })
       sent++
+      await saveAction({ id: String(action.id), status: action.status, requestId, part: index + 1, parts: parts.length })
     }
   } catch (error) {
     if (sent) error.uncertain = true

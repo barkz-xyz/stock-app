@@ -36,20 +36,35 @@ test('verified web confirmations, daily reconciliation and tickets share one sav
   await db.connect()
   let app
   const prints = []
+  const actionStatuses = new Map()
+  const actionLookups = []
   let rejectPrint = false
+  let rejectLookup = false
   let releaseFirstPrint
   const firstPrint = new Promise(resolve => { releaseFirstPrint = resolve })
   const provider = createServer(async (request, response) => {
+    response.setHeader('Content-Type', 'application/json')
+    if (request.method === 'GET') {
+      const id = request.url.match(/^\/terminals\/v1\/actions\/(POINT-ACTION-\d+)$/)?.[1]
+      actionLookups.push({ id, authorization: request.headers.authorization })
+      if (rejectLookup || !actionStatuses.has(id)) {
+        response.writeHead(503).end(JSON.stringify({ message: 'Point fixture unavailable' }))
+      } else {
+        response.end(JSON.stringify({ id, status: actionStatuses.get(id) }))
+      }
+      return
+    }
     let raw = ''
     for await (const chunk of request) raw += chunk
     prints.push({ path: request.url, key: request.headers['x-idempotency-key'],
       authorization: request.headers.authorization, body: JSON.parse(raw) })
+    const id = 'POINT-ACTION-' + prints.length
     if (prints.length === 1) await firstPrint
-    response.setHeader('Content-Type', 'application/json')
-    if (rejectPrint) {
+    if (rejectPrint || request.headers['x-idempotency-key']?.endsWith('-2')) {
       response.writeHead(422).end(JSON.stringify({ message: 'Point fixture rejected the order' }))
     } else {
-      response.writeHead(201).end(JSON.stringify({ id: 'POINT-ACTION-' + prints.length, status: 'created' }))
+      actionStatuses.set(id, 'created')
+      response.writeHead(201).end(JSON.stringify({ id, status: 'created' }))
     }
   })
   t.after(async () => {
@@ -168,6 +183,7 @@ test('verified web confirmations, daily reconciliation and tickets share one sav
   assert.equal(sale.web.subtotal, 3000)
   assert.equal(sale.web.shippingAmount, 900)
   assert.equal(sale.total, 3900)
+  assert.deepEqual(sale.webPrintActions, [{ id: 'POINT-ACTION-1', status: 'created', requestId: saleId, part: 1, parts: 1 }])
   assert.equal(prints.length, 1, 'Replaying a confirmation must never send another Point action')
   assert.equal(prints[0].path, '/terminals/v1/actions')
   assert.equal(prints[0].key, saleId)
@@ -179,12 +195,29 @@ test('verified web confirmations, daily reconciliation and tickets share one sav
     assert.ok(prints[0].body.content.includes(text), text)
   }
   assert.doesNotMatch(prints[0].body.content, /PAY-test-101|ORD-test-101/)
+  const readSale = (refresh = false) => request(`/api/sales/${saleId}${refresh ? '?refresh=true' : ''}`).then(r => r.json())
+  actionStatuses.set('POINT-ACTION-1', 'on_terminal')
+  assert.equal((await readSale(true)).webPrintActions[0].status, 'on_terminal')
+  assert.equal((await readSale()).webPrintActions[0].status, 'on_terminal')
+  assert.deepEqual(actionLookups, [{ id: 'POINT-ACTION-1', authorization: 'Bearer test-print-only' }])
+  rejectLookup = true
+  const unavailable = await readSale(true)
+  assert.equal(unavailable.webPrintRefreshFailed, true)
+  assert.equal(unavailable.webPrintActions[0].status, 'on_terminal')
+  rejectLookup = false
+  actionStatuses.set('POINT-ACTION-1', 'processed')
+  assert.equal((await readSale(true)).webPrintActions[0].status, 'processed')
+  assert.equal(prints.length, 1, 'Reading the Point status must never print again')
+
   const printPath = `/api/sales/${saleId}/print-web-order`
   const reprintKey = randomUUID()
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await post(printPath, undefined, reprintKey)
+  for (const key of [reprintKey, reprintKey, saleId]) {
+    const result = await post(printPath, undefined, key)
     assert.equal(result.status, 202)
-    assert.equal((await result.json()).pointPrint, 'submitted')
+    const printed = await result.json()
+    assert.equal(printed.pointPrint, 'submitted')
+    assert.deepEqual(printed.webPrintActions.map(({ id, status }) => [id, status]),
+      [['POINT-ACTION-1', 'processed'], ['POINT-ACTION-2', 'created']])
   }
   assert.equal(prints.length, 2)
   assert.equal(prints[1].key, reprintKey)
@@ -254,4 +287,29 @@ test('verified web confirmations, daily reconciliation and tickets share one sav
   assert.equal(sessionAfterWeb.closure.expectedCash, 2500)
   assert.equal(sessionAfterWeb.closure.revision, 1)
   assert.equal(sessionAfterWeb.live.net, 1500)
+
+  const legacyState = { status: 'submitted', requestId: legacy.saleId }
+  await db.query('UPDATE sales SET web_print=$2 WHERE id=$1', [legacy.saleId, legacyState])
+  const lookupsBeforeLegacy = actionLookups.length
+  const historical = await request(`/api/sales/${legacy.saleId}?refresh=true`).then(r => r.json())
+  assert.equal(historical.webPrintStatus, 'submitted')
+  assert.deepEqual(historical.webPrintActions, [])
+  assert.equal(actionLookups.length, lookupsBeforeLegacy, 'Old submissions without an action ID do not query Point')
+
+  // Model an oversized receipt in the disposable database to exercise a failure after its first part.
+  await db.query(`
+    INSERT INTO sale_items(id,sale_id,item_id,item_name,unit,quantity,unit_price,line_total)
+    SELECT gen_random_uuid(),$1,$2,'Producto largo ' || n || repeat(' detalle',15),'pieces',1,1500,1500
+    FROM generate_series(1,40) AS n
+  `, [saleId, item.id])
+  rejectPrint = false
+  const multipartKey = randomUUID()
+  const partial = await post(printPath, undefined, multipartKey).then(r => r.json())
+  assert.equal(partial.pointPrint, 'uncertain')
+  assert.deepEqual(partial.webPrintActions.map(action => action.id), ['POINT-ACTION-1', 'POINT-ACTION-2', 'POINT-ACTION-4'])
+  const [firstPart] = partial.webPrintActions.filter(action => action.requestId === multipartKey)
+  assert.equal(firstPart.part, 1)
+  assert.ok(firstPart.parts > 1)
+  assert.equal(prints.at(-1).key, multipartKey + '-2')
+  assert.deepEqual((await readSale()).webPrintActions, partial.webPrintActions)
 })

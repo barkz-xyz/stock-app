@@ -6,13 +6,13 @@ import express from 'express'
 import { createInventoryRouter, createIntegrationAdminRouter, inventoryApiConfiguration } from './inventory-api.js'
 import { createReservationRouter, createReservationAdminRouter } from './reservation-api.js'
 import { parseCalendarDate } from '../src/dates.js'
-import { saleUsesPoint } from '../src/pointPayments.js'
+import { pointPrintIsFinal, saleUsesPoint } from '../src/pointPayments.js'
 import { registerIsActive } from '../src/registerDay.js'
 import { closurePeriod } from './cash-closure.js'
 import { authStatus, login, logout, setupAdmin, changePassword, pointAccessIsProtected, requireAuth, requireAdmin, cashierBoundary } from './auth.js'
 import {
   buildPointManagement, cancelPointOrder, createPointOrder, createPointPos, createPointStore, deletePointPos, deletePointStore,
-  getConfiguredTerminal, getMercadoPagoAccount, getPointOrder, getPointPayment, getPointPos, getPointStore,
+  getConfiguredTerminal, getMercadoPagoAccount, getPointOrder, getPointPayment, getPointPos, getPointStore, getPointWebPrintAction,
   listPointPos, listPointStores, listPointTerminals, pointConfiguration, pointWebPrintConfigured,
   printPointCashClosure, printPointRefundCopy, printPointWebOrder, refundPointOrder,
   setupPointTerminal, updatePointPos, updatePointStore, validatePointWebhook,
@@ -21,8 +21,8 @@ import {
   adjustItem, saveInventoryBatch, searchSales, attachPointOrder, closeStore, completeRefund,
   claimPointOrder, claimWebOrderPrint, createItem, createSale, deleteItem, failRefund, finishWebOrderPrint, getSale,
   getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales, getInventoryIntegrationStore, getStockReservationStore,
-  markCardSaleFailed, prepareRefund, queuedWebOrderPrints, rememberPendingRefund, recordCreditNote, resolveRefundInventoryReview, getRegisterDaySummary,
-  updateItem, updateSaleFromPoint, updateSalePaymentDetails,
+  markCardSaleFailed, prepareRefund, queuedWebOrderPrints, rememberPendingRefund, recordCreditNote, recordWebPrintAction, resolveRefundInventoryReview, getRegisterDaySummary,
+  updateItem, updateSaleFromPoint, updateSalePaymentDetails, updateWebPrintActions,
   listUsers, createUser, updateUser, listRegisterSessions, listClosureHistory, getActiveRegisterSession, getRegisterOpening, getRegisterCashStore, openRegisterSession, getRegisterClosure, saveRegisterClosure, getRegisterClosureRevision,
 } from './store.js'
 import { createDailyReport } from './report.js'
@@ -173,13 +173,32 @@ async function sendWebOrderPrint(saleId, requestId, manual = false) {
   let status = 'submitted'
   try {
     const sale = await getSale(saleId)
-    await printPointWebOrder(sale, requestId)
+    await printPointWebOrder(sale, requestId, action => recordWebPrintAction(saleId, action))
   } catch (error) {
     status = error.uncertain ? 'uncertain' : 'failed'
     console.warn('Point web order print:', saleId, status, error.mercadoPagoStatus || error.status || '')
   }
   await finishWebOrderPrint(saleId, requestId, status)
   return status
+}
+
+async function refreshWebPrintActions(sale) {
+  const previous = sale.webPrintActions
+  if (previous.every(action => pointPrintIsFinal(action.status))) return sale
+  if (!webOrderPrintingEnabled()) return { ...sale, webPrintRefreshFailed: true }
+
+  const results = await Promise.allSettled(previous.map(async action => {
+    if (pointPrintIsFinal(action.status)) return action
+    const current = await getPointWebPrintAction(action.id)
+    return current.status === action.status ? action : { ...action, status: current.status }
+  }))
+  const actions = results.map((result, index) => result.status === 'fulfilled' ? result.value : previous[index])
+  const failed = results.some(result => result.status === 'rejected')
+  if (actions.some((action, index) => action !== previous[index])) {
+    await updateWebPrintActions(sale.id, previous, actions)
+    sale = await getSale(sale.id)
+  }
+  return { ...sale, webPrintRefreshFailed: failed }
 }
 
 function drainWebOrderPrints() {
@@ -626,13 +645,15 @@ app.post('/api/sales/:id/print-web-order', requireAdmin, async (req, res) => {
   const requestId = checkoutKey(req.headers['idempotency-key'])
   if (!requestId) return res.status(400).json({ error: 'Falta la referencia de impresión.' })
   const status = await sendWebOrderPrint(sale.id, requestId, true)
-  const pointPrint = status ?? (await getSale(sale.id)).webPrintStatus
-  res.status(pointPrint === 'submitted' ? 202 : 200).json({ pointPrint })
+  const updated = await getSale(sale.id)
+  const pointPrint = status ?? updated.webPrintStatus
+  res.status(pointPrint === 'submitted' ? 202 : 200).json({ pointPrint, webPrintActions: updated.webPrintActions })
 })
 app.get('/api/sales/:id', async (req, res, next) => {
   try {
     let sale = await getSale(req.params.id)
     if (!sale) return res.status(404).json({ error: 'Sale not found.' })
+    if (req.query.refresh === 'true' && sale.channel === 'web') return res.json(await refreshWebPrintActions(sale))
     if (req.query.refresh === 'true' && saleUsesPoint(sale) && sale.status === 'pending' && sale.mpOrderId && pointConfiguration().configured) {
       const previousPointStatus = sale.mpStatus
       const refreshStartedAt = performance.now()

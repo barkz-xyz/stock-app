@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, Check, ChevronRight, ChevronUp, ChevronDown, CreditCard, FileCheck2, Globe, History, LayoutDashboard, Minus, PackageOpen, Plus, ReceiptText, RotateCw, Search, ShoppingBasket, Monitor, Star, Trash2, Undo2, Wifi, X } from 'lucide-react'
 import { api } from './api.js'
 import { beginCheckout, clearCheckout, pendingCheckout } from './checkoutAttempts.js'
-import { saleUsesPoint } from './pointPayments.js'
+import { pointPrintIsFinal, saleUsesPoint } from './pointPayments.js'
 import { businessDayKey } from './registerDay.js'
 import { beginRefund, clearRefund, pendingRefund } from './refundAttempts.js'
 import { useI18n } from './i18n.js'
@@ -135,39 +135,66 @@ function SaleLines({ items }) {
 
 function WebSaleDetails({ sale, onClose }) {
   const { t, language, formatCurrency } = useI18n()
-  const [printStatus, setPrintStatus] = useState(sale.webPrintStatus)
+  const [printState, setPrintState] = useState({ status: sale.webPrintStatus, actions: sale.webPrintActions ?? [] })
   const [printing, setPrinting] = useState(false)
   const [printError, setPrintError] = useState('')
+  const [refreshFailed, setRefreshFailed] = useState(false)
+  const [refreshCount, setRefreshCount] = useState(0)
   const printKey = useRef(null)
   const tx = (es, en) => language === 'es' ? es : en
   const { web } = sale
+  const { status: printStatus, actions } = printState
   const amount = value => value == null ? tx('Sin informar', 'Unavailable') : formatCurrency(value)
   const waitingForPoint = printStatus === 'queued' || printStatus === 'sending'
+  const watchingPoint = waitingForPoint || actions.some(action => !pointPrintIsFinal(action.status))
   const printMessage = {
     queued: tx('Comanda en cola para el Point.', 'Order queued for Point.'),
     sending: tx('Enviando la comanda al Point…', 'Sending the order to Point…'),
-    submitted: tx('Comanda enviada al Point.', 'Order sent to Point.'),
+    submitted: actions.length ? null : tx('Comanda enviada al Point. No se guardó el ID de impresión.', 'Order sent to Point. The print ID was not saved.'),
     failed: tx('No se pudo enviar la comanda al Point.', 'Could not send the order to Point.'),
     uncertain: tx('Point no confirmó el envío. Revisa el terminal antes de reimprimir.', 'Point did not confirm submission. Check the terminal before reprinting.'),
   }[printStatus]
   const printLabel = printStatus === 'submitted' || printStatus === 'uncertain'
     ? tx('Reimprimir', 'Reprint') : tx('Imprimir comanda', 'Print order')
+  const actionLabels = {
+    created: tx('Creada en Mercado Pago', 'Created in Mercado Pago'),
+    on_terminal: tx('Recibida por el Point', 'Received by Point'),
+    at_terminal: tx('Recibida por el Point', 'Received by Point'),
+    processed: tx('Procesada por el Point', 'Processed by Point'),
+    failed: tx('Fallida', 'Failed'),
+    canceled: tx('Cancelada', 'Cancelled'),
+    cancelled: tx('Cancelada', 'Cancelled'),
+    expired: tx('Vencida', 'Expired'),
+  }
   useEffect(() => {
-    if (!waitingForPoint) return
-    let active = true
-    const timer = setInterval(() => {
-      api.sale(sale.id).then(next => { if (active) setPrintStatus(next.webPrintStatus) }).catch(() => {})
-    }, 1500)
-    return () => { active = false; clearInterval(timer) }
-  }, [sale.id, waitingForPoint])
+    if (printing || (!watchingPoint && !refreshCount)) return
+    const controller = new AbortController()
+    const stopAt = Date.now() + 60_000
+    let timer
+    const refresh = async () => {
+      try {
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)])
+        const next = await api.sale(sale.id, true, { signal })
+        if (controller.signal.aborted) return
+        setPrintState({ status: next.webPrintStatus, actions: next.webPrintActions ?? [] })
+        setRefreshFailed(Boolean(next.webPrintRefreshFailed))
+      } catch {
+        if (!controller.signal.aborted) setRefreshFailed(true)
+      }
+      if (!controller.signal.aborted && watchingPoint && Date.now() < stopAt) timer = setTimeout(refresh, 4000)
+    }
+    refresh()
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [sale.id, printing, watchingPoint, refreshCount])
   const print = async () => {
     if (printing || waitingForPoint) return
     setPrinting(true)
     setPrintError('')
+    setRefreshFailed(false)
     printKey.current ||= crypto.randomUUID()
     try {
-      const { pointPrint } = await api.printWebOrder(sale.id, printKey.current)
-      setPrintStatus(pointPrint)
+      const { pointPrint, webPrintActions } = await api.printWebOrder(sale.id, printKey.current)
+      setPrintState(current => ({ status: pointPrint, actions: webPrintActions ?? current.actions }))
       if (pointPrint !== 'sending' && pointPrint !== 'queued') printKey.current = null
     } catch (error) {
       setPrintError(error.message)
@@ -192,6 +219,19 @@ function WebSaleDetails({ sale, onClose }) {
       </div></div>
       <SaleLines items={sale.items} />
       {printMessage && <p className="modal-description" role="status">{printMessage}</p>}
+      {(actions.length > 0 || waitingForPoint) && <section className="point-payment-details" aria-label={tx('Impresión en Point', 'Point printing')}>
+        <header>
+          <div><ReceiptText size={15} /><strong>{tx('Impresión en Point', 'Point printing')}</strong></div>
+          {watchingPoint && <button type="button" className="button secondary compact" disabled={printing} onClick={() => setRefreshCount(count => count + 1)}>
+            <RotateCw size={14} />{tx('Actualizar estado', 'Refresh status')}
+          </button>}
+        </header>
+        {actions.map(action => <div className="point-payment-grid" key={`${action.requestId}:${action.part}`}>
+          <div><span>{tx('ID de impresión', 'Print ID')}{action.parts > 1 && ` · ${tx('Parte', 'Part')} ${action.part}/${action.parts}`}</span><strong>{action.id}</strong></div>
+          <div><span>{tx('Estado', 'Status')}</span><strong role="status">{Object.hasOwn(actionLabels, action.status) ? actionLabels[action.status] : action.status}</strong></div>
+        </div>)}
+      </section>}
+      {refreshFailed && <div className="inline-error" role="status"><AlertTriangle size={16} />{tx('No se pudo consultar el Point. Se muestra el último estado registrado.', 'Point could not be reached. The last saved status is shown.')}</div>}
       {printError && <div className="inline-error" role="alert"><AlertTriangle size={16} />{printError}</div>}
       <div className="modal-actions">
         <button type="button" className="button secondary" onClick={onClose} disabled={printing}>{t('close')}</button>

@@ -154,7 +154,8 @@ function normalizeSale(row, items = row.items || [], refunds = row.refunds || []
     paymentMethod: row.payment_method ?? row.paymentMethod,
     channel: row.channel || 'pos',
     ...(row.channel === 'web' ? { reservationId: row.reservation_id ?? row.reservationId,
-      web: row.web_payment ?? row.web, webPrintStatus: webPrintStatus(row.web_print) } : {}),
+      web: row.web_payment ?? row.web, webPrintStatus: webPrintStatus(row.web_print),
+      webPrintActions: row.web_print?.actions ?? [] } : {}),
     pointPayment: Boolean(row.point_payment ?? row.pointPayment) || (row.payment_method ?? row.paymentMethod) === 'card',
     pointTaxCondition: row.point_tax_condition ?? row.pointTaxCondition ?? null,
     total: Number(row.total),
@@ -366,13 +367,35 @@ export async function queuedWebOrderPrints() {
 export async function claimWebOrderPrint(saleId, requestId, manual = false) {
   if (!pool) return false
   const { rowCount } = await pool.query(`
-    UPDATE sales SET web_print=jsonb_build_object('status','sending','requestId',$2::text,'startedAt',clock_timestamp())
+    UPDATE sales SET web_print=COALESCE(web_print,'{}'::jsonb) || jsonb_build_object(
+      'status','sending','requestId',$2::text,'startedAt',clock_timestamp(),
+      'requestIds',COALESCE(web_print->'requestIds','[]'::jsonb) || jsonb_build_array($2::text) ||
+        CASE WHEN web_print ? 'requestIds' OR web_print->>'requestId' IS NULL THEN '[]'::jsonb
+             ELSE jsonb_build_array(web_print->>'requestId') END)
     WHERE id=$1 AND channel='web' AND (web_print->>'requestId') IS DISTINCT FROM $2::text
+      AND NOT (COALESCE(web_print->'requestIds','[]'::jsonb) ? $2::text)
       AND (web_print->>'status'='queued' OR ($3::boolean AND (
         (web_print->>'status') IS DISTINCT FROM 'sending'
         OR (web_print->>'startedAt')::timestamptz <= clock_timestamp() - $4 * INTERVAL '1 millisecond'
       )))
   `, [saleId, requestId, manual, webPrintLeaseMs])
+  return rowCount === 1
+}
+
+export async function recordWebPrintAction(saleId, action) {
+  const { rowCount } = await pool.query(`
+    UPDATE sales SET web_print=jsonb_set(web_print,'{actions}',
+      COALESCE(web_print->'actions','[]'::jsonb) || jsonb_build_array($3::jsonb))
+    WHERE id=$1 AND web_print->'requestIds' ? $2::text
+  `, [saleId, action.requestId, JSON.stringify(action)])
+  if (rowCount !== 1) throw new Error('Could not save the Point action for this print request.')
+}
+
+export async function updateWebPrintActions(saleId, previous, actions) {
+  const { rowCount } = await pool.query(`
+    UPDATE sales SET web_print=jsonb_set(web_print,'{actions}',$3::jsonb)
+    WHERE id=$1 AND web_print->'actions'=$2::jsonb
+  `, [saleId, JSON.stringify(previous), JSON.stringify(actions)])
   return rowCount === 1
 }
 

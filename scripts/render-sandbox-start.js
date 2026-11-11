@@ -49,8 +49,11 @@ try {
       !/^dpg-[a-z0-9]+-[a-z]$/.test(privateHost || '') || process.env.NODE_ENV !== 'production') {
     throw new Error('This launcher requires the isolated Render environment.')
   }
-  if (Object.keys(process.env).some(key => key.startsWith('MERCADOPAGO_') && process.env[key]))
-    throw new Error('The POS sandbox does not accept payment credentials.')
+  const printKeys = ['MERCADOPAGO_WEB_PRINT_ACCESS_TOKEN', 'MERCADOPAGO_WEB_PRINT_TERMINAL_ID']
+  if (Object.keys(process.env).some(key => key.startsWith('MERCADOPAGO_') && process.env[key] && !printKeys.includes(key)))
+    throw new Error('The POS sandbox only accepts dedicated credentials for printing web orders.')
+  if (printKeys.filter(key => process.env[key]).length === 1)
+    throw new Error('Set both web order printer variables or leave both unset.')
   const runtime = sandboxUrl(process.env.DATABASE_URL, runtimeRole)
   const adminUrl = process.env.BAKERY_RENDER_BOOTSTRAP_URL
   if (adminUrl) {

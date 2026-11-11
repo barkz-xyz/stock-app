@@ -46,7 +46,7 @@ export function closureHistoryQuery(query = {}) {
 }
 const instant = value => value ? new Date(value).toISOString() : null
 const refundDate = r => r.processedAt || r.updatedAt || r.createdAt
-export function buildClosureSummary(sales, period, { registerSessionId = null } = {}) {
+export function buildClosureSummary(sales, period, { registerSessionId = null, includeEmptyWeb = false } = {}) {
   const within = value => value && new Date(value) >= period.from && new Date(value) < period.to
   const cash = { gross: 0, refunds: 0, net: 0, transactions: 0, refundCount: 0 }
   const card = { ...cash, recordedFees: 0, recordedSettlement: 0, reconciledTransactions: 0, unreconciledTransactions: 0 }
@@ -104,7 +104,7 @@ export function buildClosureSummary(sales, period, { registerSessionId = null } 
   operations.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
   excluded.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
   const summary = { businessDate: period.businessDate, timeZone: period.timeZone, from: period.from.toISOString(), to: period.to.toISOString(),
-    cash, card, ...(web.transactions || web.refundCount ? { web } : {}),
+    cash, card, ...(includeEmptyWeb || web.transactions || web.refundCount ? { web } : {}),
     gross: cash.gross + card.gross + web.gross, refunds: cash.refunds + card.refunds + web.refunds,
     net: cash.net + card.net + web.net, transactions: cash.transactions + card.transactions + web.transactions,
     pendingCount: excluded.filter(o => ['pending', 'processing'].includes(o.status)).length, operations, excluded }

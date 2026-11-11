@@ -21,12 +21,12 @@ import {
   adjustItem, saveInventoryBatch, searchSales, attachPointOrder, closeStore, completeRefund,
   claimPointOrder, claimWebOrderPrint, createItem, createSale, deleteItem, failRefund, finishWebOrderPrint, getSale,
   getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales, getInventoryIntegrationStore, getStockReservationStore,
-  markCardSaleFailed, prepareRefund, queuedWebOrderPrints, rememberPendingRefund, recordCreditNote, resolveRefundInventoryReview, saveCashClosure,
+  markCardSaleFailed, prepareRefund, queuedWebOrderPrints, rememberPendingRefund, recordCreditNote, resolveRefundInventoryReview, getRegisterDaySummary,
   updateItem, updateSaleFromPoint, updateSalePaymentDetails,
   listUsers, createUser, updateUser, listRegisterSessions, listClosureHistory, getActiveRegisterSession, getRegisterOpening, getRegisterCashStore, openRegisterSession, getRegisterClosure, saveRegisterClosure, getRegisterClosureRevision,
 } from './store.js'
 import { createDailyReport } from './report.js'
-import { createCashClosurePdf } from './cash-closure-pdf.js'
+import { createCashClosurePdf, createRegisterDaySummaryPdf } from './cash-closure-pdf.js'
 import { closeChangeListener, listenForDatabaseChanges, subscribeToChanges } from './changes.js'
 
 const app = express()
@@ -475,8 +475,19 @@ app.get('/api/metrics', async (req, res, next) => {
 app.get('/api/cash-closures', async (req, res, next) => {
   try { res.json(await getCashClosureWorkspace(req.query.date)) } catch (error) { next(error) }
 })
-app.post('/api/cash-closures', async (req, res, next) => {
-  try { res.json(await saveCashClosure(req.body)) } catch (error) { next(error) }
+app.post('/api/cash-closures', requireAdmin, (_req, res) => {
+  res.set('Allow', 'GET').status(405).json({ error: 'El resumen del día se genera automáticamente. Cierra cada caja desde su sesión.' })
+})
+app.get('/api/register-day-summary', requireAdmin, async (req, res) => {
+  const { cash, card, web, gross, refunds, net, transactions, registers, pendingCount, generatedAt, businessDate } = await getRegisterDaySummary(req.query.date)
+  res.json({ cash, card, web, gross, refunds, net, transactions, registers, pendingCount, generatedAt, businessDate })
+})
+app.get('/api/register-day-summary/:date/pdf', requireAdmin, async (req, res) => {
+  const summary = await getRegisterDaySummary(req.params.date)
+  const pdf = await createRegisterDaySummaryPdf(summary)
+  res.set({ 'Content-Type': 'application/pdf',
+    'Content-Disposition': `attachment; filename="bakery-pos-resumen-${summary.businessDate}.pdf"`,
+    'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }).send(pdf)
 })
 app.get('/api/cash-closures/:date/pdf', async (req, res, next) => {
   try {

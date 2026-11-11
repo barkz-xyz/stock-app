@@ -1,12 +1,13 @@
 import { LoadingSkeleton } from './ui.jsx'
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, Banknote, CalendarDays, Check, ChevronDown, Clock3, CreditCard, Download, Globe, History, RotateCw, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Banknote, CalendarDays, Check, ChevronDown, Clock3, CreditCard, Download, History, RotateCw, ShieldCheck } from 'lucide-react'
 import { api } from './api.js'
 import { useI18n } from './i18n.js'
 import { isPlainNavigation, sectionHref } from './routes.js'
 import CajaHeader from './CajaHeader.jsx'
 import CashDenominations from './CashDenominations.jsx'
 import CashClosureHistory from './CashClosureHistory.jsx'
+import RegisterDaySummary from './RegisterDaySummary.jsx'
 import { cashDenominations as denominations, cashCountTotal, cashCountNumbers } from './cashCount.js'
 
 const emptyForm = data => {
@@ -18,7 +19,7 @@ const emptyForm = data => {
     expectedRevision: c?.revision || 0, fingerprint: data.live.fingerprint }
 }
 
-function CashClosureEditor({ date, onNavigate, setToast, refreshToken, sessionId, onClosed }) {
+function CashClosureEditor({ onNavigate, setToast, refreshToken, sessionId, onClosed }) {
   const { language, formatCurrency: money } = useI18n()
   const tx = (es, en) => language === 'es' ? es : en
   const [data, setData] = useState(null), [form, setForm] = useState(null)
@@ -33,7 +34,7 @@ function CashClosureEditor({ date, onNavigate, setToast, refreshToken, sessionId
     if (reset) { setLoading(true); setReviewing(false) }
     try {
       if(sessionId==='none'){setLoading(false);return}
-      const next = await (sessionId?api.registerClosure(sessionId):api.cashClosure(date))
+      const next = await api.registerClosure(sessionId)
       if (current !== generation.current || sequence !== requestSequence.current) return
       const previous = dataRef.current
       setData(next); dataRef.current = next
@@ -47,7 +48,7 @@ function CashClosureEditor({ date, onNavigate, setToast, refreshToken, sessionId
     setData(null); dataRef.current = null; setForm(null); setError(''); setReviewing(false)
     load(true)
     return () => { generation.current++ }
-  }, [date,sessionId])
+  }, [sessionId])
   // Reuse the app's live update stream; keep a draft intact when another register changes the day.
   useEffect(() => { if (dataRef.current) load(false) }, [refreshToken])
   const update = key => event => { setForm(current => ({ ...current, [key]: event.target.value })); setReviewing(false) }
@@ -55,7 +56,7 @@ function CashClosureEditor({ date, onNavigate, setToast, refreshToken, sessionId
   const exportPdf = async revision => {
     setExporting(true)
     try {
-      const response = await fetch(sessionId?api.registerPdfUrl(sessionId,revision):api.cashClosurePdfUrl(data.live.businessDate, revision), { cache: 'no-store', signal: AbortSignal.timeout(60000) })
+      const response = await fetch(api.registerPdfUrl(sessionId, revision), { cache: 'no-store', signal: AbortSignal.timeout(60000) })
       if (!response.ok) throw new Error((await response.json()).error || tx('No se pudo exportar el PDF.', 'PDF export failed.'))
       const blob = await response.blob(), href = URL.createObjectURL(blob), link = document.createElement('a')
       link.href = href; link.download = `bakery-pos-cierre-${data.live.businessDate}-v${revision}.pdf`; link.click()
@@ -69,7 +70,7 @@ function CashClosureEditor({ date, onNavigate, setToast, refreshToken, sessionId
     try {
       const payload = { ...form, businessDate: data.live.businessDate,
         denominations: form.useDenominations ? cashCountNumbers(form.denominations) : null }
-      const saved=await (sessionId?api.saveRegisterClosure(sessionId,payload):api.saveCashClosure(payload))
+      const saved = await api.saveRegisterClosure(sessionId, payload)
       const message = tx(`Cierre guardado · versión ${saved.revision}`, `Close saved · version ${saved.revision}`)
       if (saved.pointPrint === 'failed' || saved.pointPrint === 'uncertain') {
         const printMessage = saved.pointPrint === 'uncertain'
@@ -81,24 +82,23 @@ function CashClosureEditor({ date, onNavigate, setToast, refreshToken, sessionId
           ? `${message} · ${tx('Impresión enviada al Point', 'Print job sent to Point')}` : message })
       }
       await load(true)
-      if(sessionId)await onClosed?.()
+      await onClosed?.(saved)
     } catch (e) { setError(e.message); setReviewing(false); if (e.status === 409) await load(false) }
     finally { setBusy(false) }
   }
   const changed = data && form && (form.fingerprint !== data.live.fingerprint || form.expectedRevision !== (data.closure?.revision || 0))
   const cashIn = data?.live.cashLedger?.cashIn ?? Number(form?.cashIn||0), cashOut=data?.live.cashLedger?.cashOut??Number(form?.cashOut||0)
-  const web = data?.live.web
   const expectedCash = data && form ? Number(form.openingCash || 0) + data.live.cash.net + cashIn - cashOut : 0
   const cashDifference = form?.countedCash === '' ? null : Number(form?.countedCash) - expectedCash
   const StatusIcon = changed || data?.stale ? AlertTriangle : data?.closure ? ShieldCheck : Clock3
   const needsNote = cashDifference != null && Number.isFinite(cashDifference) && cashDifference !== 0
-  const amountField = (key, label, hint, signed = false) => <label className="closure-field" key={key}><span>{label}</span><div className="closure-money"><span>$</span><input disabled={busy} name={key} type="number" inputMode={signed ? 'text' : 'numeric'} min={signed ? undefined : 0} max="100000000000" step="1" required value={form[key]} onChange={update(key)} readOnly={key==='openingCash'&&Boolean(sessionId)||key === 'countedCash' && form.useDenominations} placeholder="0" /></div>{hint && <small>{hint}</small>}</label>
+  const amountField = (key, label, hint, signed = false) => <label className="closure-field" key={key}><span>{label}</span><div className="closure-money"><span>$</span><input disabled={busy} name={key} type="number" inputMode={signed ? 'text' : 'numeric'} min={signed ? undefined : 0} max="100000000000" step="1" required value={form[key]} onChange={update(key)} readOnly={key === 'openingCash'||key === 'countedCash' && form.useDenominations} placeholder="0" /></div>{hint && <small>{hint}</small>}</label>
   const statRow = (label, value, strong = false) => <div className={strong ? 'closure-total' : ''}><span>{label}</span><strong>{money(value)}</strong></div>
   const differenceRow = (label, value) => <div className={`closure-difference ${value == null ? '' : value === 0 ? 'balanced' : 'unbalanced'}`}><span>{label}</span><strong>{value == null ? tx('Por contar', 'Not counted') : value === 0 ? tx('Cuadrado · $0', 'Balanced · $0') : `${value > 0 ? '+' : ''}${money(value)}`}</strong></div>
   if (sessionId === 'none') return <section className="card closure-no-session"><CalendarDays size={30} /><h2>{tx('Abre una caja para hoy','Open a register for today')}</h2><p>{tx('No tienes una caja abierta para el día de hoy.','You do not have an open register for today.')}</p><button className="button primary" onClick={() => onNavigate('/caja')}>{tx('Abrir caja','Open register')}<ArrowRight size={17} /></button></section>
   return <>
     <section className="closure-context" aria-label={tx('Día y estado del cierre', 'Closing date and status')}>
-      <div className="closure-current-label"><CalendarDays size={18} aria-hidden="true" /><div><strong>{data?.session?.operator || tx('Cierre diario guardado','Saved daily close')}</strong><span>{data?.live.businessDate || date || ''}</span></div></div>
+      <div className="closure-current-label"><CalendarDays size={18} aria-hidden="true" /><div><strong>{data?.session?.operator || tx('Caja', 'Register')}</strong><span>{data?.live.businessDate || ''}</span></div></div>
       <div className="closure-context-meta">
         {data?.session && <span className="session-period"><small>{tx('Apertura','Opened')}</small><time dateTime={data.session.openedAt}>{time(data.session.openedAt)}</time></span>}
         {data && form && <div className={`closure-status ${data.stale || changed ? 'attention' : data.closure ? 'saved' : ''}`} role="status" title={data.closure ? `${time(data.closure.closedAt)} · ${data.closure.operator || ''}` : tx('Sin cierre guardado', 'No saved close')}><StatusIcon size={14} /><strong>{changed ? tx('Actualizar cierre', 'Refresh close') : data.stale ? tx('Cambios sin incluir', 'Changes not included') : data.closure ? tx(`Guardado · v${data.closure.revision}`, `Saved · v${data.closure.revision}`) : tx('Pendiente', 'Pending')}</strong></div>}
@@ -109,9 +109,9 @@ function CashClosureEditor({ date, onNavigate, setToast, refreshToken, sessionId
     {loading && !data && <LoadingSkeleton />}
     {data && form && <>
       {changed && <div className="closure-notice" role="status"><AlertTriangle size={16} /><span>{tx('El día cambió. Actualiza para continuar.', 'The day changed. Refresh to continue.')}</span></div>}
-      <section className="closure-kpis" aria-label={tx('Resumen del día', 'Day summary')}>
+      <section className="closure-kpis" aria-label={tx('Ventas de la caja', 'Register sales')}>
         <article><span>{tx('Ventas', 'Sales')} <small>{data.live.transactions}</small></span><strong>{money(data.live.gross)}</strong></article>
-        <article><span>{tx('Devoluciones', 'Refunds')} <small>{data.live.cash.refundCount + data.live.card.refundCount + (web?.refundCount ?? 0)}</small></span><strong>{money(-data.live.refunds)}</strong></article>
+        <article><span>{tx('Devoluciones', 'Refunds')} <small>{data.live.cash.refundCount + data.live.card.refundCount}</small></span><strong>{money(-data.live.refunds)}</strong></article>
         <article><span>{tx('Total neto', 'Net total')} <small>CLP</small></span><strong>{money(data.live.net)}</strong></article>
       </section>
       <form className="closure-form" onSubmit={event => { event.preventDefault(); if (needsNote && !form.note.trim()) { setError(tx('Agrega una observación para explicar el faltante o sobrante de efectivo.', 'Add a note explaining the cash shortage or surplus.')); return } setReviewing(true); setError('') }}>
@@ -134,57 +134,71 @@ function CashClosureEditor({ date, onNavigate, setToast, refreshToken, sessionId
             {data.closure&&data.closure.cardTotalSource!=='pos'&&data.closure.countedCard!=null&&<details className="closure-settlement"><summary>{tx('Conciliación anterior guardada','Saved previous reconciliation')}</summary><div className="closure-ledger">{statRow(tx('Terminal declarado','Declared terminal'),data.closure.countedCard)}{statRow(tx('Diferencia guardada','Saved difference'),data.closure.cardDifference||0)}</div></details>}
             <details className="closure-settlement"><summary>{tx('Comisiones y liquidación', 'Fees and settlement')}<ChevronDown size={15} /></summary><div className="closure-ledger">{statRow(tx('Comisiones', 'Fees'), data.live.card.recordedFees)}{statRow(tx('Neto del proveedor', 'Provider net'), data.live.card.recordedSettlement)}</div><p>{tx(`${data.live.card.reconciledTransactions} cobros con datos · ${data.live.card.unreconciledTransactions} sin datos. Información parcial; no confirma abono bancario.`, `${data.live.card.reconciledTransactions} collections with data · ${data.live.card.unreconciledTransactions} without data. Partial information; does not confirm a bank deposit.`)}</p></details>
           </div></section>
-          {!sessionId && <section className="card closure-method">
-            <header className="card-header"><div className="closure-method-title"><span className="metric-icon cocoa"><Globe size={21} /></span><h3>Web</h3></div><small>{web?.transactions ?? 0} {tx('ventas', 'sales')}</small></header>
-            <div className="closure-method-body"><div className="closure-ledger">
-              {statRow(tx('Subtotal productos', 'Products subtotal'), web?.subtotal ?? 0)}
-              {statRow(tx('Despacho informado', 'Reported shipping'), web?.shippingAmount ?? 0)}
-              {statRow(tx('Total web', 'Web total'), web?.net ?? 0, true)}
-            </div>{web?.incompleteCount > 0 && <small>{tx(`${web.incompleteCount} venta(s) sin total cobrado informado. Se incluye el subtotal de productos.`, `${web.incompleteCount} sale(s) without a reported charge. The products subtotal is included.`)}</small>}</div>
-          </section>}
         </div>
-        <section className="card closure-confirm"><div className="closure-pair"><label className="closure-field"><span>{tx('Responsable', 'Operator')}</span><input disabled={busy} required maxLength="80" value={form.operator} readOnly={Boolean(sessionId)} onChange={update('operator')} autoComplete="name" placeholder={tx('Nombre de quien cuenta', 'Name of person counting')} /></label><label className="closure-field"><span>{tx('Observaciones', 'Notes')} {needsNote ? '*' : tx('(opcional)', '(optional)')}</span><textarea disabled={busy} required={Boolean(needsNote)} maxLength="1000" rows="2" value={form.note} onChange={update('note')} placeholder={tx('Diferencias o movimientos…', 'Differences or cash movements…')} /></label></div>
+        <section className="card closure-confirm"><div className="closure-pair"><label className="closure-field"><span>{tx('Responsable', 'Operator')}</span><input disabled={busy} required maxLength="80" value={form.operator} readOnly autoComplete="name" placeholder={tx('Nombre de quien cuenta', 'Name of person counting')} /></label><label className="closure-field"><span>{tx('Observaciones', 'Notes')} {needsNote ? '*' : tx('(opcional)', '(optional)')}</span><textarea disabled={busy} required={Boolean(needsNote)} maxLength="1000" rows="2" value={form.note} onChange={update('note')} placeholder={tx('Diferencias o movimientos…', 'Differences or cash movements…')} /></label></div>
           {data.live.pendingCount > 0 && <div className="closure-notice"><AlertTriangle size={18} /><span>{tx(`${data.live.pendingCount} pendientes fuera del total.`, `${data.live.pendingCount} pending operations excluded.`)}</span></div>}
           {reviewing && <div className="closure-review" role="status"><Check size={20} /><div><strong>{tx('Revisa antes de confirmar', 'Review before confirming')}</strong><p>{tx('Efectivo contado', 'Counted cash')}: {money(form.countedCash)} · {tx('Tarjeta POS', 'POS card')}: {money(data.live.card.net)}</p><p>{tx('Diferencia en efectivo', 'Cash difference')}: {money(cashDifference)}</p></div></div>}
-          <div className="closure-actions"><button type="button" className="button secondary" disabled={!data.closure?.snapshot || exporting} title={tx('Descargar cierre guardado', 'Download saved close')} aria-label={tx('Descargar PDF del cierre guardado', 'Download saved close PDF')} onClick={() => exportPdf(data.closure.revision)}><Download size={16} />{exporting ? tx('Preparando…', 'Preparing…') : 'PDF'}</button><div>{reviewing ? <><button type="button" className="button secondary" onClick={() => setReviewing(false)} disabled={busy}>{tx('Volver', 'Back')}</button><button type="button" className="button primary" onClick={save} disabled={busy || changed || loading}><Check size={17} />{busy ? tx('Guardando…', 'Saving…') : tx(data.closure ? 'Confirmar corrección' : 'Confirmar cierre', data.closure ? 'Confirm correction' : 'Confirm close')}</button></> : <button className="button primary" disabled={busy || changed || loading}>{tx(data.closure ? 'Revisar corrección' : 'Revisar cierre', data.closure ? 'Review correction' : 'Review close')}<ArrowRight size={17} /></button>}</div></div>
+          <div className="closure-actions"><button type="button" className="button secondary" disabled={!data.closure?.snapshot || exporting} title={tx('Descargar cierre guardado', 'Download saved close')} aria-label={tx('Descargar PDF del cierre guardado', 'Download saved close PDF')} onClick={() => exportPdf(data.closure.revision)}><Download size={16} />{exporting ? tx('Preparando…', 'Preparing…') : 'PDF'}</button><div>{reviewing ? <><button type="button" className="button secondary" onClick={() => setReviewing(false)} disabled={busy}>{tx('Volver', 'Back')}</button><button type="button" className="button primary" onClick={save} disabled={busy || changed || loading}><Check size={17} />{busy ? tx('Guardando…', 'Saving…') : tx(data.closure ? 'Confirmar corrección' : 'Confirmar cierre', data.closure ? 'Confirm correction' : 'Confirm close')}</button></> : <button type="submit" className="button primary" disabled={busy || changed || loading}>{tx(data.closure ? 'Revisar corrección' : 'Cerrar caja', data.closure ? 'Review correction' : 'Close register')}<ArrowRight size={17} /></button>}</div></div>
         </section>
       </form>
       {data.stale && <p className="closure-pdf-note">{tx('El PDF corresponde a la versión guardada.', 'The PDF reflects the saved version.')}</p>}
-      <details className="card closure-operations"><summary className="closure-section-summary"><span>{tx('Operaciones', 'Operations')} <small>{data.live.operations.length}</small></span><ChevronDown size={17} /></summary><header className="card-header"><div className="closure-filters"><select aria-label={tx('Medio de pago', 'Payment method')} value={method} onChange={e => setMethod(e.target.value)}><option value="all">{tx('Todos los medios', 'All methods')}</option><option value="cash">{tx('Efectivo', 'Cash')}</option><option value="card">{tx('Tarjeta', 'Card')}</option>{!sessionId && <option value="web">Web</option>}</select><select aria-label={tx('Tipo de operación', 'Operation type')} value={kind} onChange={e => setKind(e.target.value)}><option value="all">{tx('Todos los tipos', 'All types')}</option><option value="sale">{tx('Ventas', 'Sales')}</option><option value="refund">{tx('Devoluciones', 'Refunds')}</option></select></div></header><div className="closure-table-wrap"><table className="closure-table"><thead><tr>{[tx('Fecha / venta', 'Date / sale'), tx('Operación', 'Operation'), tx('Detalle', 'Details'), tx('Referencia', 'Reference'), tx('Monto', 'Amount')].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{data.live.operations.filter(op => (method === 'all' || method === op.method) && (kind === 'all' || kind === op.type)).map(op => <tr key={op.id}><td><strong>{op.shortId}</strong><small>{time(op.at)}</small></td><td>{op.type === 'sale' ? tx('Venta', 'Sale') : tx('Devolución', 'Refund')}<small>{op.method === 'cash' ? tx('Efectivo', 'Cash') : op.method === 'web' ? 'Web' : tx('Tarjeta', 'Card')}</small></td><td><details><summary>{op.items.length} {tx('productos', 'products')}{op.reason ? ` · ${op.reason}` : ''}</summary>{op.items.map((item, i) => <div key={i}>{item.quantity} × {item.name} · {money(item.lineTotal)}</div>)}{op.originalSaleAt && <small>{tx('Venta original', 'Original sale')}: {time(op.originalSaleAt)}</small>}</details></td><td>{op.reference || '—'}{op.cardBrand && <small>{op.cardBrand} ···· {op.cardLastFour}</small>}</td><td className={op.amount < 0 ? 'negative' : ''}>{money(op.amount)}</td></tr>)}</tbody></table>{!data.live.operations.length && <p className="closure-empty">{tx('Sin operaciones cobradas en este día.', 'No collected operations this day.')}</p>}</div>{data.live.excluded.length > 0 && <details className="closure-excluded"><summary>{tx('Operaciones excluidas del total cobrado', 'Operations excluded from collections')} ({data.live.excluded.length})</summary>{data.live.excluded.map(op => <div key={op.id}><span>{op.shortId} · {op.type === 'refund' ? tx('Devolución', 'Refund') : tx('Venta', 'Sale')} · {op.status}</span><strong>{money(op.amount)}</strong></div>)}</details>}</details>
+      <details className="card closure-operations"><summary className="closure-section-summary"><span>{tx('Operaciones', 'Operations')} <small>{data.live.operations.length}</small></span><ChevronDown size={17} /></summary><header className="card-header"><div className="closure-filters"><select aria-label={tx('Medio de pago', 'Payment method')} value={method} onChange={e => setMethod(e.target.value)}><option value="all">{tx('Todos los medios', 'All methods')}</option><option value="cash">{tx('Efectivo', 'Cash')}</option><option value="card">{tx('Tarjeta', 'Card')}</option></select><select aria-label={tx('Tipo de operación', 'Operation type')} value={kind} onChange={e => setKind(e.target.value)}><option value="all">{tx('Todos los tipos', 'All types')}</option><option value="sale">{tx('Ventas', 'Sales')}</option><option value="refund">{tx('Devoluciones', 'Refunds')}</option></select></div></header><div className="closure-table-wrap"><table className="closure-table"><thead><tr>{[tx('Fecha / venta', 'Date / sale'), tx('Operación', 'Operation'), tx('Detalle', 'Details'), tx('Referencia', 'Reference'), tx('Monto', 'Amount')].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{data.live.operations.filter(op => (method === 'all' || method === op.method) && (kind === 'all' || kind === op.type)).map(op => <tr key={op.id}><td><strong>{op.shortId}</strong><small>{time(op.at)}</small></td><td>{op.type === 'sale' ? tx('Venta', 'Sale') : tx('Devolución', 'Refund')}<small>{op.method === 'cash' ? tx('Efectivo', 'Cash') : tx('Tarjeta', 'Card')}</small></td><td><details><summary>{op.items.length} {tx('productos', 'products')}{op.reason ? ` · ${op.reason}` : ''}</summary>{op.items.map((item, i) => <div key={i}>{item.quantity} × {item.name} · {money(item.lineTotal)}</div>)}{op.originalSaleAt && <small>{tx('Venta original', 'Original sale')}: {time(op.originalSaleAt)}</small>}</details></td><td>{op.reference || '—'}{op.cardBrand && <small>{op.cardBrand} ···· {op.cardLastFour}</small>}</td><td className={op.amount < 0 ? 'negative' : ''}>{money(op.amount)}</td></tr>)}</tbody></table>{!data.live.operations.length && <p className="closure-empty">{tx('Sin operaciones cobradas en este día.', 'No collected operations this day.')}</p>}</div>{data.live.excluded.length > 0 && <details className="closure-excluded"><summary>{tx('Operaciones excluidas del total cobrado', 'Operations excluded from collections')} ({data.live.excluded.length})</summary>{data.live.excluded.map(op => <div key={op.id}><span>{op.shortId} · {op.type === 'refund' ? tx('Devolución', 'Refund') : tx('Venta', 'Sale')} · {op.status}</span><strong>{money(op.amount)}</strong></div>)}</details>}</details>
       {data.revisions.length > 0 && <details className="card closure-revisions"><summary className="closure-section-summary"><span><History size={16} />{tx('Versiones', 'Versions')} <small>{data.revisions.length}</small></span><ChevronDown size={17} /></summary>{[...data.revisions].reverse().map(version => <div key={version.revision}><div><strong>{tx('Versión', 'Version')} {version.revision} · {version.closedByName || version.operator || tx('Registro anterior', 'Legacy record')}</strong><span>{time(version.closedAt)}</span>{version.note && <p>{version.note}</p>}</div><button type="button" className="button secondary" disabled={exporting || !version.exportable} onClick={() => exportPdf(version.revision)}><Download size={15} />PDF</button></div>)}</details>}
     </>}
   </>
 }
 
-export default function CashClosurePage({ view = 'current', month, currentDate, ...props }) {
+function validSummaryDate(date, today) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= '2000-01-01' && date <= today &&
+    Number.isFinite(Date.parse(date)) && new Date(date).toISOString().slice(0, 10) === date
+}
+
+export default function CashClosurePage({ view = 'current', month, currentDate, date, selectedSession, user, onClosed, onNavigate, ...editor }) {
   const { language } = useI18n()
   const tx = (es, en) => language === 'es' ? es : en
   const currentMonth = currentDate.slice(0, 7)
   const historyMonth = month || currentMonth
-  const historyHref = sectionHref('pos', { view: 'close', closureView: 'history', month: historyMonth })
-  const dailyHref = date => sectionHref('pos', { view: 'close', closureView: 'daily', date })
-  const tabs = [[sectionHref('pos', { view: 'close' }), 'current', Clock3, tx('Cierre actual', 'Current close')],
-    [historyHref, 'history', History, tx('Historial de cierres', 'Close history')]]
-  if (props.user?.role === 'admin') tabs.splice(1, 0, [dailyHref(), 'daily', CalendarDays, tx('Cierre diario', 'Daily close')])
+  const summaryDate = validSummaryDate(date, currentDate) ? date : currentDate
+  const headingRef = useRef(null)
+  const historyRef = useRef(null)
+  const [historyOpen, setHistoryOpen] = useState(view === 'history')
+  useEffect(() => { if (view === 'history') setHistoryOpen(true) }, [view])
+  useEffect(() => { if (selectedSession) headingRef.current?.scrollIntoView({ block: 'start' }) }, [selectedSession])
+  const goToHistory = () => {
+    setHistoryOpen(true)
+    historyRef.current?.scrollIntoView({ block: 'start' })
+  }
+  const changeDate = value => {
+    if (validSummaryDate(value, currentDate)) onNavigate(sectionHref('pos', {
+      view: 'close', date: value, sessionId: selectedSession, month, closureView: view === 'history' ? 'history' : undefined,
+    }))
+  }
+  const afterClose = saved => {
+    // Keep the newly closed session visible so its ticket/PDF and revision are accessible.
+    if (!selectedSession) onNavigate(sectionHref('pos', { view: 'close', sessionId: saved.registerSessionId,
+      date: saved.businessDate, month: saved.businessDate.slice(0, 7) }))
+    return onClosed()
+  }
+
   return <div className="page caja-detail-page closure-page">
-    <CajaHeader active="close" onNavigate={props.onNavigate} />
+    <CajaHeader active="close" onNavigate={onNavigate} />
     <div className="caja-detail-content">
-      <nav className="closure-views" aria-label={tx('Secciones del cierre de caja', 'Cash close sections')}>
-        {tabs.map(([href, id, Icon, label]) =>
-          <a key={id} href={href} aria-current={view === id ? 'page' : undefined} onClick={e => {
-            if (isPlainNavigation(e)) { e.preventDefault(); props.onNavigate(href) }
-          }}><Icon size={16} />{label}</a>)}
-      </nav>
-      {view === 'history' ? <CashClosureHistory month={historyMonth} currentMonth={currentMonth} user={props.user} refreshToken={props.refreshToken} onNavigate={props.onNavigate} /> : <>
-        {month && <a className="closure-back-history" href={historyHref} onClick={e => { if (isPlainNavigation(e)) { e.preventDefault(); props.onNavigate(historyHref) } }}><History size={15} />{tx('Volver al historial', 'Back to history')}</a>}
-        {view === 'daily' && <label className="closure-field closure-day-filter"><span>{tx('Fecha del cierre diario', 'Daily close date')}</span>
-          <input type="date" min="2000-01-01" max={currentDate} value={props.date} onChange={e => {
-            const value = e.target.value
-            if (value >= '2000-01-01' && value <= currentDate) props.onNavigate(dailyHref(value))
-          }} />
-        </label>}
-        <CashClosureEditor {...props} />
-      </>}
+      <div ref={headingRef} className="closure-page-heading">
+        <h2>{selectedSession ? tx('Detalle de caja', 'Register details') : tx('Tu caja', 'Your register')}</h2>
+        <div>
+          {selectedSession && <a className="button secondary" href={sectionHref('pos', { view: 'close' })} onClick={e => {
+            if (isPlainNavigation(e)) { e.preventDefault(); onNavigate(sectionHref('pos', { view: 'close' })) }
+          }}>{tx('Ir a mi caja', 'Go to my register')}</a>}
+          {user?.role === 'admin' && <a className="button secondary" href="#resumen-del-dia">{tx('Ver resumen', 'View summary')}</a>}
+          <button type="button" className="button secondary" aria-controls="historial-de-cierres" aria-expanded={historyOpen} onClick={goToHistory}><History size={16} />{tx('Historial de cierres', 'Close history')}</button>
+        </div>
+      </div>
+      <CashClosureEditor key={editor.sessionId} {...editor} onNavigate={onNavigate} onClosed={afterClose} />
+      {user?.role === 'admin' && <RegisterDaySummary date={summaryDate} today={currentDate} refreshToken={editor.refreshToken} onDateChange={changeDate} onNavigate={onNavigate} />}
+      <div id="historial-de-cierres" ref={historyRef} className="closure-history-panel">
+        {historyOpen ? <CashClosureHistory month={historyMonth} currentMonth={currentMonth} user={user} refreshToken={editor.refreshToken} onNavigate={onNavigate} /> :
+          <button type="button" className="card closure-section-summary closure-history-toggle" onClick={() => setHistoryOpen(true)}><span><History size={16} />{tx('Historial de cierres', 'Close history')}</span><ChevronDown size={16} /></button>}
+      </div>
     </div>
   </div>
 }

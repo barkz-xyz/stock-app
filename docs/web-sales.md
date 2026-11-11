@@ -37,8 +37,9 @@ Con el Point configurado, el POS encola la **COMANDA WEB** al guardar la confirm
 Una falla de impresión conserva la confirmación y la venta guardada. Repetir la confirmación recupera la misma venta y evita un segundo envío automático. En **Caja → Historial → Web**, el detalle muestra el estado del envío y permite imprimir o reimprimir en el Point. Si el envío queda sin confirmación, revisa el terminal antes de pedir otra copia.
 
 El servicio usa el Point de Caja por defecto. Para enviar comandas a otro terminal, configura `MERCADOPAGO_WEB_PRINT_ACCESS_TOKEN` y `MERCADOPAGO_WEB_PRINT_TERMINAL_ID` en el servidor.
+En el sandbox de Render usa ese par para la impresión y una clave de integración `bpos_test_` para el checkout. El lanzador no admite variables de cobro de Point ni de Mercado Pago en el POS sandbox.
 
-En **Cierre de caja → Cierre diario**, el total Web incluye productos y despacho informado. Si falta el importe cobrado, se contabiliza el subtotal de productos y aparece una indicación en pantalla y en el PDF. El día corresponde a la fecha de aprobación en la zona horaria del negocio. El efectivo esperado y el total Point se calculan por separado. Las ventas Web quedan sin cajero ni sesión física. Las devoluciones Web se gestionan desde el checkout.
+En **Cierre de caja → Resumen del día**, el total Web incluye productos y despacho informado. Si falta el importe cobrado, se contabiliza el subtotal de productos y aparece una indicación en pantalla y en el PDF. El día corresponde a la fecha de aprobación en la zona horaria del negocio. El efectivo esperado y el total Point se calculan por separado. Las ventas Web quedan sin cajero ni sesión física. Las devoluciones Web se gestionan desde el checkout.
 
 ## POS de prueba local
 

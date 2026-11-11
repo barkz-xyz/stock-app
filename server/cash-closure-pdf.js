@@ -8,14 +8,21 @@ const money = value => new Intl.NumberFormat('es-CL', { style: 'currency', curre
 const shortId = value => String(value || '').replaceAll('-', '').slice(0, 8).toUpperCase()
 const sum = (rows, getValue) => rows.reduce((total, row) => total + getValue(row), 0)
 
+export function createRegisterDaySummaryPdf(summary) {
+  return createCashClosurePdf({ scope: 'day-summary', businessDate: summary.businessDate, snapshot: summary })
+}
+
 export async function createCashClosurePdf(closure) {
   const s = closure.snapshot
+  const daySummary = closure.scope === 'day-summary'
+  const reportDate = new Date(daySummary ? s.generatedAt : closure.closedAt)
+  const title = daySummary ? 'Resumen del día' : 'Cierre de caja'
   const doc = await PDFDocument.create()
-  doc.setTitle(`Cierre de caja ${closure.businessDate} - Bakery POS`)
+  doc.setTitle(`${title} ${closure.businessDate} - Bakery POS`)
   doc.setAuthor('Bakery POS')
-  doc.setSubject(`Ventas y cierre de caja. Versión ${closure.revision}. CLP.`)
-  doc.setCreationDate(new Date(closure.closedAt))
-  doc.setModificationDate(new Date(closure.closedAt))
+  doc.setSubject(daySummary ? 'Ventas por canal. CLP.' : `Ventas y cierre de caja. Versión ${closure.revision}. CLP.`)
+  doc.setCreationDate(reportDate)
+  doc.setModificationDate(reportDate)
   const regular = await doc.embedFont(StandardFonts.Helvetica)
   const bold = await doc.embedFont(StandardFonts.HelveticaBold)
   const dateTime = new Intl.DateTimeFormat('es-CL', { timeZone: s.timeZone, dateStyle: 'short', timeStyle: 'short' })
@@ -47,7 +54,7 @@ export async function createCashClosurePdf(closure) {
   const newPage = () => {
     page = doc.addPage([595.28, 841.89])
     draw('BAKERY POS', left, 804, { size: 10, strong: true, color: accent })
-    draw(`${closure.businessDate.split('-').reverse().join('/')}  |  CLP  |  V${closure.revision}`, right, 804, { size: 9, align: 'right', color: muted })
+    draw(`${closure.businessDate.split('-').reverse().join('/')}  |  CLP${daySummary ? '' : `  |  V${closure.revision}`}`, right, 804, { size: 9, align: 'right', color: muted })
     horizontal(793)
     y = 775
   }
@@ -91,9 +98,16 @@ export async function createCashClosurePdf(closure) {
   }
 
   newPage()
-  draw(closure.scope==='session'?'CIERRE DE CAJA':'VENTAS Y CIERRE DE CAJA', left, y, { size: 16, strong: true }); y -= 19
-  note('Responsable:', closure.operator || '-')
-  note('Cierre:', `${dateTime.format(new Date(closure.closedAt))}  |  Hora Chile  |  Ref. ${shortId(closure.id)}`)
+  draw(daySummary ? 'RESUMEN DEL DÍA' : closure.scope === 'session' ? 'CIERRE DE CAJA' : 'VENTAS Y CIERRE DE CAJA', left, y, { size: 16, strong: true }); y -= 19
+  if (daySummary) {
+    note('Generado:', dateTime.format(reportDate))
+    const { open, closed } = s.registers
+    note('Cajas:', `${closed} ${closed === 1 ? 'cerrada' : 'cerradas'} | ${open.length} ${open.length === 1 ? 'pendiente' : 'pendientes'} de cierre`)
+    if (s.registers.open.length) note('Pendientes:', s.registers.open.map(register => register.operator).join(' | '))
+  } else {
+    note('Responsable:', closure.operator || '-')
+    note('Cierre:', `${dateTime.format(reportDate)}  |  Hora Chile  |  Ref. ${shortId(closure.id)}`)
+  }
   if(closure.scope==='session')note('Turno:', `${shortId(closure.registerSessionId)}  |  Apertura ${dateTime.format(new Date(closure.openedAt))}`)
   if(closure.additionalCash)note('Fondo:',`Anterior ${money(closure.openingCash-closure.additionalCash)} + aporte ${money(closure.additionalCash)}`)
 
@@ -113,59 +127,61 @@ export async function createCashClosurePdf(closure) {
     { cells: [`Devoluciones (${s.cash.refundCount + s.card.refundCount + (web.refundCount ?? 0)})`, money(-s.cash.refunds), money(-s.card.refunds), ...(showWeb ? [money(-web.refunds)] : []), money(-s.refunds)] },
     { cells: ['VENTAS NETAS', money(s.cash.net), money(s.card.net), ...(showWeb ? [money(web.net)] : []), money(s.net)], strong: true },
   ])
-  if (showWeb && s.web) {
+  if (showWeb && (web.transactions || web.refundCount)) {
     note('Web:', `Productos ${money(web.subtotal)} | Despacho informado ${money(web.shippingAmount)}`)
     if (web.incompleteCount) note('Web:', `${web.incompleteCount} venta(s) sin total cobrado informado; se incluye el subtotal de productos.`)
   }
 
-  const cashRows = [
-    ['Fondo inicial', money(closure.openingCash)], ['Ventas netas', money(s.cash.net)],
-    ['Entradas', money(closure.cashIn)], ['Retiros', money(-closure.cashOut)],
-    ['Efectivo esperado', money(closure.expectedCash), true], ['Efectivo contado', money(closure.countedCash), true],
-    ['Diferencia', money(closure.difference), true, closure.difference],
-  ]
-  const automaticCard = closure.cardTotalSource === 'pos'
-  const cardRows = automaticCard ? [
-    ['Ventas', money(s.card.gross)], ['Devoluciones', money(-s.card.refunds)],
-    ['Total tarjeta POS', money(s.card.net), true], ['Comisiones informadas', money(s.card.recordedFees)],
-    ['Neto proveedor informado', money(s.card.recordedSettlement)],
-    ['Cobros con datos prov.', `${s.card.reconciledTransactions}/${s.card.transactions}`], ['Lote / referencia', closure.terminalReference || '-'],
-  ] : [
-    ['Comisiones informadas', money(s.card.recordedFees)], ['Neto proveedor informado', money(s.card.recordedSettlement)],
-    ['Cobros con datos prov.', `${s.card.reconciledTransactions}/${s.card.transactions}`], ['Lote / referencia', closure.terminalReference || '-'],
-    ['Esperado sin comisiones', money(s.card.net), true], ['Total terminal', money(closure.countedCard), true],
-    ['Diferencia', money(closure.cardDifference), true, closure.cardDifference],
-  ]
-  const gap = 14, panelWidth = (width - gap) / 2, valueWidth = 95, labelWidth = panelWidth - valueWidth - 19
-  const panelRows = cashRows.map((cash, index) => {
-    const card = cardRows[index]
-    const cells = [cash, card].map(row => ({ row, labels: wrap(row[0], labelWidth, 8), values: wrap(row[1], valueWidth, 8.5, row[2]) }))
-    return { cells, height: Math.max(18, Math.max(...cells.map(cell => Math.max(cell.labels.length, cell.values.length))) * 10 + 7) }
-  })
-  const panelsHeight = 24 + sum(panelRows, row => row.height)
-  ensure(panelsHeight + 14)
-  const panelTop = y
-  for (const [i, title] of ['02 / ARQUEO EFECTIVO', automaticCard ? '03 / TARJETA' : '03 / CONCILIACIÓN TARJETAS'].entries()) {
-    const x = left + i * (panelWidth + gap)
-    page.drawRectangle({ x, y: panelTop - panelsHeight, width: panelWidth, height: panelsHeight, borderColor: rule, borderWidth: .5 })
-    page.drawRectangle({ x, y: panelTop - 23, width: panelWidth, height: 23, color: wash })
-    draw(title, x + 8, panelTop - 15, { size: 8.5, strong: true, color: accent })
-  }
-  y -= 24
-  for (const { cells, height } of panelRows) {
-    cells.forEach(({ row, labels, values }, i) => {
-      const x = left + i * (panelWidth + gap)
-      if (row[3] != null) page.drawRectangle({ x: x + .5, y: y - height, width: panelWidth - 1, height, color: row[3] === 0 ? balanced : unbalanced })
-      if (row[2] && row[3] == null) horizontal(y, x + 8, x + panelWidth - 8)
-      labels.forEach((value, j) => draw(value, x + 8, y - 12 - j * 10, { size: 8, strong: row[2] }))
-      values.forEach((value, j) => draw(value, x + panelWidth - 8, y - 12 - j * 10, { size: 8.5, strong: row[2], align: 'right' }))
+  if (!daySummary) {
+    const cashRows = [
+      ['Fondo inicial', money(closure.openingCash)], ['Ventas netas', money(s.cash.net)],
+      ['Entradas', money(closure.cashIn)], ['Retiros', money(-closure.cashOut)],
+      ['Efectivo esperado', money(closure.expectedCash), true], ['Efectivo contado', money(closure.countedCash), true],
+      ['Diferencia', money(closure.difference), true, closure.difference],
+    ]
+    const automaticCard = closure.cardTotalSource === 'pos'
+    const cardRows = automaticCard ? [
+      ['Ventas', money(s.card.gross)], ['Devoluciones', money(-s.card.refunds)],
+      ['Total tarjeta POS', money(s.card.net), true], ['Comisiones informadas', money(s.card.recordedFees)],
+      ['Neto proveedor informado', money(s.card.recordedSettlement)],
+      ['Cobros con datos prov.', `${s.card.reconciledTransactions}/${s.card.transactions}`], ['Lote / referencia', closure.terminalReference || '-'],
+    ] : [
+      ['Comisiones informadas', money(s.card.recordedFees)], ['Neto proveedor informado', money(s.card.recordedSettlement)],
+      ['Cobros con datos prov.', `${s.card.reconciledTransactions}/${s.card.transactions}`], ['Lote / referencia', closure.terminalReference || '-'],
+      ['Esperado sin comisiones', money(s.card.net), true], ['Total terminal', money(closure.countedCard), true],
+      ['Diferencia', money(closure.cardDifference), true, closure.cardDifference],
+    ]
+    const gap = 14, panelWidth = (width - gap) / 2, valueWidth = 95, labelWidth = panelWidth - valueWidth - 19
+    const panelRows = cashRows.map((cash, index) => {
+      const card = cardRows[index]
+      const cells = [cash, card].map(row => ({ row, labels: wrap(row[0], labelWidth, 8), values: wrap(row[1], valueWidth, 8.5, row[2]) }))
+      return { cells, height: Math.max(18, Math.max(...cells.map(cell => Math.max(cell.labels.length, cell.values.length))) * 10 + 7) }
     })
-    y -= height
+    const panelsHeight = 24 + sum(panelRows, row => row.height)
+    ensure(panelsHeight + 14)
+    const panelTop = y
+    for (const [i, title] of ['02 / ARQUEO EFECTIVO', automaticCard ? '03 / TARJETA' : '03 / CONCILIACIÓN TARJETAS'].entries()) {
+      const x = left + i * (panelWidth + gap)
+      page.drawRectangle({ x, y: panelTop - panelsHeight, width: panelWidth, height: panelsHeight, borderColor: rule, borderWidth: .5 })
+      page.drawRectangle({ x, y: panelTop - 23, width: panelWidth, height: 23, color: wash })
+      draw(title, x + 8, panelTop - 15, { size: 8.5, strong: true, color: accent })
+    }
+    y -= 24
+    for (const { cells, height } of panelRows) {
+      cells.forEach(({ row, labels, values }, i) => {
+        const x = left + i * (panelWidth + gap)
+        if (row[3] != null) page.drawRectangle({ x: x + .5, y: y - height, width: panelWidth - 1, height, color: row[3] === 0 ? balanced : unbalanced })
+        if (row[2] && row[3] == null) horizontal(y, x + 8, x + panelWidth - 8)
+        labels.forEach((value, j) => draw(value, x + 8, y - 12 - j * 10, { size: 8, strong: row[2] }))
+        values.forEach((value, j) => draw(value, x + panelWidth - 8, y - 12 - j * 10, { size: 8.5, strong: row[2], align: 'right' }))
+      })
+      y -= height
+    }
+    y -= 14
+    if (closure.denominations) note('Efectivo:', Object.entries(closure.denominations).filter(([, count]) => count > 0).sort((a, b) => b[0] - a[0]).map(([value, count]) => `${money(value)} x ${count}`).join(' | ') || '0')
   }
-  y -= 14
-  if (closure.denominations) note('Efectivo:', Object.entries(closure.denominations).filter(([, count]) => count > 0).sort((a, b) => b[0] - a[0]).map(([value, count]) => `${money(value)} x ${count}`).join(' | ') || '0')
 
-  section(`04 / MOVIMIENTOS (${s.operations.length})`)
+  section(`${daySummary ? '02' : '04'} / MOVIMIENTOS (${s.operations.length})`)
   const ledgerRows = s.operations.map(op => ({ cells: [clock.format(new Date(op.at)), op.shortId || shortId(op.saleId),
     op.type === 'refund' ? 'DEV.' : 'VTA.', op.method === 'cash' ? 'Efectivo' : op.method === 'web' ? 'Web' : 'Tarjeta',
     op.type === 'sale' ? money(op.amount) : '-', op.type === 'refund' ? money(-op.amount) : '-'] }))
@@ -177,7 +193,7 @@ export async function createCashClosurePdf(closure) {
 
   const withdrawalEntries = (s.cashLedger?.entries || []).filter(e => e.kind !== 'refund')
   if (withdrawalEntries.length) {
-    section('05 / RETIROS Y RENDICIONES')
+    section(daySummary ? '03 / RETIROS Y RENDICIONES' : '05 / RETIROS Y RENDICIONES')
     table([{label:'Ref. / hora',width:85},{label:'Destinatario / detalle',width:width-305},
       {label:'Retiro',width:110,align:'right'},{label:'Vuelto',width:110,align:'right'}],
     withdrawalEntries.map(e=>({cells:[`${shortId(e.withdrawalId)} / ${clock.format(new Date(e.createdAt))}`,
@@ -200,7 +216,7 @@ export async function createCashClosurePdf(closure) {
   pages.forEach((p, i) => {
     page = p
     horizontal(35)
-    draw(`Bakery POS | Cierre ${shortId(closure.id)} | V${closure.revision}`, left, 23, { size: 7.5, color: muted })
+    draw(daySummary ? 'Bakery POS | Resumen del día' : `Bakery POS | Cierre ${shortId(closure.id)} | V${closure.revision}`, left, 23, { size: 7.5, color: muted })
     draw(`${i + 1} / ${pages.length}`, right, 23, { size: 7.5, align: 'right', color: muted })
   })
   // Flate content streams + compressed object streams; standard fonts keep the PDF small.

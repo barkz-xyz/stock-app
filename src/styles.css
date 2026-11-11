@@ -993,12 +993,25 @@ html[data-theme='light'] .operations-strip { background: #fffaf5; }
 html[data-theme='light'] .operations-strip > div:not(.operations-title):nth-child(even) { background: rgba(222,235,225,.42); }
 
 .closure-page .card { border-radius: 12px; box-shadow: none; }
-.closure-views { display: flex; gap: 4px; width: fit-content; max-width: 100%; margin-bottom: 16px; padding: 4px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
-.closure-views a { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 8px 14px; border-radius: 8px; color: var(--muted); font-size: 12px; font-weight: 650; text-decoration: none; }
-.closure-views a[aria-current=page] { color: var(--cocoa); background: var(--surface-strong); }
-.closure-views a:hover { color: var(--ink); }
-.closure-views a:focus-visible, .closure-history-row:focus-visible { outline: 2px solid var(--cocoa); outline-offset: -2px; }
-.closure-back-history { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; margin: -4px 0 10px; color: var(--cocoa); font-size: 12px; text-decoration: none; }
+.closure-page-heading, .register-day-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.closure-page-heading { margin-bottom: 12px; scroll-margin-top: 90px; }
+.closure-page-heading h2, .register-day-heading h2 { margin: 0; font-size: 18px; color: var(--ink); }
+.closure-page-heading > div, .register-day-tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.closure-page-heading .button, .register-day-tools .button { text-decoration: none; }
+.register-day-summary, .closure-history-panel { margin-top: 16px; scroll-margin-top: 90px; }
+.register-day-summary { padding: 16px; }
+.register-day-heading p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.register-day-totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+.register-day-totals article { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; }
+.register-day-totals article.register-day-net { background: var(--surface-strong); }
+.register-day-totals article > span { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.register-day-totals article > strong { font-size: clamp(17px, 2vw, 24px); }
+.register-day-totals article > small, .register-day-web, .register-day-registers { color: var(--muted); font-size: 11px; }
+.register-day-web { margin: 12px 0 0; }
+.register-day-registers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-top: 12px; }
+.register-day-registers a { display: inline-flex; gap: 4px; align-items: center; color: var(--cocoa); }
+.closure-history-toggle { width: 100%; }
+.closure-history-row:focus-visible { outline: 2px solid var(--cocoa); outline-offset: -2px; }
 .closure-history { overflow: hidden; }
 .closure-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px; }
 .closure-history-heading h2 { margin: 0 0 6px; color: var(--ink); font-size: 18px; letter-spacing: -.02em; }
@@ -1037,8 +1050,7 @@ html[data-theme='light'] .operations-strip > div:not(.operations-title):nth-chil
 .closure-history-empty strong { color: var(--ink); font-size: 14px; }
 .closure-history-empty p { margin: 0; font-size: 12px; }
 @media (max-width: 580px) {
-  .closure-views { width: 100%; }
-  .closure-views a { flex: 1; padding-inline: 8px; font-size: 11px; }
+  .register-day-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .closure-history-heading { padding: 16px 12px; }
   .closure-history-heading h2 { font-size: 16px; }
   .closure-history-heading p { font-size: 11px; }
@@ -1086,8 +1098,6 @@ html[data-theme='light'] .operations-strip > div:not(.operations-title):nth-chil
 .closure-kpis small { font-size: 10px; font-weight: 500; color: var(--faint); }
 .closure-form { display: grid; gap: 12px; }
 .closure-methods { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; align-items: start; }
-.closure-day-filter { max-width: 220px; }
-.closure-day-filter input { width: 100%; }
 .closure-method { min-width: 0; }
 .closure-method .card-header { min-height: 58px; padding: 12px 16px; }
 .closure-method-title { display: flex; align-items: center; gap: 9px; }

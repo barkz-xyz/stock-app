@@ -1899,6 +1899,38 @@ async function closureSales(period, client) {
     ORDER BY s.id`, [period.from.toISOString(), period.to.toISOString()])
   return hydratePostgresSales(rows, client)
 }
+
+export async function getRegisterDaySummary(date) {
+  const period = closurePeriod(date)
+  const summarize = (sales, entries, sessions) => ({
+    ...withCashLedger(buildClosureSummary(sales, period, { includeEmptyWeb: true }), entries),
+    generatedAt: new Date().toISOString(),
+    registers: {
+      open: sessions.filter(s => !s.closedAt).map(({ id, operator }) => ({ id, operator })),
+      closed: sessions.filter(s => s.closedAt).length,
+    },
+  })
+  if (!pool) {
+    const data = await readFileData()
+    return summarize(data.sales.map(s => normalizeSale(s)), await getRegisterCashStore().entries(null, data, period),
+      data.registerSessions.filter(s => registerBusinessDate(s, closureTimeZone) === period.businessDate))
+  }
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    const sales = await closureSales(period, client)
+    const entries = await getRegisterCashStore().entries(null, client, period)
+    const { rows } = await client.query(`SELECT id,operator,closed_at AS "closedAt" FROM register_sessions
+      WHERE business_date=$1::date ORDER BY opened_at,id`, [period.businessDate])
+    const summary = summarize(sales, entries, rows)
+    await client.query('COMMIT')
+    return summary
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally { client.release() }
+}
+
 function closureWorkspace(sales, period, existing, entries = []) {
   const live = withCashLedger(buildClosureSummary(sales, period), entries, existing?.snapshot?.cashLedger || existing || {})
   const { history = [], snapshot, ...fields } = existing || {}
@@ -2007,7 +2039,8 @@ export async function listClosureHistory(user, query = {}) {
     openedAt: row.openedAt || null, closedAt: row.closedAt || null, updatedAt: row.updatedAt || row.closedAt || row.openedAt,
     status: row.status || (row.closedAt ? 'closed' : 'open'), revision: Number(row.revision || 0),
     totalSales: row.totalSales == null ? null : Number(row.totalSales), countedCash: row.countedCash == null ? null : Number(row.countedCash),
-    difference: row.difference == null ? null : Number(row.difference) })
+    difference: row.difference == null ? null : Number(row.difference),
+    ...(row.scope === 'day' ? { exportable: Boolean(row.exportable ?? row.snapshot) } : {}) })
   let entries, total
   if (!pool) {
     const data = await readFileData()
@@ -2031,13 +2064,14 @@ export async function listClosureHistory(user, query = {}) {
         COALESCE((s.closure->>'revision')::integer,0) AS revision,
         (s.closure->>'totalSales')::numeric AS "totalSales",
         (s.closure->>'countedCash')::numeric AS "countedCash",
-        (s.closure->>'difference')::numeric AS difference
+        (s.closure->>'difference')::numeric AS difference, NULL::boolean AS exportable
       FROM register_sessions s WHERE s.business_date >= $1::date AND s.business_date < $2::date AND (s.closed_at IS NULL OR s.closure IS NOT NULL)
         AND ($3::boolean OR s.user_id=$4::uuid)
       UNION ALL
       SELECT c.id, 'day'::text, NULL::uuid, NULL::uuid, COALESCE(c.details->'current'->>'operator',''),
         c.business_date::text, NULL::timestamptz, c.closed_at, c.closed_at, 'closed'::text,
-        COALESCE((c.details->'current'->>'revision')::integer,1), c.total_sales, c.counted_cash, c.difference
+        COALESCE((c.details->'current'->>'revision')::integer,1), c.total_sales, c.counted_cash, c.difference,
+        jsonb_typeof(c.details->'current'->'snapshot')='object'
       FROM cash_closures c WHERE $3::boolean AND c.business_date >= $1::date AND c.business_date < $2::date
     ), page AS (SELECT * FROM history ORDER BY "businessDate" DESC,"openedAt" DESC NULLS LAST,scope,id LIMIT $5 OFFSET $6)
     SELECT (SELECT COUNT(*) FROM history) AS total,

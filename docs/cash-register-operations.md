@@ -23,11 +23,12 @@ El fondo sugerido se obtiene del cierre con día de negocio más reciente: cerra
 una caja antigua tardíamente no desplaza un cierre de un día posterior. El fondo
 se confirma al abrir y las aperturas existentes no se reescriben.
 
-`/caja/cierre` muestra directamente la caja propia del día para cajero y administrador,
-sin selector de sesiones ni cierre general por defecto. El historial permite abrir
-las cajas anteriores pendientes para cerrarlas o corregir cierres guardados. Los
-enlaces históricos conservan `mes` y el identificador de caja; no cambian la caja
-activa del usuario. Los cierres generales anteriores siguen disponibles en el historial.
+`/caja/cierre` muestra la caja propia del día y el historial en la misma pantalla.
+El único cierre operativo es **Cerrar caja**. El administrador también ve el
+**Resumen del día**, que se calcula al consultar y separa efectivo, tarjeta Point
+y web. Muestra las cajas pendientes y permite descargar el PDF sin guardar otro cierre.
+Una venta web aprobada después del cierre físico entra al resumen según la fecha
+de aprobación en Chile; el cuadre y el ticket de la caja ya cerrada no cambian.
 
 El bootstrap incluye el día, zona horaria y próxima medianoche calculados por el
 servidor. Un temporizador actualiza la app al cambio de día y vuelve a solicitar
@@ -46,15 +47,20 @@ un conteo de efectivo al pasar la medianoche.
 Dentro de `/caja/cierre`, la sección **Historial de cierres** permite seleccionar
 un mes y abrir un cierre para modificar el conteo, las denominaciones, la
 referencia del terminal y las observaciones. El cajero consulta y corrige sus
-propias sesiones; el administrador puede consultar y corregir todas y también
-los cierres diarios generales. El listado se pagina y no depende de las últimas
-100 sesiones del selector de caja.
+propias sesiones; el administrador puede consultar y corregir todas. Los enlaces
+conservan el mes y el identificador de caja. Los cierres diarios generales
+anteriores quedan archivados con sus PDF existentes. El listado se pagina y no
+depende de las últimas 100 sesiones.
 
 `GET /api/closure-history?month=YYYY-MM&offset=0&limit=40` devuelve metadatos de
 cajas abiertas y cierres guardados. Los meses corresponden al día de negocio de
 la caja en Chile; los cierres generales históricos mantienen su día contable.
 Una caja pendiente no declara efectivo contado ni diferencia. Cerrar o corregir
 una caja posteriormente no la traslada a otro día o mes.
+
+Para administradores, `GET /api/register-day-summary?date=YYYY-MM-DD` devuelve
+los importes actuales y `GET /api/register-day-summary/YYYY-MM-DD/pdf` genera
+el reporte en ese momento. Los PDF de sesión continúan usando la revisión guardada.
 
 Las observaciones son obligatorias solo cuando el efectivo contado difiere del
 esperado, tanto al cerrar como al corregir. Si la caja cuadra, son opcionales,

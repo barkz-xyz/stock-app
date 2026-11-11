@@ -30,8 +30,8 @@ export default function CashClosureHistory({ month, currentMonth, user, onNaviga
   const changeMonth = value => onNavigate(sectionHref('pos', { view: 'close', closureView: 'history', month: value }))
   return <section className="card closure-history" aria-label={tx('Historial mensual de cierres', 'Monthly close history')}>
     <header className="closure-history-heading">
-      <div><h2>{tx('Historial de cierres', 'Close history')}</h2><p>{user?.role === 'admin' ? tx('Cajas del equipo y cierres guardados.', 'Team registers and saved closes.') : tx('Consulta tus cajas pendientes y cierres guardados.', 'View your pending registers and saved closes.')}</p></div>
-      <span className="closure-history-count">{data ? `${data.total} ${data.total === 1 ? tx('caja', 'register') : tx('cajas', 'registers')}` : '—'}</span>
+      <div><h2>{tx('Historial de cierres', 'Close history')}</h2><p>{user?.role === 'admin' ? tx('Consulta las cajas del equipo y sus cierres.', 'View the team’s registers and closes.') : tx('Consulta tus cajas pendientes y cierres guardados.', 'View your pending registers and saved closes.')}</p></div>
+      <span className="closure-history-count">{data ? `${data.total} ${data.total === 1 ? tx('registro', 'entry') : tx('registros', 'entries')}` : '—'}</span>
     </header>
     <div className="closure-history-toolbar">
       <label><span>{tx('Mes de caja', 'Register month')}</span><div className="closure-month-control"><CalendarDays size={17} aria-hidden="true" /><input type="month" aria-label={tx('Mes del historial', 'History month')} value={validMonth ? month : ''} min="2000-01" max={currentMonth} onChange={e => e.target.value && changeMonth(e.target.value)} /></div></label>
@@ -46,18 +46,22 @@ export default function CashClosureHistory({ month, currentMonth, user, onNaviga
       {loading ? <p className="closure-empty" role="status">{tx('Cargando cierres…', 'Loading closes…')}</p> : data?.entries.length ? <>
         <div className="closure-history-columns" aria-hidden="true"><span>{tx('Caja', 'Register')}</span><span>{tx('Efectivo contado', 'Counted cash')}</span><span>{tx('Diferencia', 'Difference')}</span><span /></div>
         {data.entries.map(entry => {
-          const href = sectionHref('pos', { view: 'close', sessionId: entry.registerSessionId,
-            date: entry.scope === 'day' ? entry.businessDate : undefined, month })
+          const archived = entry.scope === 'day'
+          const archivedWithoutPdf = archived && !entry.exportable
+          const Row = archivedWithoutPdf ? 'div' : 'a'
+          const href = archived ? api.cashClosurePdfUrl(entry.businessDate, entry.revision) :
+            sectionHref('pos', { view: 'close', sessionId: entry.registerSessionId, date: entry.businessDate, month })
           const closedLabel = dateFormatter.format(new Date(`${entry.businessDate}T12:00:00Z`))
           const isOpen = entry.status === 'open'
-          return <a className="closure-history-row" key={`${entry.scope}:${entry.id}`} href={href}
-            aria-label={`${isOpen ? tx('Abrir caja pendiente','Open pending register') : tx('Abrir y modificar cierre', 'Open and edit close')} · ${entry.operator || tx('General diario', 'Full daily')} · ${closedLabel}`}
-            onClick={e => { if (isPlainNavigation(e)) { e.preventDefault(); onNavigate(href) } }}>
-            <div className="closure-history-reference"><span className="closure-history-icon"><History size={18} /></span><div><strong>{entry.operator || tx('General diario', 'Full daily')}</strong><time dateTime={entry.businessDate}>{closedLabel}</time><small className={isOpen ? 'closure-open-state' : ''}>{isOpen ? tx('Abierta · Pendiente de cierre','Open · Awaiting close') : `${entry.scope === 'day' ? tx('General diario', 'Full daily') : tx('Cerrada', 'Closed')} · v${entry.revision}`}</small></div></div>
+          const archivedLabel = archivedWithoutPdf ? tx('Cierre diario anterior · Sin PDF', 'Former daily close · No PDF') : tx('Cierre diario anterior · PDF', 'Former daily close · PDF')
+          return <Row className="closure-history-row" key={`${entry.scope}:${entry.id}`} href={archivedWithoutPdf ? undefined : href}
+            aria-label={archivedWithoutPdf ? undefined : `${archived ? tx('Descargar cierre diario anterior', 'Download former daily close') : isOpen ? tx('Abrir caja pendiente','Open pending register') : tx('Abrir y modificar cierre', 'Open and edit close')} · ${entry.operator || tx('General diario', 'Full daily')} · ${closedLabel}`}
+            download={archived && entry.exportable || undefined} onClick={archived ? undefined : e => { if (isPlainNavigation(e)) { e.preventDefault(); onNavigate(href) } }}>
+            <div className="closure-history-reference"><span className="closure-history-icon"><History size={18} /></span><div><strong>{entry.operator || tx('General diario', 'Full daily')}</strong><time dateTime={entry.businessDate}>{closedLabel}</time><small className={isOpen ? 'closure-open-state' : ''}>{isOpen ? tx('Abierta · Pendiente de cierre','Open · Awaiting close') : `${archived ? archivedLabel : tx('Cerrada', 'Closed')} · v${entry.revision}`}</small></div></div>
             <div className="closure-history-amount"><small>{tx('Contado', 'Counted')}</small><strong>{isOpen ? '—' : money(entry.countedCash)}</strong></div>
             <div className={`closure-history-difference ${isOpen ? '' : entry.difference === 0 ? 'balanced' : 'unbalanced'}`}><small>{tx('Diferencia', 'Difference')}</small><strong>{isOpen ? tx('Sin cierre','Not closed') : `${entry.difference > 0 ? '+' : ''}${money(entry.difference)}`}</strong></div>
-            <ChevronRight size={18} aria-hidden="true" />
-          </a>
+            {!archivedWithoutPdf && <ChevronRight size={18} aria-hidden="true" />}
+          </Row>
         })}
       </> : data && <div className="closure-history-empty"><CalendarDays size={28} /><strong>{tx('No hay cajas en este mes', 'No registers this month')}</strong><p>{tx('Selecciona otro mes para consultar el historial.', 'Select another month to view its history.')}</p></div>}
     </div>

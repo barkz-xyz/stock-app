@@ -13,6 +13,7 @@
     "build": "vite build",
     "build:deploy": "npm run check && npm run build",
     "test:deploy": "node scripts/test-deploy.js",
+    "predeploy:railway": "npm run test:deploy && npm run check:database",
     "validate": "npm run build:deploy && npm run test:deploy",
     "start": "node server/index.js",
     "check": "node scripts/check-source.js",

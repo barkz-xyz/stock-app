@@ -93,7 +93,7 @@ test('cash close only requires notes for a cash shortage or surplus, including c
   }
 })
 
-test('file closures preserve snapshots and revisions, reject racing writes and detect later changes', async () => {
+test('archived file closures retain their original snapshots and detect later changes', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'bakery-close-'))
   process.env.DATA_PATH = path.join(directory, 'inventory.json')
   process.env.SEED_DEMO_DATA = 'false'
@@ -106,30 +106,29 @@ test('file closures preserve snapshots and revisions, reject racing writes and d
     let work = await store.getCashClosureWorkspace('2026-10-17')
     assert.equal(work.live.cash.net, -1000)
     const input = draft(work.live)
-    const results = await Promise.allSettled([store.saveCashClosure(input), store.saveCashClosure(input)])
-    assert.equal(results.filter(r => r.status === 'fulfilled').length, 1)
-    assert.equal(results.find(r => r.status === 'rejected').reason.code, 'CLOSURE_CHANGED')
-    const first = await store.getCashClosureRevision(input.businessDate, 1)
-    assert.equal(first.totalSales, -1000)
-    let raw = JSON.parse(await fs.readFile(process.env.DATA_PATH, 'utf8'))
+    const first = createClosure(work.live, cleanClosureInput(input), null)
+    const raw = { items: [], movements: [], cashClosures: [first], sales }
+    await fs.writeFile(process.env.DATA_PATH, JSON.stringify(raw))
+    const archivedFirst = await store.getCashClosureRevision(input.businessDate, 1)
+    assert.deepEqual(archivedFirst, JSON.parse(JSON.stringify({ webSales: 0, ...first })))
     raw.sales.push(sale('card', 2500, '2026-10-17T14:00:00Z'))
     await fs.writeFile(process.env.DATA_PATH, JSON.stringify(raw))
     work = await store.getCashClosureWorkspace(input.businessDate)
     assert.equal(work.stale, true)
-    await assert.rejects(store.saveCashClosure({ ...input, expectedRevision: 1 }), { code: 'CLOSURE_CHANGED' })
-    const second = await store.saveCashClosure({ ...draft(work.live), expectedRevision: 1, note: 'Corrección: incluir cobro posterior.' })
+    const second = createClosure(work.live, cleanClosureInput({
+      ...draft(work.live), expectedRevision: 1, note: 'Corrección: incluir cobro posterior.',
+    }), first)
+    raw.cashClosures = [{ ...second, history: [archivedFirst] }]
+    await fs.writeFile(process.env.DATA_PATH, JSON.stringify(raw))
     assert.equal(second.revision, 2)
     assert.equal(second.cardSales, 2500)
-    assert.deepEqual(await store.getCashClosureRevision(input.businessDate, 1), first)
+    assert.deepEqual(await store.getCashClosureRevision(input.businessDate, 1), archivedFirst)
     work = await store.getCashClosureWorkspace(input.businessDate)
     assert.equal(work.stale, false)
     assert.equal(work.revisions.length, 2)
     assert.equal(work.closure.history, undefined)
-    assert.equal((await store.getCashClosureRevision(input.businessDate, 2)).id, first.id)
+    assert.deepEqual(await store.getCashClosureRevision(input.businessDate, 2), JSON.parse(JSON.stringify({ webSales: 0, ...second })))
     await assert.rejects(store.getCashClosureRevision('2026-10-16'), { status: 404 })
-    raw = JSON.parse(await fs.readFile(process.env.DATA_PATH, 'utf8'))
-    assert.equal(raw.sales.length, 2)
-    assert.equal(raw.sales[0].refunds.length, 1)
   } finally { await store.closeStore(); await fs.rm(directory, { recursive: true, force: true }) }
 })
 

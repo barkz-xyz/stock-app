@@ -5,6 +5,7 @@ import pg from 'pg'
 import { dateOnly } from '../src/dates.js'
 import { saleUsesPoint } from '../src/pointPayments.js'
 import { registerBusinessDate, registerIsActive } from '../src/registerDay.js'
+import { searchText } from '../src/posWorkspace.js'
 import { publishChange } from './changes.js'
 import { cleanInventoryBatch, inventoryBatchChanges } from './inventory-batch.js'
 import { cleanHistoryQuery, historyMatches } from './sales-history.js'
@@ -1911,7 +1912,7 @@ export async function getSalesMetrics(period) {
   const [sales, cashClosure] = await Promise.all([listSalesBetween(earliest, latest), getCashClosure(period.businessDate)])
   const metrics = buildSalesMetrics(sales, period)
   const { snapshot, history, ...closureSummary } = cashClosure || {}
-  return { ...metrics, cashClosure: cashClosure ? closureSummary : null }
+  return { ...metrics, businessDate: period.businessDate, cashClosure: cashClosure ? closureSummary : null }
 }
 
 async function closureSales(period, client) {
@@ -1986,63 +1987,56 @@ export async function getCashClosureRevision(date, revision) {
   const latest = await getCashClosure(date)
   if (!latest) throw closureError('Guarda el cierre antes de exportar su PDF.', 404, 'CLOSURE_NOT_FOUND')
   const selected = revision == null ? latest : [...latest.history, latest].find(c => c.revision === Number(revision))
-  if (!selected?.snapshot) throw closureError('Este cierre antiguo no contiene el detalle de operaciones. Registra una corrección para generar un PDF detallado.', 409, 'LEGACY_CLOSURE')
+  if (!selected?.snapshot) throw closureError('Este cierre histórico no contiene el detalle necesario para exportar un PDF.', 409, 'LEGACY_CLOSURE')
   const { history, ...closure } = selected
   return closure
 }
-export async function saveCashClosure(body) {
-  const input = cleanClosureInput(body)
-  const period = closurePeriod(input.businessDate)
-  const save = async (sales, existing, queryable) => {
-    const summary = withCashLedger(buildClosureSummary(sales, period), await getRegisterCashStore().entries(null,queryable,period), existing?.snapshot?.cashLedger || existing || {})
-    const closure = createClosure(summary, input, existing)
-    const history = existing ? [...existing.history, Object.fromEntries(Object.entries(existing).filter(([key]) => key !== 'history'))] : []
-    return { closure, history }
-  }
-  if (!pool) {
-    return mutateFileData(async data => {
-      const index = data.cashClosures.findIndex(c => c.businessDate === input.businessDate)
-      const { closure, history } = await save(data.sales.map(s => normalizeSale(s)), normalizeCashClosure(data.cashClosures[index]))
-      const stored = { ...closure, history }
-      if (index >= 0) data.cashClosures[index] = stored
-      else data.cashClosures.unshift(stored)
-      return closure
-    })
-  }
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ')
-    const existing = await client.query('SELECT * FROM cash_closures WHERE business_date=$1 FOR UPDATE', [input.businessDate])
-    const { closure: c, history } = await save(await closureSales(period, client), normalizeCashClosure(existing.rows[0]),client)
-    const result = await client.query(`INSERT INTO cash_closures (
-      id,business_date,opening_cash,cash_adjustments,counted_cash,cash_sales,card_sales,total_sales,
-      expected_cash,difference,transaction_count,note,closed_at,details
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-    ON CONFLICT (business_date) DO UPDATE SET opening_cash=EXCLUDED.opening_cash,
-      cash_adjustments=EXCLUDED.cash_adjustments,counted_cash=EXCLUDED.counted_cash,cash_sales=EXCLUDED.cash_sales,
-      card_sales=EXCLUDED.card_sales,total_sales=EXCLUDED.total_sales,expected_cash=EXCLUDED.expected_cash,
-      difference=EXCLUDED.difference,transaction_count=EXCLUDED.transaction_count,note=EXCLUDED.note,
-      closed_at=EXCLUDED.closed_at,details=EXCLUDED.details
-    WHERE cash_closures.id=EXCLUDED.id RETURNING id`,
-    [c.id,c.businessDate,c.openingCash,c.cashAdjustments,c.countedCash,c.cashSales,c.cardSales,c.totalSales,
-      c.expectedCash,c.difference,c.transactionCount,c.note,c.closedAt,JSON.stringify({ current: c, history })])
-    if (!result.rows.length) throw closureError('Otro usuario guardó el cierre. Actualiza el día antes de continuar.', 409, 'CLOSURE_CHANGED')
-    await client.query('COMMIT')
-    return c
-  } catch (error) {
-    await client.query('ROLLBACK')
-    if (['40001','40P01','23505'].includes(error.code)) throw closureError('El día cambió mientras se cerraba. Actualiza y revisa el cierre.', 409, 'CLOSURE_CHANGED')
-    throw error
-  } finally { client.release() }
-}
-
 export async function listMovements(limit = 50) {
   if (pool) {
-    const { rows } = await pool.query('SELECT * FROM movements ORDER BY created_at DESC LIMIT $1', [limit])
+    const { rows } = await pool.query('SELECT * FROM movements ORDER BY created_at DESC,id DESC LIMIT $1', [limit])
     return rows.map(normalizeMovement)
   }
   const data = await readFileData()
   return data.movements.slice(0, limit).map(normalizeMovement)
+}
+
+export async function searchMovements({ search, type, page }) {
+  const pageSize = 15
+  const query = searchText(search.trim())
+  if (!pool) {
+    const data = await readFileData()
+    const items = new Map(data.items.map(item => [item.id, item]))
+    const matching = data.movements.map(normalizeMovement).filter(movement => {
+      const item = items.get(movement.itemId)
+      if (query && !searchText(`${movement.itemName} ${item?.name || ''} ${item?.sku || ''}`).includes(query)) return false
+      if (type === 'web') return Boolean(movement.reservationId) || /^Reserva online\b/i.test(movement.note)
+      return type === 'all' || movement.type === type
+    }).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt) || b.id.localeCompare(a.id))
+    const current = Math.min(page, Math.max(1, Math.ceil(matching.length / pageSize)))
+    const offset = (current - 1) * pageSize
+    return { movements: matching.slice(offset, offset + pageSize), total: matching.length, page: current, pageSize }
+  }
+  const { rows: [result] } = await pool.query(`
+    WITH matching AS (
+      SELECT m.id, m.created_at FROM movements m LEFT JOIN items i ON i.id = m.item_id
+      WHERE ($1::text = '' OR strpos(regexp_replace(
+        normalize(lower(concat_ws(' ', m.item_name, i.name, i.sku)), NFD), '[\u0300-\u036f]', '', 'g'
+      ), $1) > 0)
+      AND CASE WHEN $2::text = 'web' THEN m.reservation_id IS NOT NULL OR m.note ~* '^Reserva online([^[:alnum:]_]|$)'
+        ELSE $2 = 'all' OR m.type = $2 END
+    ), bounds AS (
+      SELECT COUNT(*)::integer AS total, LEAST($3::integer, GREATEST(1, CEIL(COUNT(*)::numeric / $4::integer)))::integer AS page
+      FROM matching
+    ), selected AS (
+      SELECT id, created_at FROM matching ORDER BY created_at DESC, id DESC
+      LIMIT $4::integer OFFSET (SELECT (page - 1) * $4::integer FROM bounds)
+    )
+    SELECT total, page, COALESCE((
+      SELECT jsonb_agg(to_jsonb(m) ORDER BY s.created_at DESC, s.id DESC)
+      FROM selected s JOIN movements m ON m.id = s.id
+    ), '[]'::jsonb) AS movements FROM bounds
+  `, [query, type, page, pageSize])
+  return { movements: result.movements.map(normalizeMovement), total: result.total, page: result.page, pageSize }
 }
 
 function normalizeRegister(row) {

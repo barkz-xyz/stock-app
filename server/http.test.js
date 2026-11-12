@@ -332,6 +332,62 @@ test('HTTP authentication rejects malformed sessions and validates product calen
     assert.equal((await request('/api/items',{headers:a.headers})).status,401)
     assert.equal((await request('/api/auth/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'second-admin',name:'Second',password:'No-Second-1234'})})).status,409)
   })
+  await t.test('movement pages filter the entire history and keep a stable page size', async () => {
+    const headers = { Cookie: cookie, 'Content-Type': 'application/json' }
+    const endpoint = '/api/movements/history'
+    assert.equal((await request(endpoint)).status, 401)
+    assert.equal((await request(endpoint + '?page=0', { headers })).status, 400)
+    const created = await request('/api/items', { method: 'POST', headers, body: JSON.stringify({
+      name: 'Berlín histórico', sku: 'PAGINATION-01', category: 'Pastries', unit: 'pieces', quantity: 1, price: 1000, sellable: true,
+    }) })
+    assert.equal(created.status, 201)
+    const item = await created.json()
+    async function adjust(type, quantity) {
+      const response = await request(`/api/items/${item.id}/adjust`, { method: 'POST', headers, body: JSON.stringify({ type, quantity }) })
+      assert.equal(response.status, 200)
+      await response.json()
+    }
+    await adjust('adjustment', 3)
+    for (let index = 0; index < 17; index++) await adjust('stock_in', 1)
+    const firstResponse = await request(endpoint + '?search=berlin%20historico', { headers })
+    assert.equal(firstResponse.status, 200)
+    assertPrivate(firstResponse)
+    const first = await firstResponse.json()
+    const last = await (await request(endpoint + '?search=PAGINATION-01&page=999', { headers })).json()
+    assert.equal(first.total, 19)
+    assert.equal(first.movements.length, 15)
+    assert.equal(last.page, 2)
+    assert.equal(new Set([...first.movements, ...last.movements].map(row => row.id)).size, 19)
+    assert.ok(first.movements.every(row => row.type !== 'adjustment'))
+    const filtered = await (await request(endpoint + '?search=berlin%20historico&type=adjustment', { headers })).json()
+    assert.equal(filtered.total, 1)
+    assert.equal(filtered.movements[0].balanceAfter, 3)
+  })
+  await t.test('metrics ranges keep older sales outside today and use the same business date for exports', async () => {
+    const headers = { Cookie: cookie }
+    const getMetrics = async range => {
+      const response = await request('/api/metrics?range=' + range, { headers })
+      assert.equal(response.status, 200)
+      return response.json()
+    }
+    const today = await getMetrics('today')
+    const month = await getMetrics('30d')
+    const fixture = JSON.parse(await fs.readFile(env.DATA_PATH, 'utf8'))
+    const previousDate = new Date(Date.now() - 48 * 3600000).toISOString()
+    fixture.sales.push({ id: crypto.randomUUID(), status: 'paid', paymentMethod: 'cash', total: 2350,
+      items: [], refunds: [], createdAt: previousDate, updatedAt: previousDate, paidAt: previousDate })
+    await fs.writeFile(env.DATA_PATH, JSON.stringify(fixture))
+    const refreshedToday = await getMetrics('today')
+    assert.equal(refreshedToday.businessDate, today.businessDate)
+    assert.equal(refreshedToday.summary.revenue, today.summary.revenue)
+    assert.equal(refreshedToday.hourly.reduce((sum, entry) => sum + entry.revenue, 0), today.summary.revenue)
+    assert.equal((await getMetrics('30d')).summary.revenue, month.summary.revenue + 2350)
+    assert.equal((await request('/api/metrics?range=invalid', { headers })).status, 400)
+    const report = await request('/api/reports/daily?range=today&language=es', { headers })
+    assert.equal(report.status, 200)
+    assert.ok(report.headers.get('content-disposition').includes(today.businessDate))
+    await report.text()
+  })
   for (let attempt = 0; attempt < 9; attempt++) {
     const response = await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': `192.0.2.${attempt}` }, body: JSON.stringify({ pin: 'wrong' }) })
     assert.equal(response.status, attempt < 8 ? 401 : 429)

@@ -1,5 +1,4 @@
 import { shareSnapshot } from './snapshot.js'
-import { dateOnly } from './dates.js'
 
 const pendingReads = new Map()
 const validatedReads = new Map()
@@ -60,29 +59,9 @@ function request(url, options = {}) {
   return pending
 }
 
-export function metricsPeriod(range = 'today') {
-  const now = new Date()
-  const todayFrom = new Date(now)
-  todayFrom.setHours(0, 0, 0, 0)
-  const from = new Date(todayFrom)
-  if (range === '7d') from.setDate(from.getDate() - 6)
-  if (range === '30d') from.setDate(from.getDate() - 29)
-  const duration = now.getTime() - from.getTime()
-  const previousTo = new Date(from)
-  const previousFrom = new Date(previousTo.getTime() - duration)
-  return {
-    from: from.toISOString(),
-    to: new Date(now.getTime() + 1000).toISOString(),
-    previousFrom: previousFrom.toISOString(),
-    previousTo: previousTo.toISOString(),
-    todayFrom: todayFrom.toISOString(),
-    todayTo: new Date(now.getTime() + 1000).toISOString(),
-    businessDate: dateOnly(now),
-  }
-}
-
 export const api = {
   bootstrap: () => request('/api/bootstrap'),
+  movementHistory: (query, options) => request(`/api/movements/history?${new URLSearchParams(query)}`, options),
   login: (username,password) => request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username,password }) }),
   setupAdmin: body => request('/api/auth/setup',{method:'POST',body:JSON.stringify(body)}),
   changePassword: body => request('/api/auth/password',{method:'POST',body:JSON.stringify(body)}),
@@ -107,11 +86,11 @@ export const api = {
   saveRegisterClosure: (id,body) => request(`/api/register-sessions/${id}/closure`,{method:'POST',body:JSON.stringify(body)}),
   registerPdfUrl: (id,revision) => `/api/register-sessions/${id}/closure/pdf?${new URLSearchParams({revision})}`,
   logout: () => request('/api/auth/logout', { method: 'POST' }),
-  metrics: (range = 'today', options) => request(`/api/metrics?${new URLSearchParams(metricsPeriod(range))}`, options),
+  metrics: (range = 'today', options) => request(`/api/metrics?${new URLSearchParams({ range })}`, options),
   registerDaySummary: (date, options) => request(`/api/register-day-summary?${new URLSearchParams({ date })}`, options),
   registerDaySummaryPdfUrl: date => `/api/register-day-summary/${encodeURIComponent(date)}/pdf`,
   cashClosurePdfUrl: (date, revision) => `/api/cash-closures/${encodeURIComponent(date)}/pdf?${new URLSearchParams({ revision })}`,
-  dailyReportUrl: (language = 'es') => `/api/reports/daily?${new URLSearchParams({ ...metricsPeriod('today'), language })}`,
+  dailyReportUrl: (language = 'es') => `/api/reports/daily?${new URLSearchParams({ range: 'today', language })}`,
   posManagement: () => request('/api/pos/management'),
   createPointStore: (store) => request('/api/pos/stores', { method: 'POST', body: JSON.stringify(store) }),
   updatePointStore: (id, store) => request(`/api/pos/stores/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(store) }),
@@ -134,7 +113,6 @@ export const api = {
   printWebOrder: (id, key) => request(`/api/sales/${encodeURIComponent(id)}/print-web-order`, {
     method: 'POST', headers: { 'Idempotency-Key': key },
   }),
-  retryCardSale: (id) => request(`/api/sales/${id}/retry-card`, { method: 'POST' }),
   retryPointSale: (id) => request(`/api/sales/${id}/retry-point`, { method: 'POST' }),
   cancelSale: (id) => request(`/api/sales/${id}/cancel`, { method: 'POST' }),
   refundSale: (id, refund, key) => request(`/api/sales/${id}/refunds`, { method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(refund), signal: AbortSignal.timeout(20000) }),

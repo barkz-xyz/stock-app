@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import pg from 'pg'
-import { businessDateAt, closureHistoryQuery } from './cash-closure.js'
+import { businessDateAt, cleanClosureInput, closureHistoryQuery, createClosure } from './cash-closure.js'
 import { postgresConfig } from './postgres.js'
 
 test('monthly close boundaries use Chile time and reject invalid months and pages', () => {
@@ -60,9 +60,22 @@ for (const postgres of [false, true]) test(`monthly history and corrections pres
       }
       await moveClose(shift, '2026-10-01T02:59:59.999Z', owner)
       await moveClose(foreign, '2026-10-01T04:00:00.000Z', other)
-      const daily = await store.getCashClosureWorkspace('2026-09-30')
-      await store.saveCashClosure({ businessDate: '2026-09-30', openingCash: 0, cashIn: 0, cashOut: 0, countedCash: 0,
-        operator: 'General diario', note: '', expectedRevision: 0, fingerprint: daily.live.fingerprint })
+      const dailyDate = '2026-09-30'
+      const { live } = await store.getCashClosureWorkspace(dailyDate)
+      const daily = createClosure(live, cleanClosureInput({
+        businessDate: dailyDate, openingCash: 0, cashIn: 0, cashOut: 0, countedCash: 0,
+        operator: 'General diario', note: '', expectedRevision: 0, fingerprint: live.fingerprint,
+      }), null)
+      if (db) {
+        await db.query('INSERT INTO cash_closures (id,business_date,closed_at,details) VALUES ($1,$2,$3,$4)',
+          [daily.id, daily.businessDate, daily.closedAt, { current: daily, history: [] }])
+      } else {
+        const data = JSON.parse(await fs.readFile(process.env.DATA_PATH, 'utf8'))
+        data.cashClosures.push(daily)
+        await fs.writeFile(process.env.DATA_PATH, JSON.stringify(data))
+      }
+      assert.deepEqual(await store.getCashClosureRevision(dailyDate, 1), JSON.parse(JSON.stringify({ webSales: 0, ...daily })))
+
 
       await t.test('cashiers see only their closes; admins also see daily closes and all operators', async () => {
         const own = await store.listClosureHistory(owner, { month: '2026-09' })

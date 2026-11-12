@@ -6,13 +6,15 @@ import { businessDayKey, registerIsActive, scheduleRegisterDay } from './registe
 import { createRouter, isPlainNavigation, parseRoute, sectionHref } from './routes.js'
 import { dateOnly, parseCalendarDate } from './dates.js'
 import { useI18n } from './i18n.js'
-import { categories, CategoryIcon, categoryClass, formatQuantity, Modal, LoadingSkeleton } from './ui.jsx'
+import { categories, CategoryIcon, categoryClass, formatQuantity, Modal, LoadingSkeleton, NumberedPagination } from './ui.jsx'
 import { saveCartDraft, searchText, setWorkspaceUser } from './posWorkspace.js'
 import { setCheckoutUser } from './checkoutAttempts.js'
 
 const units = ['pieces', 'loaves', 'cakes', 'kg', 'g', 'litres', 'bottles', 'boxes', 'packs']
+const inventoryPageSize = 6
 const SalesCounter = lazy(() => import('./SalesCounter.jsx'))
 const MetricsPage = lazy(() => import('./MetricsPage.jsx'))
+const ActivityPage = lazy(() => import('./ActivityPage.jsx'))
 const CashClosurePage = lazy(() => import('./CashClosurePage.jsx'))
 const CashMovementsPage = lazy(() => import('./CashMovementsPage.jsx'))
 const SettingsPage = lazy(() => import('./SettingsPage.jsx'))
@@ -193,19 +195,36 @@ function EmptyState({ onAdd }) {
   return <div className="empty-state"><div className="empty-art"><PackageOpen size={32} /></div><h3>{t('emptyInventoryTitle')}</h3>{onAdd&&<button className="button primary" onClick={onAdd}><Plus size={18} /> {t('addFirstProduct')}</button>}</div>
 }
 
-const InventoryList = memo(function InventoryList({ items, onAdjust, onEdit, dayKey }) {
-  const { t, categoryLabel, unitLabel, formatDate, formatCurrency } = useI18n()
+const InventoryList = memo(function InventoryList({ items, onAdjust, onEdit }) {
+  const { t, categoryLabel, unitLabel, formatCurrency } = useI18n()
   return <div className="inventory-list">
-    <div className="inventory-head"><span>{t('product')}</span><span>{t('available')}</span><span>{t('status')}</span><span>{t('expiry')}</span><span aria-hidden="true" /></div>
+    <div className="inventory-head" aria-hidden="true">
+      <span>{t('product')}</span><span>{t('inventoryPrice')}</span><span>{t('available')}</span><span>{t('status')}</span><span />
+    </div>
     {items.map((item) => {
-      const state = stockState(item, t); const expiry = daysUntil(item.expiryDate)
-      const details = [categoryLabel(item.category), item.sku, item.sellable && item.price > 0 ? formatCurrency(item.price) : t('notForSale')].filter(Boolean).join(' · ')
+      const state = stockState(item, t)
+      const details = [categoryLabel(item.category), item.sku].filter(Boolean).join(' · ')
       return <article className="inventory-row" key={item.id}>
-        <div className="product-cell"><div className={`product-glyph category-${categoryClass(item.category)}`}><CategoryIcon category={item.category} size={20} /></div><div><strong>{item.name}</strong><span>{details}</span></div></div>
-        <div className="quantity-cell"><strong>{formatQuantity(item.quantity)}</strong><span>{unitLabel(item.unit)}</span></div>
-        <div><span className={`status ${state.tone}`}><i />{state.label}</span></div>
-        <div className={`expiry-cell ${expiry !== null && expiry <= 2 ? 'urgent' : ''}`}>{item.expiryDate ? <><CalendarClock size={16} /><span>{expiry < 0 ? t('expired') : expiry === 0 ? t('todayExpiry') : formatDate(item.expiryDate)}</span></> : <span>—</span>}</div>
-        <div className="row-actions"><button className="button compact" onClick={() => onAdjust(item)}>{t('updateStockButton')}</button>{onEdit&&<button className="icon-button subtle" onClick={() => onEdit(item)} aria-label={`${t('productDetails')}: ${item.name}`}><Pencil size={17} /></button>}</div>
+        <div className="product-cell">
+          <div className={`product-glyph category-${categoryClass(item.category)}`}><CategoryIcon category={item.category} size={20} /></div>
+          <div><strong>{item.name}</strong><span>{details}</span></div>
+        </div>
+        <div className="inventory-price">{item.sellable && item.price > 0
+          ? <strong><span className="sr-only">{t('inventoryPrice')}: </span>{formatCurrency(item.price)}</strong>
+          : <span>{t('notForSale')}</span>}</div>
+        <div className="quantity-cell">
+          <div><span className="sr-only">{t('available')}: </span><strong>{formatQuantity(item.quantity)}</strong><span className="inventory-unit"> {unitLabel(item.unit)}</span></div>
+          <small>{t('inventoryMinimum', { quantity: formatQuantity(item.lowStockThreshold) })}</small>
+        </div>
+        <div className="inventory-status"><span className={`status ${state.tone}`}><i />{state.label}</span></div>
+        <div className="row-actions">
+          <button type="button" className="button compact stock-adjust-button" onClick={() => onAdjust(item)}
+            aria-label={`${t('updateStockButton')}: ${item.name}`} title={t('updateStockButton')}>
+            <SlidersHorizontal size={17} aria-hidden="true" /><span>{t('updateStockButton')}</span>
+          </button>
+          {onEdit && <button type="button" className="icon-button subtle" onClick={() => onEdit(item)}
+            aria-label={`${t('productDetails')}: ${item.name}`} title={t('productDetails')}><Pencil size={17} aria-hidden="true" /></button>}
+        </div>
       </article>
     })}
   </div>
@@ -255,26 +274,50 @@ function Movement({ movement }) {
   return <div className="activity-item"><div className={`movement-icon ${movement.type}`}>{movement.type === 'stock_in' ? <ArrowUp size={17} /> : movement.type === 'stock_out' ? <ArrowDown size={17} /> : <SlidersHorizontal size={17} />}</div><div><strong>{movement.itemName}</strong><span>{note}</span></div><div className="movement-value"><strong className={positive ? 'positive' : 'negative'}>{positive ? '+' : ''}{formatQuantity(movement.quantity)}</strong><span>{formatTime(movement.createdAt)}</span></div></div>
 }
 
-const Inventory = memo(function Inventory({ items, onAdd, onAdjust, onEdit, onBatch, dayKey }) {
+const Inventory = memo(function Inventory({ items, onAdd, onAdjust, onEdit, onBatch }) {
   const { t, categoryLabel } = useI18n()
-  const [search, setSearch] = useState(''), [filter, setFilter] = useState('All'), [category, setCategory] = useState('All')
-  const filtered = useMemo(() => items.filter(item => searchText(`${item.name} ${item.sku}`).includes(searchText(search)) &&
-    (category === 'All' || item.category === category) && (filter === 'All' || filter === 'Low' && item.quantity <= item.lowStockThreshold || filter === 'Out' && item.quantity === 0)), [items, search, category, filter])
-  return <div className="page enter"><div className="page-actions"><button className="button secondary" onClick={onBatch}><Boxes size={18} />{t('batchInventory')}</button>{onAdd&&<button className="button primary desktop-action" onClick={onAdd}><Plus size={19} />{t('addProduct')}</button>}</div>
-    <div className="toolbar inventory-toolbar"><label className="search-box"><Search size={18} /><input aria-label={t('searchPlaceholder')} value={search} onChange={e => setSearch(e.target.value)} placeholder={t('searchPlaceholder')} />{search && <button onClick={() => setSearch('')} aria-label={t('clearSearch')}><X size={16} /></button>}</label><select value={category} onChange={e => setCategory(e.target.value)} aria-label={t('category')}><option value="All">{t('allCategories')}</option>{categories.filter(c => items.some(i => i.category === c)).map(c => <option key={c} value={c}>{categoryLabel(c)}</option>)}</select><div className="filter-scroll" role="group" aria-label={t('status')}>{[['All','all',items.length],['Low','lowMinimum',items.filter(i => i.quantity <= i.lowStockThreshold).length],['Out','soldOutFilter',items.filter(i => i.quantity === 0).length]].map(([key,label,count]) => <button key={key} className={filter === key ? 'active' : ''} aria-pressed={filter === key} onClick={() => setFilter(key)}>{t(label)}<span>{count}</span></button>)}</div></div>
-    <section className="card inventory-card">{items.length === 0 ? <EmptyState onAdd={onAdd} /> : filtered.length ? <InventoryList items={filtered} onAdjust={onAdjust} onEdit={onEdit} dayKey={dayKey} /> : <div className="empty-state compact"><Search size={27} /><h3>{t('noProductsFound')}</h3></div>}</section>
-  </div>
-})
-
-const Activity = memo(function Activity({ movements, dayKey }) {
-  const { t, formatDate } = useI18n()
-  const grouped = movements.reduce((acc, movement) => {
-    const key = new Date(movement.createdAt).toDateString()
-    acc[key] = [...(acc[key] || []), movement]
-    return acc
-  }, {})
-  return <div className="page enter activity-page">
-    <section className="card history-card" aria-label={t('stockMovementHistory')}>{movements.length ? Object.entries(grouped).map(([day, entries]) => <div className="history-group" key={day}><h2>{new Date(day).toDateString() === new Date().toDateString() ? t('today') : formatDate(new Date(day))}</h2><div>{entries.map((movement) => <Movement movement={movement} key={movement.id} />)}</div></div>) : <div className="empty-state compact"><History size={30} /><h2>{t('noActivity')}</h2></div>}</section>
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState('All')
+  const [category, setCategory] = useState('All')
+  const [page, setPage] = useState(1)
+  const controls = useRef(null)
+  const query = searchText(search.trim())
+  const filtered = useMemo(() => items.filter(item => searchText(`${item.name} ${item.sku}`).includes(query) &&
+    (category === 'All' || item.category === category) && (filter === 'All' || filter === 'Low' && item.quantity <= item.lowStockThreshold || filter === 'Out' && item.quantity === 0)), [items, query, category, filter])
+  const totalPages = Math.ceil(filtered.length / inventoryPageSize)
+  const currentPage = Math.min(page, Math.max(1, totalPages))
+  const offset = (currentPage - 1) * inventoryPageSize
+  function goToPage(next) {
+    if (next === currentPage) return
+    setPage(next)
+    controls.current?.scrollIntoView({ block: 'start' })
+  }
+  return <div className="page enter">
+    <div className="page-actions"><button className="button secondary" onClick={onBatch}><Boxes size={18} />{t('batchInventory')}</button>{onAdd && <button className="button primary desktop-action" onClick={onAdd}><Plus size={19} />{t('addProduct')}</button>}</div>
+    <div className="toolbar inventory-toolbar" ref={controls}>
+      <div className="search-box"><Search size={18} aria-hidden="true" />
+        <input aria-label={t('searchPlaceholder')} value={search} onChange={event => { setSearch(event.target.value); setPage(1) }} placeholder={t('searchPlaceholder')} />
+        {search && <button type="button" onClick={() => { setSearch(''); setPage(1) }} aria-label={t('clearSearch')}><X size={16} /></button>}
+      </div>
+      <select value={category} onChange={event => { setCategory(event.target.value); setPage(1) }} aria-label={t('category')}>
+        <option value="All">{t('allCategories')}</option>
+        {categories.filter(value => items.some(item => item.category === value)).map(value => <option key={value} value={value}>{categoryLabel(value)}</option>)}
+      </select>
+      <div className="filter-scroll" role="group" aria-label={t('status')}>
+        {[
+          ['All', 'all', items.length],
+          ['Low', 'lowMinimum', items.filter(item => item.quantity <= item.lowStockThreshold).length],
+          ['Out', 'soldOutFilter', items.filter(item => item.quantity === 0).length],
+        ].map(([key, label, count]) => <button type="button" key={key} className={filter === key ? 'active' : ''}
+          aria-pressed={filter === key} onClick={() => { setFilter(key); setPage(1) }}>{t(label)}<span>{count}</span></button>)}
+      </div>
+    </div>
+    <section className="card inventory-card">
+      {items.length === 0 ? <EmptyState onAdd={onAdd} /> : filtered.length
+        ? <InventoryList items={filtered.slice(offset, offset + inventoryPageSize)} onAdjust={onAdjust} onEdit={onEdit} />
+        : <div className="empty-state compact"><Search size={27} /><h3>{t('noProductsFound')}</h3></div>}
+      <NumberedPagination label={t('inventoryPagination')} current={currentPage} total={totalPages} onPageChange={goToPage} />
+    </section>
   </div>
 })
 
@@ -381,7 +424,7 @@ export default function App() {
     setMetricsLoading(true)
     try {
       const metrics = await api.metrics(range, { signal: controller.signal })
-      if (!controller.signal.aborted) setMetricsData(metrics)
+      if (!controller.signal.aborted) setMetricsData({ ...metrics, range })
     } catch (error) {
       if (!controller.signal.aborted) setToast({ type: 'error', message: error.message })
     } finally {
@@ -509,9 +552,9 @@ export default function App() {
         {page === 'pos' && route.registerView === 'close' && <CashClosurePage user={auth.user} sessionId={closureSessionId} selectedSession={route.registerSessionId} refreshToken={reconciled} date={route.closureDate} view={route.closureView} month={route.closureMonth} currentDate={dayKey} onClosed={refreshAfterChange} onNavigate={navigate} setToast={setToast} />}
         {page === 'pos' && route.registerView === 'cash' && <CashMovementsPage user={auth.user} refreshToken={reconciled} onRefresh={refreshAfterChange} onNavigate={navigate} setToast={setToast}/>}
         {page === 'pos' && ['cart','history'].includes(route.registerView) && <SalesCounter user={auth.user} businessDate={dayKey} registerOpening={currentRegisterOpening} registerSession={currentRegisterSession} onOpenRegister={openRegister} serverAvailable={!syncError} items={items} sales={sales} posConfig={posConfig} onRefresh={refreshAfterChange} setToast={setToast} onNavigate={navigate} registerView={route.registerView} historyRevision={route.registerView === 'history' ? reconciled : 0} onRegisterViewChange={changeRegisterView} />}
-        {page === 'inventory' && <Inventory items={items} onBatch={openBatch} onAdd={isAdmin?openAdd:undefined} onAdjust={openAdjust} onEdit={isAdmin?openEdit:undefined} dayKey={dayKey} />}
+        {page === 'inventory' && <Inventory items={items} onBatch={openBatch} onAdd={isAdmin?openAdd:undefined} onAdjust={openAdjust} onEdit={isAdmin?openEdit:undefined} />}
         {page === 'metrics' && <MetricsPage metrics={metricsData} range={metricsRange} onRangeChange={setMetricsRange} onRefresh={() => loadMetrics(metricsRange)} onExport={exportDailyReport} loading={metricsLoading} exporting={exportingReport} />}
-        {page === 'activity' && <Activity movements={movements} dayKey={dayKey} />}
+        {page === 'activity' && <ActivityPage items={items} movements={movements} dayKey={dayKey} timeZone={registerCalendar?.timeZone} />}
         {page==='users'&&isAdmin&&<UserManagement currentUser={auth.user} setToast={setToast}/>}
         {page === 'settings' && <SettingsPage tab={route.settingsTab} onNavigate={href => router.navigate(href)} setToast={setToast} />}
         {page === 'not-found' && <section className="page empty-state"><h1>{t('sectionNotFound')}</h1><p>{t('sectionNotFoundDescription')}</p><a className="button primary" href={sectionHref('dashboard')} onClick={event => followSection(event, sectionHref('dashboard'))}>{t('backToOverview')}</a></section>}

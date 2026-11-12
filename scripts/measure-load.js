@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { metricsPeriod } from '../src/api.js'
 
 const base = process.env.PRODUCTION_BASE_URL || 'http://localhost:3000'
 const output = process.env.PERFORMANCE_OUTPUT || 'output/performance.json'
@@ -28,7 +27,7 @@ if (status.required) {
 }
 const median = values => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]
 const summarize = samples => ({ samples: samples.length, medianMs: Math.round(median(samples) * 10) / 10, minMs: Math.round(Math.min(...samples) * 10) / 10, maxMs: Math.round(Math.max(...samples) * 10) / 10 })
-const routes = ['/api/items', '/api/movements?limit=100', '/api/sales?limit=50', '/api/pos/config', `/api/metrics?${new URLSearchParams(metricsPeriod('30d'))}`]
+const routes = ['/api/items', '/api/movements?limit=100', '/api/sales?limit=50', '/api/pos/config', '/api/metrics?range=30d']
 const endpoints = []
 for (const route of routes) {
   const samples = []

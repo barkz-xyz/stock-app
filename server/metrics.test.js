@@ -5,7 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { businessDateAt } from './cash-closure.js'
 
-test('sales metrics and the daily cash close reconcile payment methods', async () => {
+test('sales metrics and the automatic daily cash summary reconcile payment methods', async () => {
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'bakery-metrics-test-'))
   process.env.DATA_PATH = path.join(temporaryDirectory, 'inventory.json')
   process.env.SEED_DEMO_DATA = 'false'
@@ -53,20 +53,10 @@ test('sales metrics and the daily cash close reconcile payment methods', async (
     assert.equal(metrics.topProducts[0].quantity, 4)
     assert.equal(metrics.topProducts[0].revenue, 6000)
 
-    const workspace = await store.getCashClosureWorkspace(businessDate)
-    const closure = await store.saveCashClosure({
-      businessDate, openingCash: 10000, cashIn: 0, cashOut: 1000, countedCash: 11500, countedCard: 4500,
-      operator: 'Test operator', expectedRevision: 0, fingerprint: workspace.live.fingerprint, note: 'Test close',
-    })
-    assert.equal(closure.cashSales, 1500)
-    assert.equal(closure.cardSales, 4500)
-    assert.equal(closure.expectedCash, 11500, 'Cash out comes from the ledger, never from a forged closing field')
-    assert.equal(closure.difference, 0)
-    assert.equal(closure.transactionCount, 2)
-
-    const refreshed = await store.getSalesMetrics(period)
-    assert.equal(refreshed.cashClosure.id, closure.id)
-    assert.equal(refreshed.cashClosure.note, 'Test close')
+    const daily = await store.getRegisterDaySummary(businessDate)
+    assert.equal(daily.cash.net, metrics.paymentMethods.cash.revenue)
+    assert.equal(daily.card.net, metrics.paymentMethods.card.revenue)
+    assert.equal(daily.transactions, metrics.summary.transactions)
   } finally {
     await store.closeStore()
     await fs.rm(temporaryDirectory, { recursive: true, force: true })

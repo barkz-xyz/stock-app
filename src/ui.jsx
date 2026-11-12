@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { CakeSlice, Coffee, Croissant, PackageOpen, Sparkles, Wheat, X } from 'lucide-react'
+import { CakeSlice, ChevronLeft, ChevronRight, Coffee, Croissant, PackageOpen, Sparkles, Wheat, X } from 'lucide-react'
 import { useI18n } from './i18n.js'
 
 const categoryIcons = { Bread: Wheat, Pastries: Croissant, Cakes: CakeSlice, Ingredients: Wheat, Packaging: PackageOpen, Drinks: Coffee, Other: Sparkles }
@@ -19,6 +19,25 @@ export function CategoryIcon({ category, size = 20, className = '' }) {
 
 export function formatQuantity(value) {
   return quantityFormatter.format(Number(value))
+}
+
+export function NumberedPagination({ label, current, total, onPageChange }) {
+  const { t } = useI18n()
+  if (total <= 1) return null
+  const start = Math.max(1, Math.min(current - 2, total - 4))
+  const pages = Array.from({ length: Math.min(total, 5) }, (_, index) => start + index)
+  return <nav className="numbered-pagination" aria-label={label}>
+    <button type="button" aria-label={t('previousPage')} disabled={current === 1} onClick={() => onPageChange(current - 1)}>
+      <ChevronLeft size={18} aria-hidden="true" />
+    </button>
+    {start > 1 && <span aria-hidden="true">…</span>}
+    {pages.map(page => <button type="button" key={page} aria-label={t('pageNumber', { page })}
+      aria-current={page === current ? 'page' : undefined} onClick={() => onPageChange(page)}>{page}</button>)}
+    {pages.at(-1) < total && <span aria-hidden="true">…</span>}
+    <button type="button" aria-label={t('nextPage')} disabled={current === total} onClick={() => onPageChange(current + 1)}>
+      <ChevronRight size={18} aria-hidden="true" />
+    </button>
+  </nav>
 }
 
 export function LoadingSkeleton({ full = false }) {

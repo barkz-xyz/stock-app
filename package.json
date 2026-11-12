@@ -18,7 +18,6 @@
     "start": "node server/index.js",
     "check": "node scripts/check-source.js",
     "seed:week": "node scripts/seed-week-demo.js",
-    "seed:week:postgres": "node scripts/seed-week-postgres.js",
     "backup:postgres": "node scripts/backup-postgres.js",
     "audit:postgres": "node scripts/audit-postgres.js",
     "smoke:production": "node scripts/smoke-production.js",

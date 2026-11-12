@@ -48,11 +48,10 @@ $env:TEST_DATABASE_URL='postgresql://bakery_test@127.0.0.1:58439/postgres'
 $env:PGSSLMODE='disable'
 npm run measure:inventory -- before --uncached
 npm run measure:inventory -- after
-npm run measure:inventory -- ui --ui
 npm run validate
 ```
 
-`--ui` usa Chrome headless en un perfil temporal independiente; `CHROME_EXECUTABLE` permite indicar su ejecutable. Instrumenta los componentes mediante Vite sólo para esa ejecución. Simula señales SSE y temporizadores, usa datos reales del esquema local y verifica conservación de foco, carrito y scroll. No controla pestañas del usuario. Los renders anteriores se capturaron con el mismo instrumento sobre el código sin cambios; `--uncached` sólo compara el backend, no restaura la interfaz anterior. Los resultados se escriben en `output/inventory-<etiqueta>.json`, ignorado por Git.
+El comando mide el bootstrap y la API de inventario. Los resultados se escriben en `output/inventory-<etiqueta>.json`, ignorado por Git.
 
 Las pruebas adicionales cubren respuestas iguales, cambios parciales, reordenación, invalidación tras escritura/401/login, errores recuperables, reconexiones, eventos durante lecturas, revocación antes de 304, permisos, cuotas, cachés independientes, cambios sin NOTIFY, rollback, DELETE/TRUNCATE y reconstrucción desde otro proceso. La prueba de reservas reinicia procesos con reservas vencidas y pagos inciertos, recupera respuestas perdidas y comprueba restitución única.
 

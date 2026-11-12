@@ -8,7 +8,7 @@ import { createReservationRouter, createReservationAdminRouter } from './reserva
 import { parseCalendarDate } from '../src/dates.js'
 import { pointPrintIsFinal, saleUsesPoint } from '../src/pointPayments.js'
 import { registerIsActive } from '../src/registerDay.js'
-import { closurePeriod } from './cash-closure.js'
+import { businessDateAt, closurePeriod } from './cash-closure.js'
 import { authStatus, login, logout, setupAdmin, changePassword, pointAccessIsProtected, requireAuth, requireAdmin, cashierBoundary } from './auth.js'
 import {
   buildPointManagement, cancelPointOrder, createPointOrder, createPointPos, createPointStore, deletePointPos, deletePointStore,
@@ -20,7 +20,7 @@ import {
 import {
   adjustItem, saveInventoryBatch, searchSales, attachPointOrder, closeStore, completeRefund,
   claimPointOrder, claimWebOrderPrint, createItem, createSale, deleteItem, failRefund, finishWebOrderPrint, getSale,
-  getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales, getInventoryIntegrationStore, getStockReservationStore,
+  getCashClosureWorkspace, getCashClosureRevision, getBootstrapData, getSaleByCheckoutKey, getSaleByPointOrder, getSalesMetrics, initializeStore, listItems, listMovements, listSales, searchMovements, getInventoryIntegrationStore, getStockReservationStore,
   markCardSaleFailed, prepareRefund, queuedWebOrderPrints, rememberPendingRefund, recordCreditNote, recordWebPrintAction, resolveRefundInventoryReview, getRegisterDaySummary,
   updateItem, updateSaleFromPoint, updateSalePaymentDetails, updateWebPrintActions,
   listUsers, createUser, updateUser, listRegisterSessions, listClosureHistory, getActiveRegisterSession, getRegisterOpening, getRegisterCashStore, openRegisterSession, getRegisterClosure, saveRegisterClosure, getRegisterClosureRevision,
@@ -142,6 +142,21 @@ function parseInstant(value, name) {
 }
 
 function cleanMetricsPeriod(source) {
+  if (source.range !== undefined) {
+    const { range } = source
+    if (!['today', '7d', '30d'].includes(range)) throw badRequest('Invalid metrics range.')
+    const now = new Date()
+    const today = closurePeriod(businessDateAt(now))
+    const firstDate = new Date(`${today.businessDate}T00:00:00Z`)
+    firstDate.setUTCDate(firstDate.getUTCDate() - (range === '30d' ? 29 : range === '7d' ? 6 : 0))
+    const from = range === 'today' ? today.from : closurePeriod(firstDate.toISOString().slice(0, 10)).from
+    const to = new Date(Math.min(today.to.getTime(), now.getTime() + 1000))
+    return {
+      from, to,
+      previousFrom: new Date(from.getTime() - Math.max(1, now.getTime() - from.getTime())), previousTo: from,
+      todayFrom: today.from, todayTo: to, businessDate: today.businessDate,
+    }
+  }
   const period = {
     from: parseInstant(source.from, 'from'),
     to: parseInstant(source.to, 'to'),
@@ -485,7 +500,21 @@ app.post('/api/items/:id/adjust', async (req, res, next) => {
   } catch (error) { next(error) }
 })
 app.get('/api/movements', async (req, res, next) => {
-  try { res.json(await listMovements(Math.min(Number(req.query.limit) || 50, 200))) } catch (error) { next(error) }
+  try {
+    const limit = Number(req.query.limit ?? 50)
+    if (!Number.isSafeInteger(limit) || limit < 1) throw badRequest('Invalid movement limit.')
+    res.json(await listMovements(Math.min(limit, 200)))
+  } catch (error) { next(error) }
+})
+app.get('/api/movements/history', requireAdmin, async (req, res, next) => {
+  try {
+    const { search = '', type = 'all' } = req.query
+    const page = Number(req.query.page ?? 1)
+    if (typeof search !== 'string' || search.length > 120) throw badRequest('Invalid movement search.')
+    if (!['all', 'stock_in', 'stock_out', 'adjustment', 'web'].includes(type)) throw badRequest('Invalid movement type.')
+    if (!Number.isInteger(page) || page < 1 || page > 2147483647) throw badRequest('Invalid movement page.')
+    res.json(await searchMovements({ search, type, page }))
+  } catch (error) { next(error) }
 })
 
 app.get('/api/metrics', async (req, res, next) => {

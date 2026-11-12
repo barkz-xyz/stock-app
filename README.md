@@ -67,7 +67,7 @@ Concurrent GETs share one in-flight request. Bootstrap reads revalidate their ET
 
 Run `npm run measure:load` against a running local compiled app. Set `PRODUCTION_BASE_URL` and `STAFF_PIN` for authenticated production measurements; the script only reads application data and opens a staff session. Add `-- --legacy` to measure the former five-request startup flow. Results go to `output/performance.json` or `PERFORMANCE_OUTPUT`. The report counts all initial JavaScript, including preloaded vendors; gzip byte counts are estimates and timings use warm HTTP connections, not total browser page-load time.
 
-Inventory refresh measurements, local-only fixtures, snapshot consistency and remaining limits are documented in [docs/inventory-performance.md](docs/inventory-performance.md). Run `npm run measure:inventory -- after` with a loopback `TEST_DATABASE_URL`; add `--ui` for isolated Chrome render/focus/cart/scroll checks. No production connection is accepted by that command.
+Inventory refresh measurements, local-only fixtures, snapshot consistency and remaining limits are documented in [docs/inventory-performance.md](docs/inventory-performance.md). Run `npm run measure:inventory -- after` with a loopback `TEST_DATABASE_URL`. The benchmark accepts only loopback PostgreSQL connections.
 
 `npm run audit:performance:db` accepts `DATABASE_PUBLIC_URL` or `DATABASE_URL` and runs SELECT/EXPLAIN queries inside a read-only transaction. It reports query plans and timings without changing stock or history.
 
@@ -121,14 +121,6 @@ Enable with `railway cdn enable --service stock-app`, then configure `railway cd
 6. Open `/api/health`; a healthy deployment returns `{ "ok": true }`.
 
 Production starts only after the separate migration command has applied the current schema. Local development can initialize schemas automatically; set `DATABASE_AUTO_MIGRATE=false` to exercise the production separation. No repository command changes Railway roles, variables, backup schedules or deployments automatically.
-
-To replace a connected PostgreSQL database with the generated one-week presentation dataset, run this only from an environment that supplies the intended `DATABASE_URL`:
-
-```bash
-npm run seed:week:postgres -- --yes --replace-production-demo
-```
-
-The command first copies all current application tables into timestamped tables under the `bakery_demo_backups` schema. It then loads products, sales, line items, inventory movements, and seven daily cash closures in one transaction. If generation, insertion, or verification fails, PostgreSQL rolls the replacement back.
 
 ## Point Smart 2 setup
 
@@ -213,7 +205,7 @@ Planning and tax research:
 
 ## Users and register sessions
 
-There are two server-enforced roles. Administrators access every section and manage accounts at `/usuarios`. Cashiers only access Caja, their own sales/history, and their own register-session close/PDF. Cashiers cannot change products or stock, view general metrics or daily closes, manage Point, issue refunds, or read another cashier's sales/checkouts/closes by ID. Frontend navigation follows the same rules; it is not the authorization boundary.
+There are two server-enforced roles. Administrators access every section and manage accounts at `/usuarios`. Cashiers access Caja, their own sales and register closes, and Inventory for individual and batch stock adjustments. Product details and prices, general metrics and daily summaries, Point management, and refunds require an administrator. The server also limits cashiers to their own sales, checkouts and closes.
 
 Production migrates the existing staff PIN to the first username `admin`, with a mandatory personal-password change before any business data is exposed. Existing shared sessions stop working. New accounts and administrator password resets also require changing the temporary password. Passwords use salted scrypt hashes; random session cookies are HttpOnly, SameSite=Strict and Secure in production, expire after 12 hours, and are stored only as token hashes. Disabling a user, changing their role, or resetting/changing a password revokes their sessions. The last active administrator cannot be removed. Local installations without a bootstrap PIN show first-administrator setup, which is rejected by production and can only run once.
 
@@ -259,7 +251,7 @@ npm run seed:week -- --yes
 npm start
 ```
 
-`seed:week` only replaces the local JSON demo. The PostgreSQL command is deliberately separate and requires the two explicit confirmation flags shown in the Railway section.
+`seed:week` only replaces the local JSON demo. Deployments use PostgreSQL and do not load the JSON demo.
 
 `audit:postgres` uses a read-only transaction to report database counts and integrity checks. It prefers `DATABASE_PUBLIC_URL` for local access. `smoke:production` uses `APP_USERNAME` and `APP_PASSWORD` to check the deployed API and Point terminal without creating sales or refunds. Set `EXPECT_AUTH_HARDENING=true` to require malformed cookies to return 401. Keep the local JSON demonstration dataset separate from the live PostgreSQL records.
 
